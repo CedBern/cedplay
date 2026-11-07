@@ -1,5 +1,13 @@
 import { EPGProgram, EPGData } from '@/types/epg';
 import { Channel } from '@/types/channel';
+import type { EpgChannelOverride } from '@/utils/epgConfig';
+
+/** Associations manuelles et décalages appliqués en construisant le guide. */
+export interface EPGBuildOptions {
+  overrides?: Record<string, EpgChannelOverride> | undefined;
+  /** Décalage global de la liste, en heures, ajouté à celui de chaque chaîne. */
+  offsetHours?: number | undefined;
+}
 
 export interface XmltvChannel {
   id: string;
@@ -119,8 +127,11 @@ export function parseXmltv(xml: string): XmltvParsed {
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 const stripPrefix = (s: string) => s.replace(/^(?:[a-z]{2,3}\s*[:|-]\s*|\([a-z]{2,3}\)\s*|\|\s*[a-z0-9]+\s*\|\s*)/i, '').trim();
 
-/** Associe les programmes XMLTV aux chaînes (par tvg-id, puis par nom). */
-export function buildEPGData(parsed: XmltvParsed, channels: Channel[]): EPGData {
+/**
+ * Associe les programmes XMLTV aux chaînes : association manuelle d'abord, sinon par
+ * tvg-id puis par nom. Applique le décalage horaire (tvg-shift, réglages du guide).
+ */
+export function buildEPGData(parsed: XmltvParsed, channels: Channel[], options: EPGBuildOptions = {}): EPGData {
   const data: EPGData = {};
   if (!parsed.programmes.length) return data;
 
@@ -143,8 +154,14 @@ export function buildEPGData(parsed: XmltvParsed, channels: Channel[]): EPGData 
 
   for (const channel of channels) {
     let xmlId: string | undefined;
+    const override = options.overrides?.[channel.id];
+    // 0. Association manuelle : elle seule compte, même si elle n'existe pas dans cette source.
+    if (override?.xmltvId) {
+      if (programmesByXml.has(override.xmltvId)) xmlId = override.xmltvId;
+      else continue;
+    }
     // 1. Match par tvgId direct dans les programmes ou dans les chaînes déclarées
-    if (channel.tvgId) {
+    else if (channel.tvgId) {
       if (programmesByXml.has(channel.tvgId)) xmlId = channel.tvgId;
       else if (byXmlId.has(channel.tvgId)) xmlId = channel.tvgId;
     }
@@ -161,20 +178,60 @@ export function buildEPGData(parsed: XmltvParsed, channels: Channel[]): EPGData 
       }
     }
     if (!xmlId) continue;
+    const shiftMs = ((override?.shift ?? channel.tvgShift ?? 0) + (options.offsetHours ?? 0)) * 3_600_000;
     const programmes = (programmesByXml.get(xmlId) || [])
       .sort((a, b) => a.start.getTime() - b.start.getTime())
-      .map<EPGProgram>(p => ({
-        id: `${channel.id}_${p.start.getTime()}`,
-        channelId: channel.id,
-        title: p.title,
-        ...(p.description ? { description: p.description } : {}),
-        ...(p.category ? { category: p.category } : {}),
-        startTime: p.start,
-        endTime: p.stop,
-      }));
+      .map<EPGProgram>(p => {
+        const startTime = shiftMs ? new Date(p.start.getTime() + shiftMs) : p.start;
+        return {
+          id: `${channel.id}_${startTime.getTime()}`,
+          channelId: channel.id,
+          title: p.title,
+          ...(p.description ? { description: p.description } : {}),
+          ...(p.category ? { category: p.category } : {}),
+          startTime,
+          endTime: shiftMs ? new Date(p.stop.getTime() + shiftMs) : p.stop,
+        };
+      });
     if (programmes.length) data[channel.id] = programmes;
   }
   return data;
+}
+
+/**
+ * Fusionne plusieurs guides : pour chaque chaîne, la première source (dans l'ordre
+ * donné) qui a des programmes l'emporte. Les sources suivantes complètent les autres.
+ */
+export function buildMergedEPGData(sources: XmltvParsed[], channels: Channel[], options: EPGBuildOptions = {}): EPGData {
+  const data: EPGData = {};
+  let missing = channels;
+  for (const parsed of sources) {
+    if (!missing.length) break;
+    Object.assign(data, buildEPGData(parsed, missing, options));
+    missing = missing.filter(c => !data[c.id]);
+  }
+  return data;
+}
+
+/** Chaînes déclarées par un guide (sans lire les programmes) : liste du choix manuel. */
+export function listXmltvChannels(xml: string): XmltvChannel[] {
+  const channels: XmltvChannel[] = [];
+  const channelRegex = /<channel\s+([^>]*?)>([\s\S]*?)<\/channel>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = channelRegex.exec(xml)) !== null) {
+    const idMatch = m[1].match(/\bid="([^"]+)"/i) || m[1].match(/\bid='([^']+)'/i);
+    if (!idMatch) continue;
+    const displayNames: string[] = [];
+    const dnRegex = /<display-name[^>]*>([\s\S]*?)<\/display-name>/gi;
+    let dnm: RegExpExecArray | null;
+    while ((dnm = dnRegex.exec(m[2])) !== null) {
+      const clean = unescapeXml(stripCdata(dnm[1])).trim();
+      if (clean) displayNames.push(clean);
+    }
+    // Identifiant brut, comme l'attribut channel des programmes auquel il sera comparé.
+    channels.push({ id: idMatch[1], displayNames });
+  }
+  return channels;
 }
 
 /** Cherche le programme en cours par dichotomie (les programmes sont triés par début). */

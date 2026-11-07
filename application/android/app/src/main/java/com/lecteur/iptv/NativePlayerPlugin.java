@@ -538,9 +538,6 @@ public class NativePlayerPlugin extends Plugin {
         long startTimeMs = call.getLong("startTimeMs", 0L);
         long durationMs = call.getLong("durationMs", 0L);
         if (!isHttpUrl(url)) { call.reject("URL HTTP ou HTTPS requise"); return; }
-        if (url.toLowerCase(Locale.ROOT).contains(".m3u8")) {
-            call.reject("Enregistrement du direct HLS indisponible. Choisis la variante MPEG-TS."); return;
-        }
         if (startTimeMs <= System.currentTimeMillis()) { call.reject("La date de début doit être dans le futur"); return; }
         if (durationMs <= 0) { call.reject("Durée invalide"); return; }
         try {

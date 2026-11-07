@@ -18,11 +18,14 @@ import android.os.PowerManager;
 
 import androidx.documentfile.provider.DocumentFile;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
- * Service au premier plan qui enregistre un flux programmé (DVR différé).
- * Réutilise {@link Recorder} (TS brut ou HLS remuxé en MP4) et écrit dans le
- * dossier d'enregistrement SAF choisi par l'utilisateur. S'arrête après la durée
- * demandée ou à la fin de l'enregistrement.
+ * Service au premier plan qui enregistre les flux programmés (DVR différé).
+ * Plusieurs enregistrements peuvent tourner en même temps (deux émissions qui se
+ * chevauchent, marges comprises). Chacun réutilise {@link Recorder} (TS brut ou
+ * segments HLS) et s'arrête après sa durée ; le service s'arrête avec le dernier.
  */
 public class RecordService extends Service {
 
@@ -31,12 +34,21 @@ public class RecordService extends Service {
     public static final String EXTRA_DURATION_MS = "durationMs";
 
     private static final int NOTIF_ID = 4001;
+    /** Notifications de fin : une par enregistrement terminé, sans écraser l'indicateur en cours. */
+    private static final int DONE_NOTIF_BASE = 4100;
     private static final String CHANNEL_ID = "recordings";
 
-    private Recorder recorder;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private String title = "Enregistrement";
+    /** Enregistrements en cours, dans l'ordre de démarrage (clé = jeton interne). */
+    private final Map<String, Recorder> recorders = new LinkedHashMap<>();
+    private final Map<String, String> titles = new LinkedHashMap<>();
+    private final Map<String, String> urls = new LinkedHashMap<>();
+    /** Heure d'arrêt prévue (0 = sans limite) et tâche d'arrêt de chaque enregistrement. */
+    private final Map<String, Long> ends = new LinkedHashMap<>();
+    private final Map<String, Runnable> stoppers = new LinkedHashMap<>();
     private PowerManager.WakeLock wakeLock;
+    private int sequence = 0;
+    private int doneCount = 0;
 
     @Override
     public void onCreate() {
@@ -46,64 +58,124 @@ public class RecordService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Ré-entrée (double alarme, relance JS) : ne pas écraser un enregistrement
-        // en cours — l'ancien Recorder continuerait d'écrire en arrière-plan.
-        if (recorder != null) {
-            showNotification("Un enregistrement est déjà en cours : " + title);
-            return START_NOT_STICKY;
-        }
         String url = intent == null ? null : intent.getStringExtra(EXTRA_URL);
-        title = intent == null ? null : intent.getStringExtra(EXTRA_TITLE);
+        String title = intent == null ? null : intent.getStringExtra(EXTRA_TITLE);
         long durationMs = intent == null ? 0 : intent.getLongExtra(EXTRA_DURATION_MS, 0);
         if (title == null || title.isEmpty()) title = "Enregistrement";
 
         // Le service au premier plan doit s'annoncer immédiatement (API 26+).
-        goForeground(buildNotification("Enregistrement en cours : " + title, true));
+        goForeground(buildNotification(ongoingText(title), true));
 
-        if (url == null || url.isEmpty()) {
-            stopRecording("Flux manquant");
+        // Même flux déjà en cours (double alarme, ou épisodes consécutifs qui se chevauchent
+        // avec les marges) : on prolonge l'enregistrement au lieu d'ouvrir une seconde
+        // connexion au fournisseur, souvent limité à une seule.
+        if (url != null && urls.containsValue(url)) {
+            for (Map.Entry<String, String> e : urls.entrySet()) {
+                if (url.equals(e.getValue())) { extend(e.getKey(), durationMs); break; }
+            }
+            refreshOngoing();
             return START_NOT_STICKY;
         }
+        if (url == null || url.isEmpty()) { finishIfIdle("Flux manquant"); return START_NOT_STICKY; }
         String folderUri = getSharedPreferences("recorder", MODE_PRIVATE).getString("folder", null);
-        if (folderUri == null) {
-            stopRecording("Aucun dossier d'enregistrement choisi");
-            return START_NOT_STICKY;
-        }
+        if (folderUri == null) { finishIfIdle("Aucun dossier d'enregistrement choisi"); return START_NOT_STICKY; }
         DocumentFile dir = DocumentFile.fromTreeUri(this, Uri.parse(folderUri));
-        if (dir == null || !dir.canWrite()) {
-            stopRecording("Dossier d'enregistrement inaccessible");
-            return START_NOT_STICKY;
-        }
+        if (dir == null || !dir.canWrite()) { finishIfIdle("Dossier d'enregistrement inaccessible"); return START_NOT_STICKY; }
 
         // WakeLock partiel : le Doze ne doit pas geler la capture quand l'écran
-        // est éteint. Relâché dans tous les chemins d'arrêt.
+        // est éteint. Relâché quand le dernier enregistrement s'arrête.
         acquireWakeLock();
 
+        final String token = "rec-" + (++sequence);
+        final String finalTitle = title;
         final Recorder started = new Recorder(this);
-        recorder = started;
+        recorders.put(token, started);
+        titles.put(token, title);
+        urls.put(token, url);
+        refreshOngoing();
         started.start(url, title, dir, new Recorder.Listener() {
             @Override public void onRecordStarted(String fileName) {
-                if (recorder != started) return;
-                showNotification("Enregistrement en cours : " + title);
+                if (recorders.get(token) != started) return;
+                refreshOngoing();
             }
             @Override public void onRecordStopped(String fileName, long bytes, boolean success) {
-                if (recorder != started) return;
-                stopRecording(success ? "Enregistrement terminé : " + fileName : "Enregistrement annulé");
+                if (recorders.get(token) != started) return;
+                finish(token, success ? "Enregistrement terminé : " + fileName : "Enregistrement annulé : " + finalTitle);
             }
             @Override public void onRecordError(String message) {
-                if (recorder != started) return;
-                stopRecording("Enregistrement impossible : " + message);
+                if (recorders.get(token) != started) return;
+                finish(token, "Enregistrement impossible (" + finalTitle + ") : " + message);
             }
         });
 
-        if (durationMs > 0) {
-            handler.postDelayed(() -> { if (recorder == started) started.stop(); }, durationMs);
-        }
+        ends.put(token, durationMs > 0 ? System.currentTimeMillis() + durationMs : 0L);
+        scheduleStop(token, durationMs);
         return START_NOT_STICKY;
     }
 
-    private void stopRecording(String message) {
-        if (recorder != null) { recorder.stop(); recorder = null; }
+    private void scheduleStop(String token, long delayMs) {
+        Runnable previous = stoppers.remove(token);
+        if (previous != null) handler.removeCallbacks(previous);
+        if (delayMs <= 0) return;
+        final Recorder recorder = recorders.get(token);
+        Runnable stopper = () -> { if (recorder != null && recorders.get(token) == recorder) recorder.stop(); };
+        stoppers.put(token, stopper);
+        handler.postDelayed(stopper, delayMs);
+    }
+
+    /** Repousse la fin d'un enregistrement en cours pour couvrir une nouvelle programmation. */
+    private void extend(String token, long durationMs) {
+        Long end = ends.get(token);
+        if (end == null || end == 0L) return; // sans limite : rien à prolonger
+        long now = System.currentTimeMillis();
+        long newEnd = durationMs > 0 ? now + durationMs : 0L;
+        if (newEnd != 0L && newEnd <= end) return;
+        ends.put(token, newEnd);
+        scheduleStop(token, newEnd == 0L ? 0 : newEnd - now);
+    }
+
+    private String ongoingText(String fallbackTitle) {
+        if (recorders.isEmpty()) return "Enregistrement en cours : " + fallbackTitle;
+        if (recorders.size() == 1) return "Enregistrement en cours : " + titles.values().iterator().next();
+        return recorders.size() + " enregistrements en cours";
+    }
+
+    private void refreshOngoing() {
+        if (recorders.isEmpty()) return;
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) nm.notify(NOTIF_ID, buildNotification(ongoingText(""), true));
+    }
+
+    /** Un enregistrement est fini : message de fin, puis arrêt du service s'il n'en reste aucun. */
+    private void finish(String token, String message) {
+        Recorder recorder = recorders.remove(token);
+        titles.remove(token);
+        urls.remove(token);
+        ends.remove(token);
+        Runnable stopper = stoppers.remove(token);
+        if (stopper != null) handler.removeCallbacks(stopper);
+        if (recorder != null) recorder.stop();
+        if (recorders.isEmpty()) {
+            stopEverything(message);
+        } else {
+            notifyDone(message);
+            refreshOngoing();
+        }
+    }
+
+    /** Erreur avant tout démarrage : n'arrête le service que si rien d'autre n'enregistre. */
+    private void finishIfIdle(String message) {
+        if (recorders.isEmpty()) stopEverything(message);
+        else { notifyDone(message); refreshOngoing(); }
+    }
+
+    private void stopEverything(String message) {
+        for (Recorder r : recorders.values()) r.stop();
+        recorders.clear();
+        titles.clear();
+        urls.clear();
+        ends.clear();
+        stoppers.clear();
         handler.removeCallbacksAndMessages(null);
         releaseWakeLock();
         // Le message final est une notification normale (non « en cours ») : elle
@@ -111,21 +183,22 @@ public class RecordService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE);
         }
-        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) {
-            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                // Sans autorisation de notification, on s'arrête simplement.
-            } else {
-                nm.notify(NOTIF_ID, buildNotification(message, false));
-            }
+        if (canNotify()) {
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(NOTIF_ID, buildNotification(message, false));
         }
         stopSelf();
     }
 
-    private void showNotification(String message) {
+    private void notifyDone(String message) {
+        if (!canNotify()) return;
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIF_ID, buildNotification(message, true));
+        if (nm != null) nm.notify(DONE_NOTIF_BASE + (doneCount++ % 50), buildNotification(message, false));
+    }
+
+    private boolean canNotify() {
+        return Build.VERSION.SDK_INT < 33
+            || checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
     }
 
     private Notification buildNotification(String text, boolean ongoing) {
@@ -183,7 +256,8 @@ public class RecordService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (recorder != null) { recorder.stop(); recorder = null; }
+        for (Recorder r : recorders.values()) r.stop();
+        recorders.clear();
         handler.removeCallbacksAndMessages(null);
         releaseWakeLock();
     }

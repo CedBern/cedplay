@@ -7,24 +7,27 @@ import android.os.HandlerThread;
 import android.os.Looper;
 
 import androidx.documentfile.provider.DocumentFile;
-import androidx.media3.common.MediaItem;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.DefaultHttpDataSource;
-import androidx.media3.transformer.Composition;
-import androidx.media3.transformer.EditedMediaItem;
-import androidx.media3.transformer.EditedMediaItemSequence;
-import androidx.media3.transformer.ExportException;
-import androidx.media3.transformer.ExportResult;
-import androidx.media3.transformer.Transformer;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
-import java.util.Collections;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Enregistrement « DVR » d'un flux en direct, 100 % légal : on n'enregistre que
@@ -32,8 +35,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * serveurs personnels).
  *
  * Deux chemins, selon le format du flux :
- *  - MPEG-TS brut (.ts)  → copie brute des octets vers un fichier .ts (lisible tel quel).
- *  - HLS (.m3u8)         → remux en MP4 via Media3 Transformer (sans ré-encodage).
+ *  - MPEG-TS brut (.ts) → copie brute des octets vers un fichier .ts (lisible tel quel).
+ *  - HLS (.m3u8)        → capture des segments au fil de la liste de lecture : les
+ *    segments MPEG-TS sont mis bout à bout (.ts), les segments fMP4 sont précédés de
+ *    leur en-tête (.mp4 fragmenté). Chiffrement AES-128 pris en charge. Le fichier
+ *    reste lisible à tout moment : un arrêt ne perd rien.
  *
  * Le résultat est écrit dans un dossier SAF choisi par l'utilisateur (écriture).
  * Les rappels d'état sont émis sur le thread principal.
@@ -50,15 +56,24 @@ public class Recorder {
         void onRecordError(String message);
     }
 
+    /** Échec HLS avec un message destiné à l'utilisateur. */
+    private static final class HlsException extends IOException {
+        HlsException(String message) { super(message); }
+    }
+
+    private static final String USER_AGENT = "IPTVSmartersPro";
+    /** Échecs réseau consécutifs tolérés avant d'abandonner (≈ 1 min sur un direct). */
+    private static final int MAX_FAILURES = 12;
+
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final Object wake = new Object();
 
     private Listener listener;
     private volatile String outputName;
-    private volatile DefaultHttpDataSource tsSource;
-    private volatile Transformer transformer;
-    private volatile File hlsTmp;
+    /** Source réseau en cours de lecture : la fermer débloque immédiatement le fil de capture. */
+    private volatile DefaultHttpDataSource activeSource;
     private HandlerThread workerThread;
     private Handler workerHandler;
 
@@ -71,53 +86,34 @@ public class Recorder {
     }
 
     public void start(String url, String title, DocumentFile dir, Listener listener) {
-        // Transformer.cancel() ne finalise pas un direct HLS : le fichier était
-        // supprimé à l'arrêt. Ne pas annoncer un enregistrement qui sera perdu.
-        if (isHls(url)) {
-            main.post(() -> listener.onRecordError("Direct HLS non pris en charge. Choisis la variante MPEG-TS de la chaîne."));
-            return;
-        }
         if (!running.compareAndSet(false, true)) return;
         this.listener = listener;
-        boolean hls = isHls(url);
-        String safe = sanitize(title);
-        outputName = safe + "_" + System.currentTimeMillis() + (hls ? ".mp4" : ".ts");
+        final boolean hls = isHls(url);
+        final String base = sanitize(title) + "_" + System.currentTimeMillis();
+        outputName = base + ".ts";
 
         workerThread = new HandlerThread("dvr-recorder");
         workerThread.start();
         workerHandler = new Handler(workerThread.getLooper());
 
-        if (hls) workerHandler.post(() -> startHls(url, dir));
-        else workerHandler.post(() -> {
-            try { startTs(url, dir); }
-            catch (Exception e) {
-                running.set(false); quitWorker();
-                main.post(() -> listener.onRecordError("dossier d'enregistrement inaccessible"));
+        workerHandler.post(() -> {
+            try {
+                if (hls) recordHls(url, dir, base);
+                else recordTs(url, dir);
+            } catch (Exception e) {
+                running.set(false);
+                main.post(() -> { if (this.listener != null) this.listener.onRecordError("dossier d'enregistrement inaccessible"); });
+            } finally {
+                quitWorker();
             }
         });
     }
 
     public void stop() {
         if (!running.getAndSet(false)) return;
-        // TS : fermer la source débloque immédiatement la boucle de lecture.
-        if (tsSource != null) {
-            try { tsSource.close(); } catch (Exception ignored) {}
-        }
-        // HLS : annuler le Transformer. Sur un flux réellement « live » (sans fin),
-        // le MP4 ne peut pas être finalisé : on nettoie le fichier partiel.
-        if (transformer != null) {
-            try { transformer.cancel(); } catch (Exception ignored) {}
-            transformer = null;
-            final File tmp = hlsTmp;
-            if (tmp != null) {
-                try { if (tmp.exists()) tmp.delete(); } catch (Exception ignored) {}
-            }
-            final String name = outputName;
-            quitWorker();
-            main.post(() -> {
-                if (listener != null) listener.onRecordStopped(name, 0, false);
-            });
-        }
+        // Fermer la source débloque la lecture en cours ; réveiller l'attente entre deux segments.
+        closeQuietly(activeSource);
+        synchronized (wake) { wake.notifyAll(); }
     }
 
     /** Libère le HandlerThread : un thread fuirait sinon par enregistrement. */
@@ -130,9 +126,10 @@ public class Recorder {
         }
     }
 
-    private boolean isHls(String url) {
+    static boolean isHls(String url) {
         if (url == null) return false;
-        return url.toLowerCase(Locale.ROOT).contains(".m3u8");
+        // .m3u8, mais aussi ?output=m3u8 ou ?type=m3u8 (Xtream, Flussonic).
+        return url.toLowerCase(Locale.ROOT).contains("m3u8");
     }
 
     private String sanitize(String title) {
@@ -141,126 +138,319 @@ public class Recorder {
         return out == null || out.isEmpty() ? "Enregistrement" : out;
     }
 
-    // ── MPEG-TS : copie brute ────────────────────────────────────────────
-    private void startTs(String url, DocumentFile dir) {
-        if (!running.get()) { quitWorker(); return; }
-        DocumentFile out = dir.createFile("video/mp2t", outputName);
-        if (out == null) {
-            main.post(() -> { if (listener != null) listener.onRecordError("création du fichier impossible"); });
-            running.set(false);
-            quitWorker();
-            return;
-        }
-        DefaultHttpDataSource source = new DefaultHttpDataSource.Factory()
-            .setUserAgent("IPTVSmartersPro")
+    private DefaultHttpDataSource newSource() {
+        return new DefaultHttpDataSource.Factory()
+            .setUserAgent(USER_AGENT)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true)
             .createDataSource();
-        tsSource = source;
-        byte[] buffer = new byte[64 * 1024];
-        final long[] total = { 0 };
+    }
+
+    private static void closeQuietly(DefaultHttpDataSource source) {
+        if (source != null) {
+            try { source.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private void postStopped(String name, long bytes) {
+        final boolean success = bytes > 0;
+        main.post(() -> { if (listener != null) listener.onRecordStopped(name, bytes, success); });
+    }
+
+    private void postError(String message) {
+        main.post(() -> { if (listener != null) listener.onRecordError(message); });
+    }
+
+    // ── MPEG-TS : copie brute ────────────────────────────────────────────
+    private void recordTs(String url, DocumentFile dir) throws IOException {
+        if (!running.get()) return;
         final String name = outputName;
-        main.post(() -> { if (listener != null) listener.onRecordStarted(name); });
-        try {
-            source.open(new DataSpec(Uri.parse(url)));
-            try (OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
-                if (os == null) {
-                    main.post(() -> { if (listener != null) listener.onRecordError("ouverture du fichier impossible"); });
-                    return;
-                }
+        DocumentFile out = dir.createFile("video/mp2t", name);
+        if (out == null) { running.set(false); postError("création du fichier impossible"); return; }
+        DefaultHttpDataSource source = newSource();
+        activeSource = source;
+        byte[] buffer = new byte[64 * 1024];
+        long total = 0;
+        boolean opened = false;
+        try (OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
+            if (os == null) { postError("ouverture du fichier impossible"); return; }
+            opened = true;
+            main.post(() -> { if (listener != null) listener.onRecordStarted(name); });
+            try {
+                source.open(new DataSpec(Uri.parse(url)));
                 int read;
                 while (running.get() && (read = source.read(buffer, 0, buffer.length)) != -1) {
                     os.write(buffer, 0, read);
-                    total[0] += read;
+                    total += read;
                 }
-                os.flush();
+            } catch (Exception ignored) {
+                // Coupure réseau ou arrêt volontaire : les octets déjà écrits forment un .ts lisible.
             }
-            // Arrêt volontaire : les octets déjà écrits forment un .ts lisible.
-            main.post(() -> { if (listener != null) listener.onRecordStopped(name, total[0], total[0] > 0); });
-        } catch (Exception e) {
-            main.post(() -> { if (listener != null) listener.onRecordStopped(name, total[0], total[0] > 0); });
+            os.flush();
         } finally {
-            try { source.close(); } catch (Exception ignored) {}
-            tsSource = null;
+            closeQuietly(source);
+            activeSource = null;
             running.set(false);
-            quitWorker();
+            if (opened) postStopped(name, total);
         }
     }
 
-    // ── HLS : remux en MP4 ───────────────────────────────────────────────
-    private void startHls(String url, DocumentFile dir) {
-        if (!running.get()) return;
-        final File tmp = new File(context.getCacheDir(), "dvr-" + outputName + ".part");
-        hlsTmp = tmp;
-        final String name = outputName;
-        try {
-            Transformer t = new Transformer.Builder(context)
-                .setListener(new Transformer.Listener() {
-                    @Override
-                    public void onCompleted(Composition composition, ExportResult exportResult) {
-                        finalizeHls(tmp, dir, name);
-                    }
+    // ── HLS : capture des segments ───────────────────────────────────────
 
-                    @Override
-                    public void onError(Composition composition, ExportResult exportResult, ExportException exception) {
-                        final boolean wasRunning = running.get();
-                        running.set(false);
-                        try { if (tmp.exists()) tmp.delete(); } catch (Exception ignored) {}
-                        quitWorker();
-                        if (wasRunning) {
-                            main.post(() -> {
-                                if (listener != null) listener.onRecordError("remux impossible");
-                            });
-                        }
-                    }
-                })
-                .build();
-            transformer = t;
-            if (!running.get()) { t.cancel(); return; }
-            MediaItem mediaItem = new MediaItem.Builder().setUri(url).build();
-            EditedMediaItem edited = new EditedMediaItem.Builder(mediaItem).build();
-            EditedMediaItemSequence sequence = new EditedMediaItemSequence(Collections.singletonList(edited));
-            Composition composition = new Composition.Builder(sequence).build();
-            main.post(() -> { if (listener != null) listener.onRecordStarted(name); });
-            t.start(composition, tmp.getAbsolutePath());
-        } catch (Exception e) {
-            running.set(false);
-            quitWorker();
-            main.post(() -> { if (listener != null) listener.onRecordError("remux impossible"); });
-        }
+    static final class Segment {
+        String uri;
+        String keyMethod;
+        String keyUri;
+        byte[] iv;
+        String mapUri;
     }
 
-    private void finalizeHls(File tmp, DocumentFile dir, String name) {
-        long size = 0;
-        boolean ok = false;
-        try {
-            size = tmp.length();
-            if (size > 0) {
-                DocumentFile out = dir.createFile("video/mp4", name);
-                if (out != null) {
-                    try (InputStream in = new FileInputStream(tmp);
-                         OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
-                        if (os != null) {
-                            byte[] buffer = new byte[64 * 1024];
-                            int read;
-                            while ((read = in.read(buffer)) != -1) os.write(buffer, 0, read);
-                            os.flush();
-                            ok = true;
-                        }
-                    }
+    static final class Variant {
+        String uri;
+        long bandwidth;
+    }
+
+    static final class Playlist {
+        long mediaSequence;
+        double targetDuration = 6;
+        boolean endList;
+        boolean byteRange;
+        final List<Segment> segments = new ArrayList<>();
+        final List<Variant> variants = new ArrayList<>();
+    }
+
+    private static final Pattern ATTR = Pattern.compile("([A-Z0-9-]+)=(\"[^\"]*\"|[^,]*)");
+
+    private static Map<String, String> attributes(String line) {
+        Map<String, String> out = new HashMap<>();
+        int colon = line.indexOf(':');
+        if (colon < 0) return out;
+        Matcher m = ATTR.matcher(line.substring(colon + 1));
+        while (m.find()) {
+            String value = m.group(2);
+            if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) value = value.substring(1, value.length() - 1);
+            out.put(m.group(1), value);
+        }
+        return out;
+    }
+
+    private static String resolve(String base, String uri) {
+        try { return new URL(new URL(base), uri).toString(); } catch (Exception e) { return uri; }
+    }
+
+    private static byte[] hexIv(String hex) {
+        if (hex == null) return null;
+        String h = hex.startsWith("0x") || hex.startsWith("0X") ? hex.substring(2) : hex;
+        if (h.length() > 32) h = h.substring(h.length() - 32);
+        while (h.length() < 32) h = "0" + h;
+        byte[] out = new byte[16];
+        for (int i = 0; i < 16; i++) out[i] = (byte) Integer.parseInt(h.substring(i * 2, i * 2 + 2), 16);
+        return out;
+    }
+
+    /** Analyse une liste HLS (maîtresse ou de médias) ; les adresses sont rendues absolues. */
+    static Playlist parsePlaylist(String text, String baseUrl) {
+        Playlist pl = new Playlist();
+        String keyMethod = null, keyUri = null, mapUri = null;
+        byte[] keyIv = null;
+        boolean expectSegment = false;
+        Variant pendingVariant = null;
+        for (String raw : text.split("\\r?\\n")) {
+            String line = raw.trim();
+            if (line.isEmpty()) continue;
+            if (line.startsWith("#EXT-X-STREAM-INF")) {
+                pendingVariant = new Variant();
+                String bw = attributes(line).get("BANDWIDTH");
+                try { pendingVariant.bandwidth = bw == null ? 0 : Long.parseLong(bw.trim()); } catch (NumberFormatException ignored) {}
+            } else if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+                try { pl.mediaSequence = Long.parseLong(line.substring(22).trim()); } catch (NumberFormatException ignored) {}
+            } else if (line.startsWith("#EXT-X-TARGETDURATION:")) {
+                try { pl.targetDuration = Double.parseDouble(line.substring(22).trim()); } catch (NumberFormatException ignored) {}
+            } else if (line.startsWith("#EXT-X-ENDLIST")) {
+                pl.endList = true;
+            } else if (line.startsWith("#EXT-X-BYTERANGE")) {
+                pl.byteRange = true;
+            } else if (line.startsWith("#EXT-X-KEY:")) {
+                Map<String, String> a = attributes(line);
+                keyMethod = a.get("METHOD");
+                keyUri = a.containsKey("URI") ? resolve(baseUrl, a.get("URI")) : null;
+                keyIv = hexIv(a.get("IV"));
+                if ("NONE".equalsIgnoreCase(keyMethod)) { keyMethod = null; keyUri = null; keyIv = null; }
+            } else if (line.startsWith("#EXT-X-MAP:")) {
+                String u = attributes(line).get("URI");
+                mapUri = u == null ? null : resolve(baseUrl, u);
+            } else if (line.startsWith("#EXTINF")) {
+                expectSegment = true;
+            } else if (!line.startsWith("#")) {
+                if (pendingVariant != null) {
+                    pendingVariant.uri = resolve(baseUrl, line);
+                    pl.variants.add(pendingVariant);
+                    pendingVariant = null;
+                } else if (expectSegment) {
+                    Segment s = new Segment();
+                    s.uri = resolve(baseUrl, line);
+                    s.keyMethod = keyMethod;
+                    s.keyUri = keyUri;
+                    s.iv = keyIv;
+                    s.mapUri = mapUri;
+                    pl.segments.add(s);
+                    expectSegment = false;
                 }
             }
-        } catch (Exception ignored) {}
-        try { if (tmp.exists()) tmp.delete(); } catch (Exception ignored) {}
-        final boolean success = ok && size > 0;
-        final long bytes = success ? size : 0;
-        final boolean wasRunning = running.getAndSet(false);
-        quitWorker();
-        if (!wasRunning) {
-            // Arrêt demandé pendant la finalisation : on ne notifie pas deux fois.
+        }
+        return pl;
+    }
+
+    /** Lit une ressource complète ; renvoie aussi l'adresse finale (après redirections). */
+    private byte[] fetch(String url, String[] finalUrl) throws IOException {
+        DefaultHttpDataSource source = newSource();
+        activeSource = source;
+        try {
+            source.open(new DataSpec(Uri.parse(url)));
+            if (finalUrl != null) {
+                Uri resolved = source.getUri();
+                finalUrl[0] = resolved != null ? resolved.toString() : url;
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(256 * 1024);
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = source.read(buffer, 0, buffer.length)) != -1) {
+                if (!running.get()) throw new IOException("arrêt");
+                bos.write(buffer, 0, read);
+            }
+            return bos.toByteArray();
+        } finally {
+            closeQuietly(source);
+            activeSource = null;
+        }
+    }
+
+    /** Télécharge la liste de lecture ; une liste maîtresse renvoie la variante au débit le plus élevé. */
+    private Playlist loadMediaPlaylist(String url, String[] mediaUrl) throws IOException {
+        String[] finalUrl = new String[1];
+        Playlist pl = parsePlaylist(new String(fetch(url, finalUrl), StandardCharsets.UTF_8), finalUrl[0]);
+        if (!pl.variants.isEmpty() && pl.segments.isEmpty()) {
+            Variant best = pl.variants.get(0);
+            for (Variant v : pl.variants) if (v.bandwidth > best.bandwidth) best = v;
+            pl = parsePlaylist(new String(fetch(best.uri, finalUrl), StandardCharsets.UTF_8), finalUrl[0]);
+        }
+        mediaUrl[0] = finalUrl[0];
+        return pl;
+    }
+
+    private byte[] decrypt(byte[] data, Segment s, long sequence, Map<String, byte[]> keys) throws IOException {
+        if (s.keyMethod == null) return data;
+        if (!"AES-128".equalsIgnoreCase(s.keyMethod) || s.keyUri == null) throw new HlsException("flux HLS chiffré non pris en charge");
+        byte[] key = keys.get(s.keyUri);
+        if (key == null) {
+            key = fetch(s.keyUri, null);
+            if (key.length != 16) throw new HlsException("clé de chiffrement illisible");
+            keys.put(s.keyUri, key);
+        }
+        byte[] iv = s.iv;
+        if (iv == null) {
+            iv = new byte[16];
+            for (int i = 15; i >= 8; i--) { iv[i] = (byte) (sequence & 0xff); sequence >>= 8; }
+        }
+        try {
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
+            return cipher.doFinal(data);
+        } catch (Exception e) {
+            throw new HlsException("déchiffrement impossible");
+        }
+    }
+
+    private void pause(long ms) {
+        synchronized (wake) {
+            if (!running.get()) return;
+            try { wake.wait(ms); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+        }
+    }
+
+    private void recordHls(String url, DocumentFile dir, String base) throws IOException {
+        String[] mediaUrl = new String[1];
+        Playlist pl;
+        try {
+            pl = loadMediaPlaylist(url, mediaUrl);
+        } catch (Exception e) {
+            running.set(false);
+            postError(e instanceof HlsException ? e.getMessage() : "flux HLS inaccessible");
             return;
         }
-        main.post(() -> { if (listener != null) listener.onRecordStopped(name, bytes, success); });
+        if (pl.byteRange) { running.set(false); postError("format HLS non pris en charge (plages d'octets)"); return; }
+        if (pl.segments.isEmpty()) { running.set(false); postError("flux HLS vide"); return; }
+
+        final boolean fmp4 = pl.segments.get(0).mapUri != null;
+        final String name = base + (fmp4 ? ".mp4" : ".ts");
+        outputName = name;
+        DocumentFile out = dir.createFile(fmp4 ? "video/mp4" : "video/mp2t", name);
+        if (out == null) { running.set(false); postError("création du fichier impossible"); return; }
+
+        long total = 0;
+        String error = null;
+        try (OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
+            if (os == null) { running.set(false); postError("ouverture du fichier impossible"); return; }
+            main.post(() -> { if (listener != null) listener.onRecordStarted(name); });
+            Map<String, byte[]> keys = new HashMap<>();
+            String writtenMap = null;
+            // Direct : partir près du bord (3 segments), comme un lecteur. Archive (liste finie) : depuis le début.
+            long next = pl.endList ? pl.mediaSequence : Math.max(pl.mediaSequence, pl.mediaSequence + pl.segments.size() - 3);
+            int failures = 0;
+            while (running.get()) {
+                // Segments manqués (liste trop courte ou retard) : reprendre au plus ancien disponible.
+                if (next < pl.mediaSequence) next = pl.mediaSequence;
+                for (int i = 0; i < pl.segments.size() && running.get(); i++) {
+                    long sequence = pl.mediaSequence + i;
+                    if (sequence < next) continue;
+                    Segment s = pl.segments.get(i);
+                    try {
+                        if (s.mapUri != null && !s.mapUri.equals(writtenMap)) {
+                            byte[] init = fetch(s.mapUri, null);
+                            os.write(init);
+                            total += init.length;
+                            writtenMap = s.mapUri;
+                        }
+                        byte[] data = decrypt(fetch(s.uri, null), s, sequence, keys);
+                        os.write(data);
+                        total += data.length;
+                        failures = 0;
+                    } catch (HlsException e) {
+                        throw e;
+                    } catch (IOException e) {
+                        if (!running.get()) break;
+                        // Segment perdu : on passe au suivant plutôt que de bloquer l'enregistrement.
+                        if (++failures > MAX_FAILURES) throw new HlsException("flux interrompu");
+                    }
+                    next = sequence + 1;
+                }
+                os.flush();
+                if (!running.get() || (pl.endList && next >= pl.mediaSequence + pl.segments.size())) break;
+                pause((long) Math.max(1000, Math.min(10_000, pl.targetDuration * 500)));
+                if (!running.get()) break;
+                try {
+                    pl = loadMediaPlaylist(mediaUrl[0], mediaUrl);
+                } catch (IOException e) {
+                    if (!running.get()) break;
+                    if (++failures > MAX_FAILURES) throw new HlsException("flux interrompu");
+                    pause(2000);
+                }
+            }
+            os.flush();
+        } catch (HlsException e) {
+            error = e.getMessage();
+        } catch (IOException e) {
+            if (running.get()) error = "écriture impossible";
+        } finally {
+            running.set(false);
+        }
+        if (error != null && total == 0) {
+            try { out.delete(); } catch (Exception ignored) {}
+            postError(error);
+        } else {
+            // Un arrêt (volontaire ou sur incident) garde ce qui a été capturé : le fichier est lisible.
+            postStopped(name, total);
+        }
     }
 }

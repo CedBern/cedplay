@@ -635,7 +635,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         actionsLayout.addView(btnVlc);
 
 
-        // Enregistrement DVR : capture le direct en cours (TS brut ou HLS remuxé en MP4).
+        // Enregistrement DVR : capture le direct en cours (TS brut, ou segments HLS mis bout à bout).
         if (!vod) {
             btnRec = new Button(this);
             btnRec.setText(recording ? "■" : "REC");

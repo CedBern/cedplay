@@ -421,12 +421,12 @@ export const RecordingsBridge = {
     catch { toast.error('Suppression impossible.'); return false; }
   },
 
-  async schedule(url: string, title: string, startTimeMs: number, durationMs: number): Promise<boolean> {
-    if (!isAvailable()) { toast.error('Programmation disponible uniquement sur Android.'); return false; }
-    if (url.toLowerCase().includes('.m3u8')) { toast.error('Enregistrement du direct HLS indisponible. Choisis la variante MPEG-TS.'); return false; }
+  /** silent : pas de message d'erreur (programmation automatique des séries). */
+  async schedule(url: string, title: string, startTimeMs: number, durationMs: number, options: { silent?: boolean } = {}): Promise<boolean> {
+    if (!isAvailable()) { if (!options.silent) toast.error('Programmation disponible uniquement sur Android.'); return false; }
     try { await NativePlayer.scheduleRecording({ url, title, startTimeMs, durationMs }); return true; }
     catch (e) {
-      toast.error(e instanceof Error && e.message ? e.message : 'Programmation impossible.');
+      if (!options.silent) toast.error(e instanceof Error && e.message ? e.message : 'Programmation impossible.');
       return false;
     }
   },

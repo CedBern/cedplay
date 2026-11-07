@@ -1,6 +1,6 @@
 import type { Channel } from '@/types/channel';
 import type { EPGData } from '@/types/epg';
-import { parseXmltv, buildEPGData } from '@/utils/epgXmltv';
+import { parseXmltv, buildMergedEPGData, type EPGBuildOptions } from '@/utils/epgXmltv';
 
 // Worker singleton : ne pas recréer un worker à chaque parse.
 let worker: Worker | null = null;
@@ -18,12 +18,14 @@ function getWorker(): Worker | null {
 /**
  * Parse l'XMLTV hors du thread principal, avec repli transparent sur le fil
  * principal si le worker est indisponible (WebView ancien, tests) ou bloqué.
+ * Plusieurs guides sont fusionnés dans l'ordre donné (le premier l'emporte).
  */
-export function parseEPGInWorker(xml: string, channels: Channel[]): Promise<EPGData> {
+export function parseEPGInWorker(xml: string | string[], channels: Channel[], options: EPGBuildOptions = {}): Promise<EPGData> {
+  const xmls = Array.isArray(xml) ? xml : [xml];
   return new Promise((resolve, reject) => {
     const w = getWorker();
     const fallback = () => {
-      try { resolve(buildEPGData(parseXmltv(xml), channels)); }
+      try { resolve(buildMergedEPGData(xmls.map(parseXmltv), channels, options)); }
       catch (e) { reject(e instanceof Error ? e : new Error('Guide illisible.')); }
     };
     if (!w) { fallback(); return; }
@@ -45,6 +47,6 @@ export function parseEPGInWorker(xml: string, channels: Channel[]): Promise<EPGD
       fallback();
     }, 60_000);
     w.addEventListener('message', onMessage);
-    w.postMessage({ type: 'parse', xml, channels });
+    w.postMessage({ type: 'parse', xml: xmls, channels, options });
   });
 }

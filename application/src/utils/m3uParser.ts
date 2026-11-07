@@ -1,6 +1,49 @@
 import { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 
+/** Valeurs de l'en-tête #EXTM3U appliquées aux chaînes qui ne les précisent pas. */
+interface M3UHeader {
+  epgUrls?: string[];
+  catchup?: string;
+  catchupSource?: string;
+  catchupDays?: number;
+  tvgShift?: number;
+}
+
+/**
+ * Attributs M3U reconnus (la première occurrence l'emporte). Le lookbehind évite que
+ * « catchup » attrape « catchup-source » ou que « logo » attrape « tvg-logo ».
+ */
+const ATTRIBUTE_PATTERNS: Array<[string, RegExp]> = ([
+  ['tvg-id', 'tvgId'], ['tvg-name', 'tvgName'], ['tvg-logo', 'tvgLogo'], ['tvg-chno', 'chno'],
+  ['group-title', 'groupTitle'], ['logo', 'logo'], ['group', 'group'], ['tvg-shift', 'tvgShift'],
+  ['catchup', 'catchup'], ['catchup-type', 'catchupType'], ['catchup-source', 'catchupSource'],
+  ['catchup-days', 'catchupDays'], ['timeshift', 'timeshift'], ['tvg-rec', 'tvgRec'],
+  ['url-tvg', 'urlTvg'], ['x-tvg-url', 'xTvgUrl'], ['tvg-url', 'tvgUrl'],
+] as const).map(([attr, key]) => [key, new RegExp(`(?<![\\w-])${attr}="([^"]*)"`, 'i')]);
+
+/** Jours d'archive retenus quand la liste active le replay sans préciser de durée. */
+const DEFAULT_CATCHUP_DAYS = 5;
+
+const QUALITY_REGEXES: Array<[RegExp, Channel['quality']]> = [
+  [/\b(2160p|4k|uhd)\b/i, '4K'],
+  [/\b(1080p|full ?hd|fhd)\b/i, 'FHD'],
+  [/\b(720p|hd)\b/i, 'HD'],
+  [/\b(480p|sd)\b/i, 'SD']
+];
+
+function parseDays(raw: string | undefined): number | undefined {
+  const days = raw === undefined ? NaN : parseInt(raw, 10);
+  return Number.isFinite(days) && days > 0 ? Math.min(days, 30) : undefined;
+}
+
+/** tvg-shift en heures (« +1 », « -2.5 ») ; borné à ±24 h. */
+function parseShift(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const shift = Number(raw.trim().replace(',', '.'));
+  return Number.isFinite(shift) && Math.abs(shift) <= 24 ? shift : undefined;
+}
+
 export class M3UParser {
   /** Basic channel name sanitization: trim, remove control chars & simple HTML-like tags */
   private static sanitizeName(raw: string): string {
@@ -29,41 +72,15 @@ export class M3UParser {
     const channels: Channel[] = [];
     let currentChannel: Partial<Channel> = {};
     let channelId = 0;
-
-    const qualityRegexes: Array<[RegExp, Channel['quality']]> = [
-      [/\b(2160p|4k|uhd)\b/i, '4K'],
-      [/\b(1080p|full ?hd|fhd)\b/i, 'FHD'],
-      [/\b(720p|hd)\b/i, 'HD'],
-      [/\b(480p|sd)\b/i, 'SD']
-    ];
+    let header: M3UHeader = {};
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       
-      if (line.startsWith('#EXTINF:')) {
-        // Parse EXTINF line
-        const duration = this.extractDuration(line);
-        const metadata = this.extractMetadata(line);
-  const name = this.sanitizeName(this.extractName(line));
-        
-        let quality: Channel['quality'] | undefined;
-        for (const [re, q] of qualityRegexes) {
-          if (re.test(name)) { quality = q; break; }
-        }
-
-        const baseChannel: Partial<Channel> = {
-          id: `channel_${++channelId}`,
-          name: name || `Channel ${channelId}`,
-          duration: duration,
-          logo: metadata.tvgLogo || metadata.logo,
-          group: metadata.groupTitle || metadata.group,
-          tvgId: metadata.tvgId,
-          tvgName: metadata.tvgName,
-          ...(metadata.chno ? { chno: metadata.chno } : {}),
-          isFavorite: false
-        };
-        if (quality) baseChannel.quality = quality;
-        currentChannel = baseChannel;
+      if (line.startsWith('#EXTM3U')) {
+        header = this.extractHeader(line);
+      } else if (line.startsWith('#EXTINF:')) {
+        currentChannel = this.channelFromExtinf(line, ++channelId, header);
       } else if (line.startsWith('http://') || line.startsWith('https://') || line.startsWith('rtmp://') || line.startsWith('rtsp://')) {
         // This is a stream URL
         if (currentChannel.name) {
@@ -86,7 +103,7 @@ export class M3UParser {
   const totalBefore = channels.length;
   // Reuse progressive variant-aware dedup for consistency
   const deduped = this.deduplicateChannels(channels);
-  return this.finalizePlaylist(deduped, playlistName, totalBefore);
+  return this.finalizePlaylist(deduped, playlistName, totalBefore, header.epgUrls);
   }
 
   /**
@@ -107,36 +124,15 @@ export class M3UParser {
     const channels: Channel[] = [];
     let currentChannel: Partial<Channel> = {};
     let channelId = 0;
-    
-    const qualityRegexes: Array<[RegExp, Channel['quality']]> = [
-      [/\b(2160p|4k|uhd)\b/i, '4K'],
-      [/\b(1080p|full ?hd|fhd)\b/i, 'FHD'],
-      [/\b(720p|hd)\b/i, 'HD'],
-      [/\b(480p|sd)\b/i, 'SD']
-    ];
+    let header: M3UHeader = {};
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      if (line.startsWith('#EXTINF:')) {
-        const duration = this.extractDuration(line);
-        const metadata = this.extractMetadata(line);
-  const name = this.sanitizeName(this.extractName(line));
-        let quality: Channel['quality'] | undefined;
-        for (const [re, q] of qualityRegexes) { if (re.test(name)) { quality = q; break; } }
-        const baseChannel: Partial<Channel> = {
-          id: `channel_${++channelId}`,
-          name: name || `Channel ${channelId}`,
-          duration: duration,
-          logo: metadata.tvgLogo || metadata.logo,
-          group: metadata.groupTitle || metadata.group,
-          tvgId: metadata.tvgId,
-          tvgName: metadata.tvgName,
-          ...(metadata.chno ? { chno: metadata.chno } : {}),
-          isFavorite: false
-        };
-        if (quality) baseChannel.quality = quality;
-        currentChannel = baseChannel;
+      if (line.startsWith('#EXTM3U')) {
+        header = this.extractHeader(line);
+      } else if (line.startsWith('#EXTINF:')) {
+        currentChannel = this.channelFromExtinf(line, ++channelId, header);
       } else if (line.startsWith('http://') || line.startsWith('https://') || line.startsWith('rtmp://') || line.startsWith('rtsp://')) {
         if (currentChannel.name) {
           if (!currentChannel.quality) {
@@ -164,7 +160,7 @@ export class M3UParser {
 
     const totalBefore = channels.length;
     // Dedup + finalize
-    const playlist = this.finalizePlaylist(this.deduplicateChannels(channels), playlistName, totalBefore);
+    const playlist = this.finalizePlaylist(this.deduplicateChannels(channels), playlistName, totalBefore, header.epgUrls);
     onProgress?.(100, playlist.channels.length);
     return playlist;
   }
@@ -208,7 +204,7 @@ export class M3UParser {
     return Array.from(map.values());
   }
 
-  private static finalizePlaylist(channels: Channel[], playlistName: string, totalBefore: number): PlaylistInfo {
+  private static finalizePlaylist(channels: Channel[], playlistName: string, totalBefore: number, epgUrls?: string[]): PlaylistInfo {
     const groupMap = new Map<string, Channel[]>();
     channels.forEach(channel => {
       const groupName = channel.group || 'Ungrouped';
@@ -221,8 +217,63 @@ export class M3UParser {
       name: playlistName,
       channels,
       groups,
+      ...(epgUrls?.length ? { epgUrls } : {}),
       totalChannelsBeforeDedup: totalBefore
     };
+  }
+
+  /** Attributs de l'en-tête #EXTM3U : guides XMLTV et valeurs par défaut du replay et du décalage. */
+  private static extractHeader(line: string): M3UHeader {
+    const meta = this.extractMetadata(line.replace(/^#EXTM3U/, ''));
+    const epgUrls = [meta.urlTvg, meta.xTvgUrl, meta.tvgUrl]
+      .filter((v): v is string => !!v)
+      .flatMap(v => v.split(','))
+      .map(v => v.trim())
+      .filter(v => /^https?:\/\//i.test(v));
+    const header: M3UHeader = {};
+    if (epgUrls.length) header.epgUrls = [...new Set(epgUrls)];
+    const catchup = (meta.catchup || meta.catchupType)?.trim();
+    if (catchup) header.catchup = catchup.toLowerCase();
+    if (meta.catchupSource?.trim()) header.catchupSource = meta.catchupSource.trim();
+    const days = parseDays(meta.catchupDays ?? meta.timeshift ?? meta.tvgRec);
+    if (days) header.catchupDays = days;
+    const shift = parseShift(meta.tvgShift);
+    if (shift !== undefined) header.tvgShift = shift;
+    return header;
+  }
+
+  /** Construit une chaîne à partir d'une ligne #EXTINF (l'adresse arrive à la ligne suivante). */
+  private static channelFromExtinf(line: string, index: number, header: M3UHeader): Partial<Channel> {
+    const duration = this.extractDuration(line);
+    const metadata = this.extractMetadata(line);
+    const name = this.sanitizeName(this.extractName(line));
+    let quality: Channel['quality'] | undefined;
+    for (const [re, q] of QUALITY_REGEXES) { if (re.test(name)) { quality = q; break; } }
+    const channel: Partial<Channel> = {
+      id: `channel_${index}`,
+      name: name || `Channel ${index}`,
+      duration: duration,
+      logo: metadata.tvgLogo || metadata.logo,
+      group: metadata.groupTitle || metadata.group,
+      tvgId: metadata.tvgId,
+      tvgName: metadata.tvgName,
+      ...(metadata.chno ? { chno: metadata.chno } : {}),
+      isFavorite: false
+    };
+    if (quality) channel.quality = quality;
+    const shift = parseShift(metadata.tvgShift) ?? header.tvgShift;
+    if (shift) channel.tvgShift = shift;
+    const ownMode = (metadata.catchup || metadata.catchupType)?.trim().toLowerCase();
+    const ownDays = parseDays(metadata.catchupDays ?? metadata.timeshift ?? metadata.tvgRec);
+    // Une chaîne qui ne déclare que des jours d'archive hérite du mode de l'en-tête (ou « default »).
+    const catchup = ownMode || header.catchup || (ownDays ? 'default' : undefined);
+    if (catchup && catchup !== 'disabled' && catchup !== 'none') {
+      channel.catchup = catchup;
+      const source = metadata.catchupSource?.trim() || header.catchupSource;
+      if (source) channel.catchupSource = source;
+      channel.catchupDays = ownDays ?? header.catchupDays ?? DEFAULT_CATCHUP_DAYS;
+    }
+    return channel;
   }
 
   private static extractDuration(line: string): number {
@@ -245,26 +296,10 @@ export class M3UParser {
     const commaIndex = this.metadataEnd(line);
     const attributesSection = commaIndex !== -1 ? line.substring(0, commaIndex) : line;
     
-    // Common patterns to match
-    const patterns = [
-      /tvg-id="([^"]*)"/g,
-      /tvg-name="([^"]*)"/g,
-      /tvg-logo="([^"]*)"/g,
-      /tvg-chno="([^"]*)"/g,
-      /group-title="([^"]*)"/g,
-      /(?:^|\s)logo="([^"]*)"/g,
-      /(?:^|\s)group="([^"]*)"/g
-    ];
-    
-    const keys = ['tvgId', 'tvgName', 'tvgLogo', 'chno', 'groupTitle', 'logo', 'group'];
-    
-    patterns.forEach((pattern, index) => {
-      const matches = [...attributesSection.matchAll(pattern)];
-      if (matches.length > 0) {
-        metadata[keys[index]] = matches[0][1];
-      }
-    });
-    
+    for (const [key, pattern] of ATTRIBUTE_PATTERNS) {
+      const match = attributesSection.match(pattern);
+      if (match) metadata[key] = match[1];
+    }
     return metadata;
   }
 

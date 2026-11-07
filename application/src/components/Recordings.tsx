@@ -8,8 +8,12 @@ import {
 import { formatFileSize } from '@/utils/localLibrary';
 import type { Channel } from '@/types/channel';
 import {
-  CalendarClock, CircleDot, Clock, FolderOpen, Loader2, Play, Plus, RefreshCw, Trash2,
+  CalendarClock, CircleDot, Clock, FolderOpen, Loader2, Play, Plus, RefreshCw, Repeat, Trash2,
 } from 'lucide-react';
+import {
+  getRecordingPrefs, getSeriesRules, removeSeriesRule, saveRecordingPrefs, DEFAULT_RECORDING_PREFS, RECORDING_RULES_EVENT,
+  type RecordingPrefs, type SeriesRule,
+} from '@/utils/recordingRules';
 
 function formatDate(ts: number): string {
   if (!ts) return '';
@@ -54,6 +58,22 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
   const [startLocal, setStartLocal] = useState('');
   const [durationMin, setDurationMin] = useState(60);
   const [submitting, setSubmitting] = useState(false);
+
+  // Marges d'enregistrement depuis le guide et séries suivies.
+  const [prefs, setPrefs] = useState<RecordingPrefs>(DEFAULT_RECORDING_PREFS);
+  const [rules, setRules] = useState<SeriesRule[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => { void Promise.all([getRecordingPrefs(), getSeriesRules()]).then(([p, r]) => { if (!cancelled) { setPrefs(p); setRules(r); } }); };
+    load();
+    window.addEventListener(RECORDING_RULES_EVENT, load);
+    return () => { cancelled = true; window.removeEventListener(RECORDING_RULES_EVENT, load); };
+  }, []);
+  const updateMargin = (key: keyof RecordingPrefs, value: number) => {
+    const next = { ...prefs, [key]: value };
+    setPrefs(next);
+    void saveRecordingPrefs(next).catch(() => toast.error('Impossible d’enregistrer les marges.'));
+  };
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -221,6 +241,50 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
         )}
       </section>
 
+      {/* ── Guide : marges et séries ─────────────────────────────────────── */}
+      <section className="rounded-lg border border-neutral-900 bg-neutral-950 p-4 space-y-4">
+        <h2 className="text-white font-semibold flex items-center gap-2">
+          <Repeat className="h-5 w-5 text-primary" aria-hidden="true" /> Depuis le guide
+        </h2>
+        <p className="text-xs text-neutral-400">Dans le guide, OK maintenu (ou clic) sur une émission ouvre sa fiche : « Enregistrer » ou « Enregistrer la série ». Les marges couvrent un programme qui commence en avance ou finit en retard.</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <label className="text-xs text-neutral-400" htmlFor="rec-margin-before">Marge avant (minutes)</label>
+            <Input id="rec-margin-before" type="number" min={0} max={60} value={prefs.marginBeforeMin} onChange={e => updateMargin('marginBeforeMin', Number(e.target.value))} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-neutral-400" htmlFor="rec-margin-after">Marge après (minutes)</label>
+            <Input id="rec-margin-after" type="number" min={0} max={60} value={prefs.marginAfterMin} onChange={e => updateMargin('marginAfterMin', Number(e.target.value))} />
+          </div>
+        </div>
+        {rules.length > 0 ? (
+          <ul className="divide-y divide-neutral-900 border border-neutral-900 rounded-lg overflow-hidden" aria-label="Séries suivies">
+            {rules.map(rule => (
+              <li key={rule.id} className="flex items-center gap-3 px-3 py-2 hover:bg-white/5">
+                <span className="shrink-0 w-9 h-9 rounded-md bg-primary/15 text-primary flex items-center justify-center">
+                  <Repeat className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-white">{rule.title}</span>
+                  <span className="block text-xs text-neutral-400">{rule.channelName} · chaque diffusion</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { void removeSeriesRule(rule.id).then(() => toast.info(`Série « ${rule.title} » arrêtée.`)); }}
+                  className="shrink-0 rounded-md p-2 text-neutral-400 hover:bg-red-500/20 hover:text-red-300"
+                  aria-label={`Arrêter la série ${rule.title}`}
+                  title="Arrêter la série (les programmations déjà posées restent)"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-neutral-500">Aucune série suivie. Les diffusions d’une série sont programmées à chaque mise à jour du guide, pour la semaine à venir.</p>
+        )}
+      </section>
+
       {/* ── Enregistrements terminés ───────────────────────────────────── */}
       {!folder ? (
         <div className="text-center py-16">
@@ -249,7 +313,7 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
           </div>
 
           <p className="text-xs text-neutral-500">
-            Enregistrement disponible pour les directs MPEG-TS (.ts). Pour une chaîne HLS (.m3u8), choisis sa variante MPEG-TS ; l’enregistrement HLS n’est pas encore pris en charge.
+            Les directs MPEG-TS sont enregistrés en .ts ; les directs HLS (.m3u8) sont capturés segment par segment (.ts, ou .mp4 pour les flux fMP4).
           </p>
 
           {files.length === 0 ? (

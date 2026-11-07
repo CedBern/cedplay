@@ -8,6 +8,8 @@ import type { PlaylistInfo } from '@/types/channel';
 const mocks = vi.hoisted(() => ({ source: vi.fn() }));
 vi.mock('@/utils/epg', () => ({
   fetchEPGSource: mocks.source,
+  getSecondaryEPGUrls: () => [],
+  fetchSecondaryEPGSources: async () => [],
   getParsedEPGCache: async () => null,
   saveParsedEPGCache: async () => {},
 }));

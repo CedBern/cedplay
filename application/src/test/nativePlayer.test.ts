@@ -5,7 +5,7 @@ import type { Channel } from '@/types/channel';
 
 const mocks = vi.hoisted(() => ({
   platform: 'android', available: true,
-  open: vi.fn(), openExternal: vi.fn(), openMosaic: vi.fn(), openVod: vi.fn(), error: vi.fn(),
+  open: vi.fn(), openExternal: vi.fn(), openMosaic: vi.fn(), openVod: vi.fn(), error: vi.fn(), scheduleRecording: vi.fn(),
 }));
 const telemetry = vi.hoisted(() => ({ log: vi.fn() }));
 vi.mock('@capacitor/core', () => ({
@@ -13,7 +13,7 @@ vi.mock('@capacitor/core', () => ({
     getPlatform: () => mocks.platform,
     isPluginAvailable: () => mocks.available,
   },
-  registerPlugin: () => ({ open: mocks.open, openExternal: mocks.openExternal, openMosaic: mocks.openMosaic, openVod: mocks.openVod }),
+  registerPlugin: () => ({ open: mocks.open, openExternal: mocks.openExternal, openMosaic: mocks.openMosaic, openVod: mocks.openVod, scheduleRecording: mocks.scheduleRecording }),
 }));
 vi.mock('sonner', () => ({ toast: { error: mocks.error } }));
 vi.mock('@/utils/telemetry/logger', () => ({ globalTelemetryLogger: { log: telemetry.log } }));
@@ -241,9 +241,21 @@ it('sauvegarde chaque épisode visité sous sa propre identité après zapping',
   expect(localStorage.getItem('vod_progress_other:series:3')).toBeNull();
 });
 
-it('refuse la programmation HLS avant de proposer une capture non finalisable', async () => {
-  expect(await RecordingsBridge.schedule('https://example.test/live.m3u8', 'HLS', Date.now() + 60000, 60000)).toBe(false);
-  expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('MPEG-TS'));
+it('transmet la programmation d’un direct HLS à Android (capture des segments)', async () => {
+  mocks.scheduleRecording.mockResolvedValueOnce({ id: 'r1' });
+  const start = Date.now() + 60000;
+  expect(await RecordingsBridge.schedule('https://example.test/live.m3u8', 'HLS', start, 60000)).toBe(true);
+  expect(mocks.scheduleRecording).toHaveBeenCalledWith({ url: 'https://example.test/live.m3u8', title: 'HLS', startTimeMs: start, durationMs: 60000 });
+  expect(mocks.error).not.toHaveBeenCalled();
+});
+
+it('programme une série sans message quand Android refuse (mode silencieux)', async () => {
+  mocks.scheduleRecording.mockRejectedValueOnce(new Error('Choisis d’abord un dossier'));
+  expect(await RecordingsBridge.schedule('https://example.test/a.ts', 'A', Date.now() + 60000, 60000, { silent: true })).toBe(false);
+  expect(mocks.error).not.toHaveBeenCalled();
+  mocks.scheduleRecording.mockRejectedValueOnce(new Error('Choisis d’abord un dossier'));
+  expect(await RecordingsBridge.schedule('https://example.test/a.ts', 'A', Date.now() + 60000, 60000)).toBe(false);
+  expect(mocks.error).toHaveBeenCalledWith('Choisis d’abord un dossier');
 });
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));

@@ -33,6 +33,9 @@ import { parseM3UInWorker } from '@/utils/parseWorker';
 import { adultGroupNames } from '@/utils/parentalControl';
 import { popDueReminders } from '@/utils/reminders';
 import { loadCatchupIndex, streamIdOf, catchupUrl, type CatchupIndex } from '@/utils/catchup';
+import { hasM3UCatchup, m3uCatchupDays, m3uCatchupUrl } from '@/utils/m3uCatchup';
+import { applySeriesRules } from '@/utils/recordingRules';
+import { EpgSettingsDialog } from '@/components/EpgSettingsDialog';
 import type { EPGProgram } from '@/types/epg';
 import { isPlaybackDelegated } from '@/utils/playbackOwnership';
 /** Date de la dernière actualisation réussie d'une liste par adresse (manuelle, automatique ou import). */
@@ -67,6 +70,8 @@ export function IPTVPlayer() {
   const [mosaicChannel, setMosaicChannel] = useState<Channel | null>(null);
   const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [recordingsChannel, setRecordingsChannel] = useState<Channel | null>(null);
+  // Réglages du guide (sources, association d'une chaîne, décalage).
+  const [guideSettings, setGuideSettings] = useState<{ channel: Channel | null } | null>(null);
   // Demande de reprise depuis « Continuer » (voir VodLibrary).
   const [vodResumeRequest, setVodResumeRequest] = useState<VodResumeRequest | null>(null);
   const openSavedVod = (kind: 'movie' | 'series', item?: VodWatchlistItem) => {
@@ -461,34 +466,50 @@ export function IPTVPlayer() {
     if (currentPlaylist) void loadCatchupIndex(currentPlaylist).then(index => { if (!cancelled) setCatchupIndex(index); });
     return () => { cancelled = true; };
   }, [currentPlaylist]);
-  const hasCatchup = !!catchupIndex && Object.keys(catchupIndex.archiveDays).length > 0;
-  const catchupDays = useCallback((channel: Channel) => {
+  // Replay M3U standard (catchup, catchup-source, catchup-days) en plus de l'archive Xtream.
+  const hasM3UReplay = useMemo(() => !!currentPlaylist?.channels.some(hasM3UCatchup), [currentPlaylist]);
+  const hasCatchup = hasM3UReplay || (!!catchupIndex && Object.keys(catchupIndex.archiveDays).length > 0);
+  const xtreamCatchupDays = useCallback((channel: Channel) => {
     const id = catchupIndex ? streamIdOf(channel) : null;
     return id ? catchupIndex!.archiveDays[id] ?? 0 : 0;
   }, [catchupIndex]);
+  const catchupDays = useCallback((channel: Channel) => Math.max(xtreamCatchupDays(channel), m3uCatchupDays(channel)), [xtreamCatchupDays]);
   const playCatchup = useCallback((channel: Channel, program: EPGProgram) => {
-    if (!currentPlaylist || !catchupIndex) return;
+    if (!currentPlaylist) return;
     if (!parentalUnlocked && parentalLockedGroups.includes(channel.group || '')) { setPinOpen(true); return; }
+    const start = new Date(program.startTime);
+    const end = new Date(program.endTime);
     const account = getXtreamAccount(currentPlaylist);
     const streamId = streamIdOf(channel);
-    if (!account || !streamId) return;
-    const start = new Date(program.startTime);
-    const url = catchupUrl(account, streamId, start, new Date(program.endTime), catchupIndex.timezone);
+    const url = account && streamId && catchupIndex && xtreamCatchupDays(channel) > 0
+      ? catchupUrl(account, streamId, start, end, catchupIndex.timezone)
+      : m3uCatchupUrl(channel, start, end);
+    if (!url) { toast.error('Replay indisponible pour cette chaîne.'); return; }
     const title = `${channel.name} · ${program.title}`;
     // Deux abonnements peuvent utiliser le même numéro de flux : leurs
     // positions de reprise doivent rester indépendantes.
-    const mediaId = `${currentPlaylist.id}:catchup:${streamId}:${start.getTime()}`;
+    const mediaId = `${currentPlaylist.id}:catchup:${streamId ?? channel.id}:${start.getTime()}`;
     if (NativePlayerBridge.isAvailable()) { void NativePlayerBridge.openVod(url, title, mediaId); return; }
     setCurrentChannel({ id: mediaId, name: title, url, ...(channel.logo ? { logo: channel.logo } : {}), ...(channel.group ? { group: channel.group } : {}) });
     setWebSession(true);
     setActiveTab('player');
-  }, [currentPlaylist, catchupIndex, parentalUnlocked, parentalLockedGroups]);
+  }, [currentPlaylist, catchupIndex, xtreamCatchupDays, parentalUnlocked, parentalLockedGroups]);
   // Le lecteur Android affiche le guide : il lit cette copie au moment du lancement.
   useEffect(() => { setNativeEpg(epgData); }, [epgData]);
   const nativeZap = useMemo(
     () => (currentChannel && currentChannelIndex >= 0 ? buildNativeZap(playableChannels, currentChannel, undefined, epgData ?? null) : undefined),
     [currentChannel, currentChannelIndex, playableChannels, epgData],
   );
+
+  // Séries suivies : chaque mise à jour du guide programme leurs prochaines diffusions (Android).
+  useEffect(() => {
+    if (!currentPlaylist || !epgData || !NativePlayerBridge.isAvailable()) return;
+    let cancelled = false;
+    void applySeriesRules(currentPlaylist.id, currentPlaylist.channels, epgData).then(added => {
+      if (!cancelled && added) toast.success(`${added} enregistrement${added > 1 ? 's' : ''} de série programmé${added > 1 ? 's' : ''}.`);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentPlaylist, epgData]);
 
   // Rappels EPG : contrôle périodique et notification dans l'application
   // (les rappels sont déclenchés tant que l'app est ouverte).
@@ -839,6 +860,11 @@ export function IPTVPlayer() {
                       lockedGroups={parentalLockedGroups}
                       unlocked={parentalUnlocked}
                       {...(hasCatchup ? { catchupDays, onCatchup: playCatchup } : {})}
+                      playlistId={currentPlaylist.id}
+                      tvMode={tvMode}
+                      preview={previewEnabled}
+                      previewMode={previewMode}
+                      onGuideSettings={channel => setGuideSettings({ channel: channel ?? null })}
                     /></Suspense>
                   )}
                 </ErrorBoundary>
@@ -1035,6 +1061,14 @@ export function IPTVPlayer() {
       /></Suspense>}
 
       {/* Enregistrements (DVR) — accès contextuel ou depuis l'en-tête */}
+      {currentPlaylist && guideSettings && <EpgSettingsDialog
+        open
+        onOpenChange={open => { if (!open) setGuideSettings(null); }}
+        playlist={currentPlaylist}
+        settings={appSettings}
+        epgData={epgData}
+        initialChannel={guideSettings.channel}
+      />}
       <Dialog open={recordingsOpen} onOpenChange={setRecordingsOpen}>
         <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto border-neutral-800 bg-neutral-950 text-white">
           <DialogHeader>
