@@ -1,0 +1,43 @@
+src/components/ErrorBoundary.tsx(17,31): error TS2345: Argument of type '{ hasError: false; error: undefined; info: undefined; }' is not assignable to parameter of type 'ErrorBoundaryState | ((prevState: Readonly<ErrorBoundaryState>, props: Readonly<{ children?: ReactNode; }>) => ErrorBoundaryState | ... 1 more ... | null) | Pick<...> | null'.
+  Type '{ hasError: false; error: undefined; info: undefined; }' is not assignable to type 'Pick<ErrorBoundaryState, "error" | "info" | "hasError">' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+    Types of property 'error' are incompatible.
+      Type 'undefined' is not assignable to type 'Error'.
+src/components/IPTVPlayer.tsx(403,4): error TS2552: Cannot find name 'SettingsPanel'. Did you mean 'settingsOpen'?
+src/components/IPTVPlayer.tsx(407,28): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/components/MixedContentHelper.tsx(1,1): error TS6133: 'React' is declared but its value is never read.
+src/components/ui/calendar.tsx(42,20): error TS6133: '_props' is declared but its value is never read.
+src/components/ui/calendar.tsx(43,21): error TS6133: '_props' is declared but its value is never read.
+src/components/ui/context-menu.tsx(94,4): error TS2375: Type '{ children: (ReactNode | Element)[]; slot?: string | undefined; style?: CSSProperties | undefined; title?: string | undefined; dir?: string | undefined; ... 265 more ...; checked: CheckedState | undefined; }' is not assignable to type 'ContextMenuCheckboxItemProps' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'checked' are incompatible.
+    Type 'CheckedState | undefined' is not assignable to type 'CheckedState'.
+      Type 'undefined' is not assignable to type 'CheckedState'.
+src/components/ui/dropdown-menu.tsx(95,4): error TS2375: Type '{ children: (ReactNode | Element)[]; slot?: string | undefined; style?: CSSProperties | undefined; title?: string | undefined; dir?: string | undefined; ... 265 more ...; checked: CheckedState | undefined; }' is not assignable to type 'DropdownMenuCheckboxItemProps' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'checked' are incompatible.
+    Type 'CheckedState | undefined' is not assignable to type 'CheckedState'.
+      Type 'undefined' is not assignable to type 'CheckedState'.
+src/components/ui/menubar.tsx(122,4): error TS2375: Type '{ children: (ReactNode | Element)[]; slot?: string | undefined; style?: CSSProperties | undefined; title?: string | undefined; dir?: string | undefined; ... 265 more ...; checked: CheckedState | undefined; }' is not assignable to type 'MenubarCheckboxItemProps' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'checked' are incompatible.
+    Type 'CheckedState | undefined' is not assignable to type 'CheckedState'.
+      Type 'undefined' is not assignable to type 'CheckedState'.
+src/components/ui/sonner.tsx(10,6): error TS2375: Type '{ invert?: boolean; theme: "system" | "light" | "dark" | undefined; position?: Position; hotkey?: string[]; richColors?: boolean; expand?: boolean; duration?: number; gap?: number; visibleToasts?: number; ... 13 more ...; key?: Key | ... 1 more ... | undefined; }' is not assignable to type 'ToasterProps' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'theme' are incompatible.
+    Type '"system" | "light" | "dark" | undefined' is not assignable to type '"system" | "light" | "dark"'.
+      Type 'undefined' is not assignable to type '"system" | "light" | "dark"'.
+src/hooks/use-toast.ts(182,45): error TS2345: Argument of type '{ type: "DISMISS_TOAST"; toastId: string | undefined; }' is not assignable to parameter of type 'Action'.
+  Type '{ type: "DISMISS_TOAST"; toastId: string | undefined; }' is not assignable to type '{ type: "DISMISS_TOAST"; toastId?: string; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+    Types of property 'toastId' are incompatible.
+      Type 'string | undefined' is not assignable to type 'string'.
+        Type 'undefined' is not assignable to type 'string'.
+src/pages/Index.tsx(86,25): error TS2345: Argument of type '(e: KeyboardEvent) => void' is not assignable to parameter of type 'unknown[]'.
+src/pages/Index.tsx(90,29): error TS2322: Type '{ isOnline: NetworkStatus; }' is not assignable to type 'IntrinsicAttributes & NetworkNotificationsProps'.
+  Property 'isOnline' does not exist on type 'IntrinsicAttributes & NetworkNotificationsProps'.
+src/pages/Index.tsx(95,35): error TS2322: Type '{ onSave: (newProxyUrl: string, newPlaylistUrl: string) => void; initialProxyUrl: string; initialPlaylistUrl: string; }' is not assignable to type 'IntrinsicAttributes & ConfigurationManagerProps'.
+  Property 'onSave' does not exist on type 'IntrinsicAttributes & ConfigurationManagerProps'.
+src/pages/Index.tsx(99,15): error TS2322: Type '{ channels: Channel[]; onChannelSelect: (channel: Channel) => void; selectedChannel: Channel | null; onSearch: (searchTerm: string) => void; }' is not assignable to type 'IntrinsicAttributes & ChannelListProps'.
+  Property 'channels' does not exist on type 'IntrinsicAttributes & ChannelListProps'.
+src/pages/Index.tsx(110,15): error TS2322: Type '{ key: string; url: string; logo: string | undefined; proxyUrl: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'url' does not exist on type 'IntrinsicAttributes'.
+src/pages/Index.tsx(119,12): error TS2739: Type '{}' is missing the following properties from type 'PerformanceDashboardProps': networkStatus, videoRef, isPlaying, getBufferHealth, adaptQualityToNetwork
+src/pages/Index.tsx(131,23): error TS2322: Type '(loadedChannels: Channel[]) => void' is not assignable to type '(playlist: PlaylistInfo) => void'.
+  Types of parameters 'loadedChannels' and 'playlist' are incompatible.
+    Type 'PlaylistInfo' is missing the following properties from type 'Channel[]': length, pop, push, concat, and 29 more.

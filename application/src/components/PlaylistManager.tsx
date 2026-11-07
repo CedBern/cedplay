@@ -1,0 +1,127 @@
+import React, { useState } from 'react';
+import { PlaylistInfo } from '@/types/channel';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Trash2, PlayCircle, Pencil, RefreshCw } from 'lucide-react';
+import { deletePlaylistFromDB, savePlaylistToDB } from '@/utils/idb';
+import { StorageManager } from '@/utils/storage';
+import { toast } from 'sonner';
+
+interface PlaylistManagerProps {
+  playlists: PlaylistInfo[];
+  onSelect: (playlist: PlaylistInfo) => void;
+  onDeleted?: (id: string) => void;
+  onMutate?: (playlist: PlaylistInfo, oldName?: string) => void; // rename or other mutation
+  onRefresh?: (playlist: PlaylistInfo) => void; // re-download a URL playlist, keeping its identity
+  currentId?: string;
+}
+
+export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onSelect, onDeleted, onMutate, onRefresh, currentId }) => {
+  const [renameTarget, setRenameTarget] = useState<PlaylistInfo | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+
+  const submitRename = async () => {
+    const pl = renameTarget;
+    const newName = renameValue.trim();
+    if (!pl || !newName || newName === pl.name) { setRenameTarget(null); return; }
+    if (playlists.some(p => p.name.toLowerCase() === newName.toLowerCase() && p.id !== pl.id)) {
+      toast.error('Une liste porte déjà ce nom');
+      return;
+    }
+    setRenameBusy(true);
+    try {
+      const updated: PlaylistInfo = { ...pl, name: newName };
+      await savePlaylistToDB(updated);
+      if (StorageManager.getLastPlaylist() === pl.name) {
+        StorageManager.setLastPlaylist(newName);
+      }
+      toast.success('Liste renommée');
+      onMutate?.(updated, pl.name);
+      setRenameTarget(null);
+    } catch (e) {
+      console.error(e);
+      toast.error('Impossible de renommer la liste');
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
+  if (playlists.length === 0) {
+    return (
+      <Card className="bg-neutral-950 border-neutral-900">
+        <CardHeader>
+          <CardTitle className="text-white text-sm">Listes enregistrées</CardTitle>
+        </CardHeader>
+        <CardContent className="text-neutral-400 text-sm">Aucune liste enregistrée.</CardContent>
+      </Card>
+    );
+  }
+
+  const handleDelete = async (pl: PlaylistInfo) => {
+    try {
+      await deletePlaylistFromDB(pl.id);
+      toast.success(`Liste supprimée : ${pl.name}`);
+      onDeleted?.(pl.id);
+    } catch (e) {
+      console.error(e);
+      toast.error('Impossible de supprimer la liste');
+    }
+  };
+
+  return (
+    <Card className="bg-neutral-950 border-neutral-900">
+      <CardHeader>
+        <CardTitle className="text-white text-sm">Listes enregistrées</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {playlists.map(pl => (
+          <div key={pl.id} className="flex items-center justify-between gap-2 p-2 rounded bg-white/5 hover:bg-neutral-900 transition">
+            <div className="flex flex-col min-w-0">
+              <span className={`text-sm truncate ${pl.id === currentId ? 'text-primary font-semibold' : 'text-white'}`}>{pl.name}</span>
+              <span className="text-xs text-neutral-400">{pl.channels.length} chaînes / {pl.groups.length} groupes</span>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button size="icon" variant="ghost" className="h-9 w-9 text-primary" onClick={() => onSelect(pl)} title="Ouvrir la liste" aria-label={`Ouvrir ${pl.name}`}>
+                <PlayCircle className="h-4 w-4" />
+              </Button>
+              {pl.url && onRefresh && (
+                <Button size="icon" variant="ghost" className="h-9 w-9 text-emerald-400 hover:text-emerald-300" onClick={() => onRefresh(pl)} title="Mettre à jour la liste depuis son adresse" aria-label={`Mettre à jour ${pl.name}`}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              )}
+              <Button size="icon" variant="ghost" className="h-9 w-9 text-blue-400 hover:text-blue-300" onClick={() => { setRenameTarget(pl); setRenameValue(pl.name); }} title="Renommer la liste" aria-label={`Renommer ${pl.name}`}>
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-9 w-9 text-red-400 hover:text-red-300" onClick={() => handleDelete(pl)} title="Supprimer la liste" aria-label={`Supprimer ${pl.name}`} disabled={pl.id === currentId}>
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        ))}
+      </CardContent>
+      <Dialog open={renameTarget !== null} onOpenChange={open => { if (!open) setRenameTarget(null); }}>
+        <DialogContent className="max-w-sm bg-neutral-950 text-white border-neutral-800">
+          <DialogHeader>
+            <DialogTitle>Renommer la liste</DialogTitle>
+            <DialogDescription className="text-neutral-400">Choisis un nouveau nom pour « {renameTarget?.name} ».</DialogDescription>
+          </DialogHeader>
+          <Input
+            aria-label="Nouveau nom de la liste"
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            autoFocus
+            className="bg-neutral-900 border-neutral-800 text-white"
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void submitRename(); } }}
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" className="border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setRenameTarget(null)}>Annuler</Button>
+            <Button onClick={() => void submitRename()} disabled={renameBusy || !renameValue.trim()}>Renommer</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+};

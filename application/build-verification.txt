@@ -1,0 +1,35 @@
+npm notice run build
+npm notice run vite build
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+vite v5.4.19 building for production...
+transforming...
+(node:413256) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/C2k/Documents/ChatGPT/Lecteur%20IPTV/application/postcss.config.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to \\?\C:\Users\C2k\Documents\ChatGPT\Lecteur IPTV\application\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+Browserslist: browsers data (caniuse-lite) is 17 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+✓ 2584 modules transformed.
+rendering chunks...
+[plugin:vite:reporter] [plugin vite:reporter] 
+(!) C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/utils/idb.ts is dynamically imported by C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/IPTVPlayer.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/utils/telemetry/logger.ts but also statically imported by C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/BackupPanel.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/ChannelList.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/IPTVPlayer.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/PlaylistManager.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/SettingsPanel.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/VideoPlayer.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/utils/storage.ts, dynamic import will not move module into another chunk.
+
+[plugin:vite:reporter] [plugin vite:reporter] 
+(!) C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/utils/telemetry/logger.ts is dynamically imported by C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/IPTVPlayer.tsx but also statically imported by C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/App.tsx, C:/Users/C2k/Documents/ChatGPT/Lecteur IPTV/application/src/components/VideoPlayer.tsx, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/index.html                            1.26 kB │ gzip:   0.59 kB
+dist/assets/index-O7avWtlB.css            69.14 kB │ gzip:  12.03 kB
+dist/assets/index-BdQq_4o_.js              0.06 kB │ gzip:   0.08 kB
+dist/assets/corsProxy-B38-RxW5.js          1.19 kB │ gzip:   0.67 kB
+dist/assets/SettingsPanel-C9GbVM4i.js      2.38 kB │ gzip:   1.24 kB
+dist/assets/ChannelList-B4O65U1P.js       60.78 kB │ gzip:  18.90 kB
+dist/assets/index-Dwh0e9pG.js            451.73 kB │ gzip: 139.48 kB
+dist/assets/VideoPlayer-BYI2r1B9.js    1,041.96 kB │ gzip: 309.32 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 9.47s

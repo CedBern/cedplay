@@ -1,0 +1,280 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* « Salle obscure » — thème clair : papier chaud, accent ambre foncé
+     (lisible en texte sur fond clair). */
+  :root {
+    --background: 40 20% 96%;
+    --foreground: 240 8% 9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 8% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 8% 9%;
+
+    --primary: 35 79% 34%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 40 14% 91%;
+    --secondary-foreground: 240 8% 9%;
+
+    --muted: 40 14% 92%;
+    --muted-foreground: 30 5% 38%;
+
+    --accent: 40 12% 89%;
+    --accent-foreground: 240 8% 9%;
+
+    /* Rouge réservé au direct et à l'enregistrement. */
+    --destructive: 4 74% 49%;
+    --destructive-foreground: 0 0% 100%;
+    --live: 4 74% 49%;
+
+    --border: 40 10% 86%;
+    --input: 40 10% 84%;
+    --ring: 35 79% 34%;
+
+    --radius: 1rem;
+
+    --sidebar-background: 40 20% 97%;
+    --sidebar-foreground: 240 8% 9%;
+    --sidebar-primary: 35 79% 34%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 40 14% 91%;
+    --sidebar-accent-foreground: 240 8% 9%;
+    --sidebar-border: 40 10% 86%;
+    --sidebar-ring: 35 79% 34%;
+
+    color-scheme: light;
+  }
+
+  /* « Salle obscure » — thème sombre : couches de graphite, un seul accent
+     ambre, aucun flou ni ombre (léger pour la WebView Android). */
+  .dark {
+    --background: 240 8% 5%;      /* #0B0B0D Fond   */
+    --foreground: 40 20% 94%;     /* #F3F1ED Texte  */
+
+    --card: 240 7% 8%;            /* #141417 Carte  */
+    --card-foreground: 40 20% 94%;
+
+    --popover: 240 8% 10%;
+    --popover-foreground: 40 20% 94%;
+
+    --primary: 37 84% 64%;        /* #F0B455 Ambre  */
+    --primary-foreground: 36 63% 6%;
+
+    --secondary: 240 8% 12%;      /* #1C1C21 Élevé  */
+    --secondary-foreground: 40 20% 94%;
+
+    --muted: 240 8% 12%;
+    --muted-foreground: 38 6% 63%; /* #A7A39C Secondaire */
+
+    --accent: 240 8% 16%;         /* #26262D Piste  */
+    --accent-foreground: 40 20% 94%;
+
+    --destructive: 6 100% 65%;    /* #FF5A4A Direct */
+    --destructive-foreground: 0 0% 100%;
+    --live: 6 100% 65%;
+
+    --border: 240 6% 14%;
+    --input: 240 6% 18%;
+    --ring: 37 84% 64%;
+
+    --radius: 1rem;
+
+    --sidebar-background: 240 8% 6%;
+    --sidebar-foreground: 40 20% 90%;
+    --sidebar-primary: 37 84% 64%;
+    --sidebar-primary-foreground: 36 63% 6%;
+    --sidebar-accent: 240 8% 12%;
+    --sidebar-accent-foreground: 40 20% 94%;
+    --sidebar-border: 240 6% 14%;
+    --sidebar-ring: 37 84% 64%;
+
+    color-scheme: dark;
+  }
+}
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  /* Chiffres alignés pour horaires, numéros de chaîne, durées. */
+  .font-mono, time { font-variant-numeric: tabular-nums; }
+}
+
+/* Performance mobile : le flou d'arrière-plan est réservé à quelques surfaces
+   fixes et petites (.glass : barre du bas, en-tête, mini-lecteur). */
+*:not(.glass), *::before, *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.glass {
+  background-color: hsl(var(--background) / 0.6);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass { background-color: hsl(var(--background) / 0.94); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass { background-color: hsl(var(--background) / 0.97); }
+}
+
+/* ── Mouvement : courbes douces, jamais imposées si le système demande moins d'animations. ── */
+:root { --ease-out-soft: cubic-bezier(0.22, 0.8, 0.24, 1); }
+
+/* Entrée d'écran : fondu et léger glissement vers le haut. */
+@keyframes screen-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+.screen-enter { animation: screen-enter 420ms var(--ease-out-soft) both; }
+
+/* Appui : la carte s'enfonce légèrement. */
+.press { transition: transform 220ms var(--ease-out-soft), background-color 200ms, color 300ms, opacity 200ms; }
+.press:active { transform: scale(0.97); }
+
+/* Rangées horizontales et bandeau : défilement aimanté sans barre visible. */
+.rail, .hero-scroller { scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+.rail::-webkit-scrollbar, .hero-scroller::-webkit-scrollbar { display: none; }
+
+/* Bandeau : l'image active avance très lentement, le texte arrive en fondu. */
+.hero-image { transform: scale(1.08); transition: transform 9s linear, opacity 700ms var(--ease-out-soft); }
+.hero-image.is-active { transform: scale(1); }
+.hero-copy { opacity: 0; transform: translateY(14px); transition: opacity 600ms var(--ease-out-soft) 150ms, transform 700ms var(--ease-out-soft) 150ms; }
+.hero-copy.is-active { opacity: 1; transform: none; }
+
+/* Vignette d'affiche : léger zoom au survol (souris), ombre de lumière ambrée au focus. */
+.poster img { transition: transform 600ms var(--ease-out-soft); }
+@media (hover: hover) { .poster:hover img { transform: scale(1.04); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-enter, .hero-copy, .hero-image, .press, .poster img { animation: none !important; transition: none !important; transform: none !important; opacity: 1 !important; }
+}
+
+html, body, #root {
+  background: hsl(var(--background));
+}
+
+/* La télécommande déplace un vrai focus, visible même sur les boutons sans style dédié. */
+.remote-navigation :focus {
+  outline: 3px solid hsl(var(--primary)) !important;
+  outline-offset: -3px !important;
+  scroll-margin: 12px;
+}
+/* Un seul repère à la télécommande : le focus réel, pas l'ancien index clavier resté à zéro. */
+.remote-navigation .legacy-channel-selection:not(:focus-within) { background-color: transparent; box-shadow: none; }
+.remote-navigation [data-channel-id]:focus-within { background-color: hsl(var(--accent) / 0.6); border-radius: 1rem; }
+/* Repli pour les WebView TV qui ne connaissent pas encore l'unité dvh. */
+.live-channel-panel { height: calc(100vh - 200px); height: calc(100dvh - 200px); min-height: 560px; }
+/* Ne jamais réduire le défilement à un fragment de carte, même avec les options ouvertes. */
+.live-channel-list-panel { height: auto; min-height: 0; }
+.live-channel-list-panel .channel-browser { height: auto; }
+.live-channel-list-panel .channel-groups { flex: none; }
+.live-channel-list-panel .channel-results { flex: none; height: 300px; height: clamp(240px, calc(100vh - 480px), 720px); }
+
+/* Les TV utilisent souvent 960×540 ou 1280×600 pixels CSS, indépendamment de la dalle 4K.
+   Recherche et qualité partagent une ligne ; la liste garde au moins trois cartes. */
+@media (min-width: 800px) and (max-height: 800px) {
+  .app-shell { padding: 8px 16px; }
+  .app-shell > header { padding-top: 4px; padding-bottom: 4px; margin-bottom: 6px; }
+  .app-shell > header button { min-height: 36px; height: 36px; }
+  [aria-label="Rubriques"] [role="tab"] { min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
+  .app-shell > [dir] > [role="tabpanel"] { margin-top: 8px; }
+  .live-channel-panel { height: calc(100vh - 128px); height: calc(100dvh - 128px); min-height: 400px; }
+  .live-view-toolbar { padding: 6px 12px; }
+  .live-view-toolbar button { min-height: 34px; height: 34px; }
+  .live-view-content { padding: 0 12px 12px; }
+  .live-channel-list-panel { height: auto; min-height: 0; }
+  .live-channel-panel .channel-browser { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto auto; gap: 6px 12px; }
+  .live-channel-panel .channel-count, .live-channel-panel .channel-groups { grid-column: 1 / -1; }
+  .live-channel-panel .channel-search input { height: 36px; }
+  .live-channel-panel .channel-filters { justify-content: center; max-width: 450px; }
+  .live-channel-panel .channel-filters > div:first-child { flex-wrap: nowrap; }
+  .live-channel-panel .channel-group-strip { scrollbar-width: none; }
+  .live-channel-panel .channel-group-strip::-webkit-scrollbar { display: none; }
+  .live-channel-panel .channel-results { margin-top: 8px; }
+  .live-channel-list-panel .channel-results { height: 240px; height: max(240px, calc(100vh - 300px)); }
+  .live-channel-panel .channel-row-content { padding-top: 8px; padding-bottom: 8px; }
+  .live-channel-panel .channel-empty-program { display: none; }
+}
+
+/* ── Thème clair : certains composants codent encore des couleurs sombres en
+      dur (bg-neutral-* / text-white). On les traduit en mode clair uniquement.
+      Les surfaces marquées `dark-surface` (lecteur vidéo, axe du guide TV)
+      restent sombres dans les deux thèmes. ───────────────────────────────── */
+
+html:not(.dark) .bg-neutral-950 { background-color: hsl(0 0% 100%) !important; }
+html:not(.dark) .bg-neutral-900 { background-color: hsl(40 12% 96%) !important; }
+html:not(.dark) .bg-neutral-800 { background-color: hsl(40 12% 92%) !important; }
+html:not(.dark) .border-neutral-900 { border-color: hsl(40 12% 87%) !important; }
+html:not(.dark) .border-neutral-800 { border-color: hsl(40 12% 82%) !important; }
+html:not(.dark) .border-neutral-700 { border-color: hsl(40 12% 75%) !important; }
+
+/* Texte clair sur fond sombre codé en dur → texte sombre en mode clair,
+   sauf dans les surfaces qui restent sombres (dark-surface). */
+html:not(.dark) .text-white:not(.dark-surface, .dark-surface *) { color: hsl(240 8% 10%) !important; }
+html:not(.dark) .text-neutral-100:not(.dark-surface, .dark-surface *) { color: hsl(240 8% 18%) !important; }
+html:not(.dark) .text-neutral-200:not(.dark-surface, .dark-surface *) { color: hsl(30 5% 25%) !important; }
+html:not(.dark) .text-neutral-300:not(.dark-surface, .dark-surface *) { color: hsl(30 5% 32%) !important; }
+html:not(.dark) .text-neutral-400:not(.dark-surface, .dark-surface *) { color: hsl(30 5% 42%) !important; }
+html:not(.dark) .text-neutral-500:not(.dark-surface, .dark-surface *) { color: hsl(30 5% 50%) !important; }
+
+/* Surfaces « blanc sur noir » des cartes et panneaux : texte sombre en mode clair. */
+html:not(.dark) :is(.bg-neutral-950, .bg-neutral-900, .bg-neutral-800):is(.text-white, .text-neutral-100, .text-neutral-300, .text-neutral-400, .text-neutral-500) {
+  color: hsl(240 8% 10%) !important;
+}
+html:not(.dark) :is(.bg-neutral-950, .bg-neutral-900, .bg-neutral-800) :is(.text-white, .text-neutral-100, .text-neutral-200, .text-neutral-300, .text-neutral-400, .text-neutral-500) {
+  color: hsl(240 8% 10%) !important;
+}
+html:not(.dark) :is(.bg-neutral-950, .bg-neutral-900, .bg-neutral-800) .placeholder\:text-neutral-500::placeholder {
+  color: hsl(30 5% 46%) !important;
+}
+
+/* Surfaces translucides (hover, cartes) : gris clair en mode clair. */
+html:not(.dark) .bg-white\/5 { background-color: hsl(40 12% 95%) !important; }
+html:not(.dark) .bg-white\/10 { background-color: hsl(40 12% 90%) !important; }
+html:not(.dark) .hover\:bg-white\/5:hover { background-color: hsl(40 12% 91%) !important; }
+html:not(.dark) .hover\:bg-white\/10:hover { background-color: hsl(40 12% 86%) !important; }
+html:not(.dark) .border-white\/5 { border-color: hsl(40 12% 88%) !important; }
+html:not(.dark) .border-white\/20 { border-color: hsl(40 12% 75%) !important; }
+
+/* Avertissements ambrés : lisibles aussi sur fond clair. */
+html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .text-amber-400):not(.dark-surface, .dark-surface *) { color: hsl(32 80% 30%) !important; }
+
+/* ── Écrans télécommande (Direct TV, catalogue VOD) : catégories | liste/grille | aperçu/fiche ── */
+.tv-live, .tv-vod { grid-template-columns: minmax(180px, 22%) minmax(0, 1fr) minmax(240px, 30%); }
+.tv-live .tv-scroll, .tv-vod .tv-scroll { scrollbar-width: none; overscroll-behavior: contain; }
+.tv-live .tv-scroll::-webkit-scrollbar, .tv-vod .tv-scroll::-webkit-scrollbar { display: none; }
+.tv-live .tv-col, .tv-vod .tv-col { transition: border-color 200ms; }
+.tv-live .tv-col.is-active, .tv-vod .tv-col.is-active { border-color: hsl(var(--primary) / 0.35); }
+.tv-live [data-tv-item], .tv-vod [data-tv-item] { transition: background-color 120ms, color 120ms, transform 120ms; outline: none !important; }
+.tv-live .tv-cat.is-selected, .tv-vod .tv-cat.is-selected { background-color: hsl(var(--secondary)); box-shadow: inset 3px 0 0 hsl(var(--primary)); color: hsl(var(--foreground)); }
+.tv-live .tv-row.is-playing { color: hsl(var(--primary)); }
+/* Affiche surlignée sans focus (position restaurée, colonne voisine) : liseré discret. */
+.tv-vod .tv-row.is-selected { border-color: hsl(var(--primary) / 0.65); }
+.tv-live .tv-action, .tv-vod .tv-action { background-color: hsl(var(--secondary) / 0.6); }
+/* Un seul repère fort, lisible depuis le canapé : la cible qui a le focus. */
+.tv-live [data-tv-item]:focus, .tv-live [data-tv-item]:focus-visible,
+.tv-vod [data-tv-item]:focus, .tv-vod [data-tv-item]:focus-visible {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  box-shadow: 0 0 0 2px hsl(var(--primary)), 0 6px 20px -6px hsl(var(--primary) / 0.6) !important;
+}
+.tv-live .tv-row:focus, .tv-vod .tv-row:focus { transform: scale(1.015); z-index: 1; }
+/* Affiche : grossir un peu plus pour rester lisible dans la grille. */
+.tv-vod .tv-row:focus { transform: scale(1.04); }
+/* Vignette sans logo : rester lisible sur le fond ambré du focus. */
+.tv-live [data-tv-item]:focus .bg-muted, .tv-vod [data-tv-item]:focus .bg-muted { background-color: hsl(var(--primary-foreground) / 0.14); }
+/* Souris : simple survol, sans voler le repère du focus. */
+@media (hover: hover) { .tv-live [data-tv-item]:hover:not(:focus), .tv-vod [data-tv-item]:hover:not(:focus) { background-color: hsl(var(--accent) / 0.7); } }
+/* La page ne défile pas sous l'écran TV : tout tient dans la hauteur de l'écran. */
+html.tv-mode:has([data-tv-live], [data-tv-vod]) body { overflow: hidden; }

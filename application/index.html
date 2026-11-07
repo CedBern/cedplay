@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#0B0B0C" />
+  <meta name="application-name" content="CedPlay" />
+  <title>CedPlay — Direct, films et séries</title>
+  <meta name="description" content="CedPlay : tes chaînes en direct, films et séries, mosaïque, guide des programmes et enregistrements." />
+
+  <meta property="og:title" content="CedPlay — Direct, films et séries" />
+  <meta property="og:description" content="Tes chaînes en direct, films et séries, mosaïque et guide des programmes." />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="CedPlay" />
+  <meta property="og:image" content="/cedplay-social.png" />
+  <meta property="og:image:alt" content="CedPlay — Direct, films et séries" />
+
+  <script>
+    // Applique le thème avant le premier rendu (évite le flash clair/sombre).
+    try {
+      var s = JSON.parse(localStorage.getItem('iptv_settings') || '{}');
+      if (s.theme !== 'light') document.documentElement.classList.add('dark');
+    } catch (e) { document.documentElement.classList.add('dark'); }
+  </script>
+
+
+  <!-- Content Security Policy - Disabled for development -->
+  <!-- <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https: http: blob:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; font-src 'self' data: https:; connect-src 'self' https: http: ws: wss: blob: data: *; media-src 'self' blob: https: http: data: *; object-src 'none'; base-uri 'self';" /> -->
+
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

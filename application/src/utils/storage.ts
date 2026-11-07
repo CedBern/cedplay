@@ -1,0 +1,406 @@
+import { getSettingsFromDB, saveSettingsToDB, PersistedSettings, pushSettingsChangeLogEntry, updateSettingsMigrationStats, type SettingsChangeLogEntry } from '@/utils/idb';
+import { z } from 'zod';
+
+const STORAGE_KEYS = {
+  FAVORITES: 'iptv_favorites',
+  PLAYLISTS: 'iptv_playlists',
+  SETTINGS: 'iptv_settings',
+  LAST_PLAYLIST: 'iptv_last_playlist'
+};
+
+export interface AppSettings {
+  volume: number;
+  autoplay: boolean;
+  theme: 'light' | 'dark';
+  keyboardNavigation: boolean;
+  compactModeDefault?: boolean;
+  virtualizationEnabledDefault?: boolean;
+  telemetryPersistence?: boolean; // persist telemetry events across sessions
+  muteOnStart?: boolean; // start playback muted initially
+  playbackRate?: number; // preferred playback speed
+  autoLoadLastPlaylist?: boolean; // auto-load last used playlist on startup
+  autoReconnect?: boolean; // resume the stream automatically after a network outage
+  epgUrl?: string; // custom XMLTV URL for lists without a linked Xtream account
+  tmdbApiKey?: string; // free TMDB API key (enriched VOD info, reviews, recommendations)
+  subtitlesEnabled?: boolean; // active la recherche et l'affichage des sous-titres
+  subtitleAutoTranslate?: boolean; // traduit automatiquement les sous-titres vers le français si absent
+  subtitlePreferredLang?: 'fr' | 'en' | 'es'; // langue préférée des sous-titres
+  deeplApiKey?: string; // clé API DeepL optionnelle pour traduction haute fidélité
+  openSubtitlesApiKey?: string; // clé API OpenSubtitles v3 optionnelle
+  subdlApiKey?: string; // clé API SubDL optionnelle
+  parentalControlEnabled?: boolean; // verrouille les groupes adultes derrière un code
+  parentalPin?: string; // code PIN du contrôle parental (4 à 8 chiffres)
+  interfaceMode?: 'auto' | 'tv' | 'mobile'; // interface télécommande (TV) ou tactile ; auto = détectée
+  tvPreview?: boolean; // ancien réglage aperçu (on/off) ; conservé pour la migration
+  tvPreviewMode?: 'auto' | 'manual' | 'off'; // aperçu vidéo : au survol, via le bouton « Aperçu », ou désactivé
+  proxyUrl?: string; // adresse du relais CORS pour les builds web hébergés (vide = relais local de développement)
+  __version?: number; // internal version for migrations
+}
+
+// Zod schema for robust validation (keeps optional keys optional)
+const appSettingsSchema = z.object({
+  volume: z.number().min(0).max(1).default(0.8),
+  autoplay: z.boolean().default(true),
+  theme: z.enum(['light','dark']).default('dark'),
+  keyboardNavigation: z.boolean().default(true),
+  compactModeDefault: z.boolean().optional(),
+  virtualizationEnabledDefault: z.boolean().optional(),
+  telemetryPersistence: z.boolean().optional(),
+  muteOnStart: z.boolean().optional(),
+  playbackRate: z.number().min(0.5).max(2).optional(),
+  autoLoadLastPlaylist: z.boolean().optional(),
+  autoReconnect: z.boolean().optional(),
+  epgUrl: z.string().max(500).optional(),
+  tmdbApiKey: z.string().max(200).optional(),
+  subtitlesEnabled: z.boolean().optional(),
+  subtitleAutoTranslate: z.boolean().optional(),
+  subtitlePreferredLang: z.enum(['fr', 'en', 'es']).optional(),
+  deeplApiKey: z.string().max(200).optional(),
+  openSubtitlesApiKey: z.string().max(200).optional(),
+  subdlApiKey: z.string().max(200).optional(),
+  parentalControlEnabled: z.boolean().optional(),
+  parentalPin: z.string().max(20).optional(),
+  interfaceMode: z.enum(['auto', 'tv', 'mobile']).optional(),
+  tvPreview: z.boolean().optional(),
+  tvPreviewMode: z.enum(['auto', 'manual', 'off']).optional(),
+  proxyUrl: z.string().max(300).optional(),
+  __version: z.number().optional()
+});
+
+// (Removed unused AppSettingsSchema alias after switching to safeParse)
+
+export class StorageManager {
+  // In-memory cache to avoid repeated IndexedDB reads within a session
+  private static _settingsCache: AppSettings | undefined;
+  private static _loadingPromise: Promise<AppSettings> | undefined;
+  private static _cacheHits = 0;
+  private static _cacheLoads = 0; // actual DB/legacy loads
+  private static _lastLoadTs: number | undefined;
+
+  /** Test / maintenance helper to clear in-memory cache */
+  static __resetCacheForTests(): void {
+    this._settingsCache = undefined;
+    this._loadingPromise = undefined;
+    this._cacheHits = 0;
+    this._cacheLoads = 0;
+    this._lastLoadTs = undefined;
+  }
+  /** Lightweight cache metrics */
+  static getSettingsCacheStats(): { hits: number; loads: number; lastLoadTs?: number } {
+  const base = { hits: this._cacheHits, loads: this._cacheLoads } as { hits: number; loads: number; lastLoadTs?: number };
+  if (this._lastLoadTs !== undefined) base.lastLoadTs = this._lastLoadTs;
+  return base;
+  }
+  /**
+   * LEGACY: Favorites moved to IndexedDB (idb.ts). These methods remain only for one-time migration.
+   * Use getFavoritesFromDB/saveFavoritesToDB instead elsewhere.
+   */
+  static getFavorites(): string[] {
+    const stored = localStorage.getItem(STORAGE_KEYS.FAVORITES);
+    return stored ? JSON.parse(stored) : [];
+  }
+
+  static setFavorites(channelIds: string[]): void {
+    localStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(channelIds));
+  }
+
+  static toggleFavorite(channelId: string): void {
+    const favorites = this.getFavorites();
+    const index = favorites.indexOf(channelId);
+    
+    if (index > -1) {
+      favorites.splice(index, 1);
+    } else {
+      favorites.push(channelId);
+    }
+    
+    this.setFavorites(favorites);
+  }
+
+  static isFavorite(channelId: string): boolean {
+    return this.getFavorites().includes(channelId);
+  }
+
+
+  static defaultSettings(): AppSettings {
+    return {
+      volume: 0.8,
+  autoplay: true,
+      theme: 'dark',
+      keyboardNavigation: true,
+      compactModeDefault: false,
+      virtualizationEnabledDefault: true,
+      telemetryPersistence: true,
+  muteOnStart: true,
+  playbackRate: 1,
+  autoLoadLastPlaylist: true,
+  autoReconnect: true,
+  epgUrl: '',
+  tmdbApiKey: '',
+  subtitlesEnabled: true,
+  subtitleAutoTranslate: true,
+  subtitlePreferredLang: 'fr',
+  deeplApiKey: '',
+  openSubtitlesApiKey: '',
+  subdlApiKey: '',
+  parentalControlEnabled: false,
+  parentalPin: '',
+  proxyUrl: '',
+  tvPreviewMode: 'auto',
+  __version: 9
+    };
+  }
+
+  // Legacy synchronous getter (used at startup). It will be replaced asynchronously by loadSettingsAsync usage.
+  static getSettings(): AppSettings {
+    try {
+      const legacy = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      return legacy ? { ...this.defaultSettings(), ...JSON.parse(legacy) } : this.defaultSettings();
+    } catch {
+      return this.defaultSettings();
+    }
+  }
+
+  /** Réglages en mémoire (chargés de façon asynchrone), sinon repli synchrone. */
+  static getCachedSettings(): AppSettings {
+    return this._settingsCache ?? this.getSettings();
+  }
+
+  static async loadSettingsAsync(force = false): Promise<AppSettings> {
+  if (!force && this._settingsCache) { this._cacheHits += 1; return this._settingsCache; }
+    if (!force && this._loadingPromise) return this._loadingPromise;
+    this._loadingPromise = (async () => {
+    if (this._settingsCache && !force) { // should have returned earlier; defensive
+      this._cacheHits += 1; return this._settingsCache;
+    }
+    const dbSettings = await getSettingsFromDB();
+    if (dbSettings) {
+      // Repair / validate persisted settings (older versions may have invalid fields)
+      const repaired = this.validateSettings(dbSettings as AppSettings);
+      // If repaired differs (shallow compare) persist migration for future fast loads
+      const differs = (() => {
+        const keys = new Set<keyof AppSettings>([...Object.keys(repaired), ...Object.keys(dbSettings)] as (keyof AppSettings)[]);
+        for (const k of keys) {
+          if ((dbSettings as Partial<AppSettings>)[k] !== repaired[k]) return true;
+        }
+        return false;
+      })();
+      if (differs) {
+        try {
+          await saveSettingsToDB(repaired as PersistedSettings);
+          await updateSettingsMigrationStats(true);
+          const migrationEntry: SettingsChangeLogEntry = { ts: Date.now(), changes: { migration: true }, reason: 'migration' };
+          const fromV = dbSettings.__version;
+          if (fromV !== undefined) migrationEntry.fromVersion = fromV;
+          if (repaired.__version !== undefined) migrationEntry.toVersion = repaired.__version;
+          await pushSettingsChangeLogEntry(migrationEntry);
+        } catch { /* ignore persistence migration errors */ }
+      }
+  this._settingsCache = Object.freeze({ ...repaired });
+  this._cacheLoads += 1;
+  this._lastLoadTs = Date.now();
+  return this._settingsCache;
+    }
+    // migrate legacy if exists
+    const legacy = this.getSettings();
+    await saveSettingsToDB(legacy);
+  this._settingsCache = Object.freeze({ ...legacy });
+  this._cacheLoads += 1;
+  this._lastLoadTs = Date.now();
+  return this._settingsCache;
+    })();
+    try {
+      const result = await this._loadingPromise;
+      return result;
+    } finally {
+      this._loadingPromise = undefined;
+    }
+  }
+
+  static async saveSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+  const current = this._settingsCache ? (this._cacheHits += 1, this._settingsCache) : await this.loadSettingsAsync();
+    const merged: AppSettings = this.validateSettings(this.mergePartial(current, settings));
+    // Compute diff for changelog (only keys provided that changed)
+    const diff: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(settings) as [keyof AppSettings, unknown][]) {
+      if (v !== undefined && current[k] !== merged[k]) diff[k] = merged[k];
+    }
+    // If nothing actually changed, avoid unnecessary write + changelog entry
+    if (Object.keys(diff).length === 0) {
+      return current; // no-op
+    }
+    await saveSettingsToDB(merged as PersistedSettings);
+    if (Object.keys(diff).length) {
+      try {
+  const entry: SettingsChangeLogEntry = { ts: Date.now(), changes: diff, reason: 'user' };
+        if (current.__version !== undefined) entry.fromVersion = current.__version;
+        if (merged.__version !== undefined) entry.toVersion = merged.__version;
+        await pushSettingsChangeLogEntry(entry);
+      } catch {/* ignore */}
+    }
+  this._settingsCache = Object.freeze({ ...merged });
+  return this._settingsCache;
+  }
+
+  /** Reset all settings back to defaults (logs reason 'reset'). */
+  static async resetSettings(): Promise<AppSettings> {
+    const defaults = this.defaultSettings();
+    await saveSettingsToDB(defaults as PersistedSettings);
+    try {
+      const entry: SettingsChangeLogEntry = { ts: Date.now(), changes: { reset: true }, reason: 'reset', ...(defaults.__version !== undefined ? { toVersion: defaults.__version } : {}) };
+      await pushSettingsChangeLogEntry(entry);
+    } catch { /* ignore */ }
+    this._settingsCache = Object.freeze({ ...defaults });
+    return this._settingsCache;
+  }
+
+  static getLastPlaylist(): string | null {
+    return localStorage.getItem(STORAGE_KEYS.LAST_PLAYLIST);
+  }
+
+  static setLastPlaylist(playlistName: string): void {
+    localStorage.setItem(STORAGE_KEYS.LAST_PLAYLIST, playlistName);
+  }
+
+  /**
+   * Optional cleanup to remove legacy localStorage keys after successful migration.
+   * Safe to call; ignores missing keys.
+   */
+  static purgeLegacyKeys(): void {
+    try {
+      Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+    } catch {/* ignore */}
+  }
+
+  /** Basic sanitization/validation for settings prior to persistence */
+  private static validateSettings(s: AppSettings): AppSettings {
+    const parsed = appSettingsSchema.safeParse(s);
+    if (parsed.success) {
+      const p = parsed.data;
+      const base: AppSettings = {
+        volume: p.volume,
+        autoplay: p.autoplay,
+        theme: p.theme,
+        keyboardNavigation: p.keyboardNavigation,
+        ...(p.compactModeDefault !== undefined ? { compactModeDefault: p.compactModeDefault } : {}),
+        ...(p.virtualizationEnabledDefault !== undefined ? { virtualizationEnabledDefault: p.virtualizationEnabledDefault } : {}),
+        ...(p.telemetryPersistence !== undefined ? { telemetryPersistence: p.telemetryPersistence } : {}),
+  ...(p.muteOnStart !== undefined ? { muteOnStart: p.muteOnStart } : {}),
+  ...(p.playbackRate !== undefined ? { playbackRate: p.playbackRate } : {}),
+  ...(p.autoLoadLastPlaylist !== undefined ? { autoLoadLastPlaylist: p.autoLoadLastPlaylist } : {}),
+  ...(p.autoReconnect !== undefined ? { autoReconnect: p.autoReconnect } : {}),
+  ...(p.epgUrl !== undefined ? { epgUrl: p.epgUrl } : {}),
+  ...(p.tmdbApiKey !== undefined ? { tmdbApiKey: p.tmdbApiKey } : {}),
+  ...(p.subtitlesEnabled !== undefined ? { subtitlesEnabled: p.subtitlesEnabled } : {}),
+  ...(p.subtitleAutoTranslate !== undefined ? { subtitleAutoTranslate: p.subtitleAutoTranslate } : {}),
+  ...(p.subtitlePreferredLang !== undefined ? { subtitlePreferredLang: p.subtitlePreferredLang } : {}),
+  ...(p.deeplApiKey !== undefined ? { deeplApiKey: p.deeplApiKey } : {}),
+  ...(p.openSubtitlesApiKey !== undefined ? { openSubtitlesApiKey: p.openSubtitlesApiKey } : {}),
+  ...(p.subdlApiKey !== undefined ? { subdlApiKey: p.subdlApiKey } : {}),
+        ...(p.parentalControlEnabled !== undefined ? { parentalControlEnabled: p.parentalControlEnabled } : {}),
+        ...(p.parentalPin !== undefined ? { parentalPin: p.parentalPin } : {}),
+        ...(p.proxyUrl !== undefined ? { proxyUrl: p.proxyUrl } : {}),
+        ...(p.tvPreview !== undefined ? { tvPreview: p.tvPreview } : {}),
+        ...(p.tvPreviewMode !== undefined ? { tvPreviewMode: p.tvPreviewMode } : {}),
+        ...(p.__version !== undefined ? { __version: p.__version } : {})
+      };
+      return this.migrateIfNeeded(base);
+    }
+    // Fallback: reconstruct a safe, complete object merging sanitized existing values with defaults
+    const base = this.defaultSettings();
+    const coerceBool = (v: unknown, def: boolean) => (typeof v === 'boolean' ? v : def);
+    const safe: AppSettings = {
+      volume: typeof s.volume === 'number' && !Number.isNaN(s.volume) ? Math.min(1, Math.max(0, s.volume)) : base.volume,
+      autoplay: coerceBool(s.autoplay, base.autoplay),
+      theme: s.theme === 'light' ? 'light' : 'dark',
+      keyboardNavigation: coerceBool(s.keyboardNavigation, base.keyboardNavigation),
+      compactModeDefault: coerceBool(s.compactModeDefault, base.compactModeDefault as boolean),
+      virtualizationEnabledDefault: coerceBool(s.virtualizationEnabledDefault, base.virtualizationEnabledDefault as boolean),
+      telemetryPersistence: coerceBool(s.telemetryPersistence, base.telemetryPersistence as boolean),
+      muteOnStart: coerceBool(s.muteOnStart, base.muteOnStart as boolean),
+      playbackRate: typeof s.playbackRate === 'number' && !Number.isNaN(s.playbackRate) ? Math.min(2, Math.max(0.5, s.playbackRate)) : (base.playbackRate as number),
+      autoLoadLastPlaylist: coerceBool(s.autoLoadLastPlaylist, base.autoLoadLastPlaylist as boolean),
+      autoReconnect: coerceBool(s.autoReconnect, base.autoReconnect as boolean),
+      epgUrl: typeof s.epgUrl === 'string' ? String(s.epgUrl).slice(0, 500) : (base.epgUrl as string),
+      tmdbApiKey: typeof s.tmdbApiKey === 'string' ? String(s.tmdbApiKey).slice(0, 200) : (base.tmdbApiKey as string),
+      subtitlesEnabled: coerceBool(s.subtitlesEnabled, base.subtitlesEnabled as boolean),
+      subtitleAutoTranslate: coerceBool(s.subtitleAutoTranslate, base.subtitleAutoTranslate as boolean),
+      subtitlePreferredLang: s.subtitlePreferredLang === 'en' || s.subtitlePreferredLang === 'es' ? s.subtitlePreferredLang : 'fr',
+      deeplApiKey: typeof s.deeplApiKey === 'string' ? String(s.deeplApiKey).slice(0, 200) : '',
+      openSubtitlesApiKey: typeof s.openSubtitlesApiKey === 'string' ? String(s.openSubtitlesApiKey).slice(0, 200) : '',
+      subdlApiKey: typeof s.subdlApiKey === 'string' ? String(s.subdlApiKey).slice(0, 200) : '',
+      parentalControlEnabled: coerceBool(s.parentalControlEnabled, false),
+      parentalPin: typeof s.parentalPin === 'string' ? String(s.parentalPin).slice(0, 20) : '',
+      proxyUrl: typeof s.proxyUrl === 'string' ? String(s.proxyUrl).slice(0, 300) : '',
+      tvPreview: coerceBool(s.tvPreview, base.tvPreview as boolean),
+      tvPreviewMode: s.tvPreviewMode === 'manual' || s.tvPreviewMode === 'off' || s.tvPreviewMode === 'auto' ? s.tvPreviewMode : 'auto',
+      __version: 9
+    };
+    return this.migrateIfNeeded(safe);
+  }
+
+  // Future migration hook (currently only ensures version stamp)
+  private static migrateIfNeeded(s: AppSettings): AppSettings {
+    // v1 -> v2
+    if (!s.__version || s.__version < 2) {
+      if (s.telemetryPersistence === undefined) s.telemetryPersistence = true;
+      s.__version = 2;
+    }
+    // v2 -> v3 (new fields + new defaults)
+    if (s.__version < 3) {
+      if (s.muteOnStart === undefined) s.muteOnStart = true;
+      if (s.playbackRate === undefined) s.playbackRate = 1;
+      if (s.autoLoadLastPlaylist === undefined) s.autoLoadLastPlaylist = true;
+      if (s.autoplay === undefined) s.autoplay = true; // don't override user's existing false
+      s.__version = 3;
+    }
+    // v3 -> v4 (reprise réseau automatique + adresse XMLTV personnalisée)
+    if (s.__version < 4) {
+      if (s.autoReconnect === undefined) s.autoReconnect = true;
+      if (s.epgUrl === undefined) s.epgUrl = '';
+      s.__version = 4;
+    }
+    // v4 -> v5 (clé API TMDB pour les fiches enrichies)
+    if (s.__version < 5) {
+      if (s.tmdbApiKey === undefined) s.tmdbApiKey = '';
+      s.__version = 5;
+    }
+    // v5 -> v6 (recherche et traduction de sous-titres FR/EN/ES-MX)
+    if (s.__version < 6) {
+      if (s.subtitlesEnabled === undefined) s.subtitlesEnabled = true;
+      if (s.subtitleAutoTranslate === undefined) s.subtitleAutoTranslate = true;
+      if (s.subtitlePreferredLang === undefined) s.subtitlePreferredLang = 'fr';
+      if (s.deeplApiKey === undefined) s.deeplApiKey = '';
+      if (s.openSubtitlesApiKey === undefined) s.openSubtitlesApiKey = '';
+      if (s.subdlApiKey === undefined) s.subdlApiKey = '';
+      s.__version = 6;
+    }
+    // v6 -> v7 (contrôle parental par code PIN)
+    if (s.__version < 7) {
+      if (s.parentalControlEnabled === undefined) s.parentalControlEnabled = false;
+      if (s.parentalPin === undefined) s.parentalPin = '';
+      s.__version = 7;
+    }
+    // v7 -> v8 (relais CORS pour builds hébergés)
+    if (s.__version < 8) {
+      if (s.proxyUrl === undefined) s.proxyUrl = '';
+      s.__version = 8;
+    }
+    // v8 -> v9 (mode d'aperçu vidéo : automatique, manuel ou désactivé ; remplace le booléen tvPreview)
+    if (s.__version < 9) {
+      if (s.tvPreviewMode === undefined) s.tvPreviewMode = s.tvPreview === false ? 'off' : 'auto';
+      s.__version = 9;
+    }
+    if (s.playbackRate !== undefined) s.playbackRate = Math.min(2, Math.max(0.5, s.playbackRate));
+    return s;
+  }
+
+  /** Merge partial updates while ignoring undefined (so user can send sparse objects safely) */
+  private static mergePartial(base: AppSettings, partial: Partial<AppSettings>): AppSettings {
+    const result: AppSettings = { ...base };
+    for (const [k, v] of Object.entries(partial) as [keyof AppSettings, unknown][]) {
+      if (v !== undefined) Object.assign(result, { [k]: v });
+    }
+    return result;
+  }
+}

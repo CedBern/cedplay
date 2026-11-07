@@ -1,0 +1,18 @@
+INSTRUCTIONS POUR CRÉER VOTRE FICHIER M3U
+
+Si vous ne pouvez pas exporter depuis TiviMate, créez un fichier texte avec :
+
+URL de votre playlist :
+http://maxhd.live:8080/get.php?username=kTZe7eQqEe&password=PykatsjWHH&type=m3u_plus&output=ts
+
+ÉTAPES :
+1. Ouvrir Notepad (Bloc-notes)
+2. Coller l'URL ci-dessus
+3. Sauvegarder sous : "ma-playlist.m3u" 
+4. Important : Choisir "Tous les fichiers" dans le type de fichier
+5. Utiliser ce fichier dans l'application web
+
+POURQUOI ÇA MARCHE :
+- L'application web va charger le fichier local
+- Pas de restrictions navigateur
+- Bypass complet des blocages serveur

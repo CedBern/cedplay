@@ -1,0 +1,138 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { TvLiveScreen } from '@/components/TvLiveScreen';
+import { resolveTvMode } from '@/hooks/useTvMode';
+import type { Channel } from '@/types/channel';
+
+const fr: Channel[] = [
+  { id: 'fr-1', name: 'Info', url: 'https://example.test/1', group: 'France', quality: 'HD' },
+  { id: 'fr-2', name: 'Culture', url: 'https://example.test/2', group: 'France' },
+  { id: 'fr-3', name: 'Sport', url: 'https://example.test/3', group: 'France' },
+];
+const be: Channel[] = [{ id: 'be-1', name: 'Bruxelles', url: 'https://example.test/b', group: 'Belgique' }];
+const adult: Channel[] = [{ id: 'x-1', name: 'Nuit', url: 'https://example.test/x', group: 'Adulte' }];
+const groups = [{ name: 'France', channels: fr }, { name: 'Belgique', channels: be }, { name: 'Adulte', channels: adult }];
+
+beforeEach(() => { localStorage.clear(); document.documentElement.classList.add('remote-navigation'); });
+afterEach(() => { cleanup(); document.documentElement.classList.remove('remote-navigation'); });
+
+const active = () => document.activeElement as HTMLElement;
+const key = (k: string) => fireEvent.keyDown(active(), { key: k });
+
+function setup(extra: Partial<React.ComponentProps<typeof TvLiveScreen>> = {}) {
+  const onPlay = vi.fn();
+  render(<TvLiveScreen playlistId="tv-test" groups={groups} favoriteIds={[]} onPlay={onPlay} onSearch={() => {}} onGuide={() => {}} {...extra} />);
+  return { onPlay };
+}
+
+it('arrive sur la liste, descend ligne par ligne et OK lance la chaîne', () => {
+  const { onPlay } = setup();
+  expect(active().dataset.tvRow).toBe('0');
+  expect(screen.getByRole('heading', { name: 'Toutes' })).toBeVisible();
+  key('ArrowDown');
+  expect(active().dataset.tvRow).toBe('1');
+  expect(active()).toHaveAccessibleName('2. Culture');
+  fireEvent.click(active());
+  expect(onPlay).toHaveBeenCalledWith(fr[1]);
+});
+
+it('gauche passe aux catégories ; la liste suit après une pause, droite l’applique tout de suite', async () => {
+  setup();
+  key('ArrowLeft');
+  expect(active().closest('[data-tv-col]')?.getAttribute('data-tv-col')).toBe('cat');
+  expect(active()).toHaveTextContent('Toutes');
+  key('ArrowDown');
+  expect(active()).toHaveTextContent('Adulte');
+  key('ArrowDown');
+  expect(active()).toHaveTextContent('Belgique');
+  // Un passage rapide ne change pas la liste ; une pause l'affiche sans appui sur OK.
+  expect(screen.getByRole('heading', { name: 'Toutes' })).toBeVisible();
+  expect(await screen.findByRole('heading', { name: 'Belgique' })).toBeVisible();
+  key('ArrowDown');
+  expect(active()).toHaveTextContent('France');
+  key('ArrowRight');
+  expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
+  expect(active()).toHaveAccessibleName('1. Info');
+});
+
+it('droite ouvre l’aperçu : Regarder lance la chaîne mise en avant', () => {
+  const { onPlay } = setup();
+  key('ArrowDown');
+  key('ArrowRight');
+  expect(active()).toHaveTextContent('Regarder');
+  key('ArrowDown');
+  expect(active()).toHaveTextContent('Ajouter aux favoris');
+  key('ArrowUp');
+  fireEvent.click(active());
+  expect(onPlay).toHaveBeenCalledWith(fr[1]);
+});
+
+it('Retour remonte aperçu → chaînes → catégories, puis laisse la main', () => {
+  setup();
+  key('ArrowRight');
+  const back = () => { const e = new Event('tv-live-back', { cancelable: true }); act(() => { window.dispatchEvent(e); }); return e.defaultPrevented; };
+  expect(back()).toBe(true);
+  expect(active().dataset.tvRow).toBe('0');
+  expect(back()).toBe(true);
+  expect(active().dataset.tvCat).toBeDefined();
+  expect(back()).toBe(false);
+});
+
+it('Haut sur la première catégorie rend la main à la navigation générale', () => {
+  setup();
+  key('ArrowLeft');
+  for (let i = 0; i < 6; i++) key('ArrowUp');
+  expect(active()).toHaveTextContent('Rechercher');
+  const event = new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true });
+  active().dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+});
+
+it('une seule cible par colonne reste atteignable depuis l’extérieur (tabindex itinérant)', () => {
+  setup();
+  const reachable = Array.from(document.querySelectorAll<HTMLElement>('[data-tv-item]')).filter(el => el.tabIndex === 0);
+  expect(reachable).toHaveLength(1);
+  expect(reachable[0].dataset.tvRow).toBe('0');
+});
+
+it('groupe protégé : liste vide, OK demande le code', () => {
+  const onLockedGroupSelect = vi.fn();
+  setup({ lockedGroups: ['Adulte'], onLockedGroupSelect });
+  expect(screen.getByRole('heading', { name: 'Toutes' })).toBeVisible();
+  for (let i = 0; i < 6; i++) key('ArrowDown');
+  // La chaîne adulte n'apparaît pas dans Toutes : la dernière ligne est Bruxelles.
+  expect(active()).toHaveAccessibleName('4. Bruxelles');
+  key('ArrowLeft'); key('ArrowDown');
+  expect(active()).toHaveTextContent('Adulte');
+  key('ArrowRight');
+  expect(screen.getByText(/Groupe protégé/)).toBeVisible();
+  expect(active()).toHaveTextContent('Adulte'); // liste vide : le focus reste sur la catégorie
+  fireEvent.click(active());
+  expect(onLockedGroupSelect).toHaveBeenCalledTimes(1);
+});
+
+it('les favoris s’ouvrent en premier quand il y en a', () => {
+  setup({ favoriteIds: ['be-1'] });
+  expect(screen.getByRole('heading', { name: 'Favoris' })).toBeVisible();
+  expect(active()).toHaveAccessibleName('1. Bruxelles');
+});
+
+it('entrer dans une catégorie qui contient la chaîne en cours : le focus va sur elle', () => {
+  const { onPlay } = setup({ currentChannel: fr[2] });
+  key('ArrowLeft');
+  key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); // Adulte, Belgique, France
+  key('ArrowRight');
+  expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
+  expect(active()).toHaveAccessibleName('3. Sport');
+  fireEvent.click(active());
+  expect(onPlay).toHaveBeenCalledWith(fr[2]);
+});
+
+it('mode d’interface : réglage manuel prioritaire sur la détection', () => {
+  expect(resolveTvMode('auto', true)).toBe(true);
+  expect(resolveTvMode('auto', false)).toBe(false);
+  expect(resolveTvMode(undefined, true)).toBe(true);
+  expect(resolveTvMode('tv', false)).toBe(true);
+  expect(resolveTvMode('mobile', true)).toBe(false);
+});

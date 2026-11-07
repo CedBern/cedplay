@@ -1,0 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { expect, it } from 'vitest';
+import { M3UParser } from '@/utils/m3uParser';
+
+it('importe le catalogue public embarqué complet dans les deux chemins du parseur', async () => {
+  const content = readFileSync('public/flux-legaux.m3u', 'utf8');
+  const sync = M3UParser.parseM3U(content, 'Public');
+  const workerPath = await M3UParser.parseM3UWithProgress(content, 'Public');
+  expect(sync.totalChannelsBeforeDedup).toBe(2465);
+  expect(sync.channels).toHaveLength(1988);
+  expect(workerPath.channels).toEqual(sync.channels);
+  expect(sync.groups).toHaveLength(8);
+  expect(new Set(sync.channels.map(c => c.id)).size).toBe(1988);
+});

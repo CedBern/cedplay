@@ -1,0 +1,7 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="local-a" group-title="Vérification locale",Mire animée A
+http://127.0.0.1:5178/verification-video.mp4
+#EXTINF:-1 tvg-id="local-b" group-title="Vérification locale",Mire animée B
+http://127.0.0.1:5178/verification-video.mp4
+#EXTINF:-1 tvg-id="local-hls" group-title="Vérification locale",Mire HLS
+http://127.0.0.1:5178/verification-hls.m3u8

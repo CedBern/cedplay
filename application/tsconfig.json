@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] },
+    "skipLibCheck": true,
+    "allowJs": true,
+    // Root config kept minimal; per-project strictness enforced in tsconfig.app.json.
+    // Enable key safety flags here to satisfy analyzers referencing root config.
+    "strict": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

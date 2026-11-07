@@ -1,0 +1,19 @@
+{
+  "name": "CedPlay",
+  "nameStart": "Ced",
+  "nameEnd": "Play",
+  "tagline": "Direct · Films · Séries",
+  "background": "#0B0B0C",
+  "line": "#FFFFFF",
+  "accent": "#FF5A36",
+  "accentOnLight": "#D9431F",
+  "muted": "#A1A1AA",
+  "viewBox": 108,
+  "tileRadius": 26,
+  "parts": [
+    { "role": "screen", "stroke": "line", "width": 9, "cap": "round", "d": "M86 38 L86 36 C86 28.268 79.732 22 72 22 L36 22 C28.268 22 22 28.268 22 36 L22 64 C22 71.732 28.268 78 36 78 L72 78 C79.732 78 86 71.732 86 64 L86 62" },
+    { "role": "play", "fill": "accent", "stroke": "accent", "width": 5, "join": "round", "d": "M48 36 L84 50 L48 64 Z" },
+    { "role": "notch", "fill": "background", "cut": true, "d": "M44 46.5 L60.5 46.5 C62.433 46.5 64 48.067 64 50 C64 51.933 62.433 53.5 60.5 53.5 L44 53.5 Z" },
+    { "role": "stand", "stroke": "line", "width": 6, "cap": "round", "d": "M42 90 L66 90" }
+  ]
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CedPlay</string>
+    <string name="title_activity_main">CedPlay</string>
+    <string name="package_name">com.lecteur.iptv</string>
+    <string name="custom_url_scheme">com.lecteur.iptv</string>
+</resources>
