@@ -522,3 +522,12 @@ Points ouverts pour continuer :
 - Fichier réécrit intégralement en UTF-8, sans caractère de remplacement ni caractère de contrôle parasite ; deux noms `buildNativeZap` altérés par un caractère de contrôle dans l'historique sont restaurés.
 - Pour les prochaines écritures : lecture et écriture explicitement en UTF-8 ; ne jamais utiliser l'encodage implicite de Windows PowerShell pour ce fichier.
 - Sauvegardes brutes et contrôles : `preuves/reparation-encodage-2026-11-07/RAPPORT.md`. Aucun code applicatif ni APK modifié, aucun test sur appareil effectué.
+
+
+## Livraison consolidée 1.11.12 / code 41 — 7 novembre 2026
+
+- Réparation UTF-8 du suivi commitée dans `c8eb862` ; corrections podcasts intégrées par `05b3320` (branche Claude jusqu'à `f8201d3`). Version synchronisée dans les trois emplacements.
+- Vérifié : TypeScript app + node, ESLint complet (0 erreur, 18 avertissements), 562/562 tests (89 fichiers, deux processus maximum après un échec de délai sur le dialogue Xtream dans la première suite), build web, synchronisation Capacitor et APK release. Aucun test ni délai modifié.
+- APK racine `CedPlay-1.11.12.apk` : 4581561 octets ; SHA-256 `1249ccf3747948c9c85eb0e2d0c09d72769a22d2fb72542db20afde03cb3fe97`. Même certificat que la 1.11.11 ; 72 fichiers web comparés octet par octet dans l'APK, sources applicatives inchangées pendant le build. Ancienne 1.11.11 conservée.
+- Rapport, manifeste et logs : `preuves/livraison-1.11.12-2026-11-07/RAPPORT.md`.
+- Aucun essai appareil ni installation effectué. Prochaine recette : cycle PIN complet, recherche podcasts, lien collé et abonnement Acast.
