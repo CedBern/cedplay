@@ -38,6 +38,7 @@ import { useEPG } from '@/hooks/useEPG';
 import { CORSProxy } from '@/utils/corsProxy';
 import { parseM3UInWorker } from '@/utils/parseWorker';
 import { adultGroupNames } from '@/utils/parentalControl';
+import { maybeUpgradePin } from '@/utils/pinHash';
 import { popDueReminders } from '@/utils/reminders';
 import { loadCatchupIndex, streamIdOf, catchupUrl, type CatchupIndex } from '@/utils/catchup';
 import { hasM3UCatchup, m3uCatchupDays, m3uCatchupUrl } from '@/utils/m3uCatchup';
@@ -68,7 +69,9 @@ export function IPTVPlayer() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xtreamOpen, setXtreamOpen] = useState(false);
   const [stalkerOpen, setStalkerOpen] = useState(false);
-  const [appSettings, setAppSettings] = useState<AppSettings>(StorageManager.getSettings());
+  // Initialisateur paresseux : `getSettings()` lit localStorage + JSON.parse — une seule
+  // fois au montage, pas à chaque rendu du composant racine.
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => StorageManager.getCachedSettings());
   /** Téléviseur / box : écran Direct en colonnes pour la télécommande. */
   const tvMode = useTvMode(appSettings.interfaceMode);
   /** Aperçu vidéo : mode choisi dans les réglages (automatique au survol, manuel, désactivé). */
@@ -462,6 +465,10 @@ export function IPTVPlayer() {
     if (NativePlayerBridge.isAvailable()) void openNativeChannel(channel);
     else handleWebChannelSelect(channel);
   }, [openNativeChannel, handleWebChannelSelect]);
+  // Handlers stables pour les listes de chaînes : des fonctions inline recréées à chaque rendu
+  // court-circuiteraient la mémoïsation des cartes (re-rendu complet à chaque zap ou frappe).
+  const handleNativeChannelSelect = useCallback((channel: Channel) => { void openNativeChannel(channel); }, [openNativeChannel]);
+  const handleRecordRequest = useCallback((channel: Channel) => { setRecordingsChannel(channel); setRecordingsOpen(true); }, []);
 
   // Chaque tuile de la mosaïque ouvre un flux chez le fournisseur : on coupe le
   // lecteur web d'abord, sinon il garde sa connexion ouverte pendant la mosaïque.
@@ -737,7 +744,7 @@ export function IPTVPlayer() {
       <div className="min-h-screen flex items-center justify-center bg-background text-foreground">
         <div className="text-center space-y-4">
           <BrandMark className="mx-auto h-20 w-20" />
-          <p className="text-2xl font-semibold">CedPlay</p>
+          <p className="text-2xl font-semibold">Ced<span className="text-primary">Play</span></p>
           <div className="animate-pulse text-xl font-semibold">Chargement des listes…</div>
         </div>
       </div>
@@ -807,7 +814,8 @@ export function IPTVPlayer() {
       <div className="flex items-center gap-2 min-w-0 flex-1">
         <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
           <BrandMark className="h-8 w-8 sm:h-9 sm:w-9" />
-          <span>CedPlay</span>
+          {/* « Play » prend l'orange du triangle du logo, qui est aussi le bouton lecture. */}
+          <span>Ced<span className="text-[#FF5A36]">Play</span></span>
         </h1>
         {tvMode && <MainNavigation tv onNavigate={navigate} />}
         <DropdownMenu>
@@ -921,7 +929,7 @@ export function IPTVPlayer() {
                 onSearch={() => setSearchOpen(true)}
                 onGuide={() => setChannelView('grid')}
                 onMosaic={openMosaicPicker}
-                onRecord={channel => { setRecordingsChannel(channel); setRecordingsOpen(true); }}
+                onRecord={handleRecordRequest}
                 preview={previewEnabled}
                 previewMode={previewMode}
                 onEdit={openChannelEditor}
@@ -947,7 +955,7 @@ export function IPTVPlayer() {
                       playlistId={currentPlaylist.id}
                       groups={visibleGroups}
                       onChannelSelect={handleChannelSelect}
-                      onNativeChannelSelect={channel => { void openNativeChannel(channel); }}
+                      onNativeChannelSelect={handleNativeChannelSelect}
                       {...(currentChannel ? { currentChannel } : {})}
                       keyboardNavigationEnabled={appSettings.keyboardNavigation}
                       epgData={epgData}
@@ -955,7 +963,7 @@ export function IPTVPlayer() {
                       unlocked={parentalUnlocked}
                       onLockedGroupSelect={() => setPinOpen(true)}
                       onMosaic={openMosaicPicker}
-                      onRecord={channel => { setRecordingsChannel(channel); setRecordingsOpen(true); }}
+                      onRecord={handleRecordRequest}
                       onManageGroups={() => setGroupManagerOpen(true)}
                       onOrganizeFavorites={() => setFavoritesOrganizerOpen(true)}
                       onEditChannel={openChannelEditor}
@@ -1137,7 +1145,7 @@ export function IPTVPlayer() {
         open={pinOpen}
         pin={appSettings.parentalPin ?? ''}
         onOpenChange={setPinOpen}
-        onUnlock={() => setParentalUnlocked(true)}
+        onUnlock={() => { setParentalUnlocked(true); void maybeUpgradePin(appSettings.parentalPin, p => StorageManager.saveSettings(p)); }}
       />
 
       {/* Mosaïque — accès contextuel depuis une chaîne */}

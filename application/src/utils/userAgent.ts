@@ -28,3 +28,21 @@ export async function fetchTextWithUserAgent(url: string, userAgent: string): Pr
   if (response.status < 200 || response.status >= 300) throw new Error(`Import impossible : HTTP ${response.status}.`);
   return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
 }
+
+function parseJsonLoose(text: string): unknown {
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+/**
+ * GET JSON : Android = requête native CapacitorHttp (ni CORS ni mixed content, donc
+ * les serveurs Xtream sans en-têtes CORS répondent quand même) ; web = fetch standard.
+ * Le corps est parsé même hors 2xx : le relais web renvoie ses erreurs en JSON.
+ */
+export async function httpGetJson(url: string): Promise<{ ok: boolean; status: number; data: unknown }> {
+  if (Capacitor.isNativePlatform()) {
+    const response = await CapacitorHttp.get({ url, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json', connectTimeout: 15000, readTimeout: 30000 });
+    return { ok: response.status >= 200 && response.status < 300, status: response.status, data: typeof response.data === 'string' ? parseJsonLoose(response.data) : response.data };
+  }
+  const res = await fetch(url);
+  return { ok: res.ok, status: res.status, data: await res.json().catch(() => null) };
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import { ChevronLeft, ChevronRight, Bell, CircleDot, Eye, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
 import { isInArchive } from '@/utils/catchup';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -56,12 +56,115 @@ const NARROW_COL_WIDTH = 112;
 const RENDER_BUFFER = 900;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const dayLabelOf = (date: Date) =>
-  new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).format(date);
-const shortDayOf = (date: Date) =>
-  new Intl.DateTimeFormat('fr-FR', { weekday: 'short', day: 'numeric' }).format(date);
+// Formateurs en cache au niveau module : construire un Intl.DateTimeFormat par appel
+// coûtait cher, et le rendu de la grille les invoque pour chaque programme affiché.
+const dayLabelFormat = new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+const shortDayFormat = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', day: 'numeric' });
+const dayLabelOf = (date: Date) => dayLabelFormat.format(date);
+const shortDayOf = (date: Date) => shortDayFormat.format(date);
 const midnightOf = (date: Date) => { const d = new Date(date); d.setHours(0, 0, 0, 0); return d; };
 const isNarrowScreen = () => (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 639px)')?.matches) || false;
+
+interface ProgramCellProps {
+  channel: Channel;
+  program: EPGProgram;
+  /** Position et largeur déjà calculées par layoutProgram (px). */
+  left: number;
+  width: number;
+  isCurrent: boolean;
+  isPast: boolean;
+  reminded: boolean;
+  recording: boolean;
+  replayable: boolean;
+  onSelectChannel: (channel: Channel) => void;
+  onCatchup: ((channel: Channel, program: EPGProgram) => void) | undefined;
+  setSheet: Dispatch<SetStateAction<ProgramSheetTarget | null>>;
+  setFocused: Dispatch<SetStateAction<{ channel: Channel; program: EPGProgram | null } | null>>;
+  toggleReminder: (channel: Channel, program: EPGProgram) => void | Promise<void>;
+  /** Appui long sur OK, partagé par toutes les cellules (une seule pression à la fois). */
+  pressRef: MutableRefObject<{ timer: number; long: boolean } | null>;
+}
+
+/** Cellule d'un programme, mémoïsée : le défilement de la grille ne re-rend plus que les
+ * cellules qui entrent dans la fenêtre — l'état (en cours, passé, rappel, enregistrement)
+ * passe en props primitives pour que la comparaison superficielle suffise. */
+const ProgramCell = memo(function ProgramCell({
+  channel, program: p, left, width, isCurrent, isPast, reminded, recording, replayable,
+  onSelectChannel, onCatchup, setSheet, setFocused, toggleReminder, pressRef,
+}: ProgramCellProps) {
+  const openSheet = () => setSheet({ channel, program: p });
+  // En cours : la chaîne ; passée rejouable : le replay ; sinon la fiche de l'émission.
+  const activate = () => (isCurrent ? onSelectChannel(channel) : isPast && replayable ? onCatchup!(channel, p) : openSheet());
+  const tone = isCurrent
+    ? 'border-primary/50 bg-secondary bg-[linear-gradient(hsl(var(--primary)/0.2),hsl(var(--primary)/0.2))] hover:bg-accent'
+    : isPast
+      ? replayable ? 'border-neutral-800 bg-card text-neutral-300 hover:bg-accent' : 'border-neutral-900 bg-card text-neutral-500'
+      : 'border-neutral-800 bg-secondary hover:bg-accent';
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={activate}
+      onContextMenu={(e) => { e.preventDefault(); openSheet(); }}
+      onFocus={(e) => { if (e.target === e.currentTarget) setFocused({ channel, program: p }); }}
+      // Appui court sur OK : action ; appui long : fiche (comme sur les box IPTV).
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || !isActivationKey(e.key)) return;
+        e.preventDefault();
+        if (e.repeat || pressRef.current) return;
+        const state = { timer: 0, long: false };
+        // La fiche prend le focus : le relâchement de OK arrivera ailleurs. L'appui est
+        // donc terminé ici ; les répétitions et le relâchement sont ignorés par la fiche.
+        state.timer = window.setTimeout(() => {
+          state.long = true;
+          if (pressRef.current === state) pressRef.current = null;
+          openSheet();
+        }, LONG_PRESS_MS);
+        pressRef.current = state;
+      }}
+      onKeyUp={(e) => {
+        if (e.target !== e.currentTarget || !isActivationKey(e.key) || !pressRef.current) return;
+        e.preventDefault();
+        const { timer, long } = pressRef.current;
+        pressRef.current = null;
+        window.clearTimeout(timer);
+        if (!long) activate();
+      }}
+      onBlur={() => { if (pressRef.current) { window.clearTimeout(pressRef.current.timer); pressRef.current = null; } }}
+      aria-label={isPast && replayable ? `Revoir « ${p.title} » (${formatTime(p.startTime)})` : `${p.title}, ${formatTime(p.startTime)} – ${formatTime(p.endTime)}${recording ? ', enregistrement programmé' : ''}`}
+      className={`group absolute top-1 bottom-1 overflow-hidden rounded-lg border px-2 text-left cursor-pointer ${tone}`}
+      style={{ left: left + 1, width: Math.max(width - 2, 24) }}
+      title={`${formatTime(p.startTime)} – ${formatTime(p.endTime)} · ${p.title}${isPast && replayable ? ' · Revoir' : ''}`}
+    >
+      <span className="flex items-center gap-1 truncate text-xs font-medium leading-tight pr-5">
+        {isPast && replayable && <RotateCcw aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />}
+        {recording && <CircleDot aria-hidden="true" className="h-3 w-3 shrink-0 text-red-400" />}
+        <span className="truncate">{p.title}</span>
+      </span>
+      <span className="block truncate font-mono text-[10px] text-neutral-400 leading-tight">
+        {formatTime(p.startTime)} – {formatTime(p.endTime)}
+      </span>
+      {isCurrent && replayable && <button
+        type="button"
+        aria-label={`Regarder « ${p.title} » depuis le début`}
+        title="Depuis le début"
+        onClick={(e) => { e.stopPropagation(); onCatchup!(channel, p); }}
+        className="absolute top-1 right-1 rounded-full p-1 text-primary hover:bg-primary/20"
+      >
+        <SkipBack className="h-3.5 w-3.5" />
+      </button>}
+      {!isPast && !isCurrent && <button
+        type="button"
+        aria-label={reminded ? `Retirer le rappel pour « ${p.title} »` : `Rappel pour « ${p.title} » à ${formatTime(p.startTime)}`}
+        title={reminded ? 'Rappel activé : cliquer pour retirer' : 'Me prévenir au début de l’émission'}
+        onClick={(e) => { e.stopPropagation(); void toggleReminder(channel, p); }}
+        className={`absolute top-1 right-1 rounded p-1 transition ${reminded ? 'text-primary' : 'text-white/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-white'}`}
+      >
+        <Bell className="h-3.5 w-3.5" />
+      </button>}
+    </div>
+  );
+});
 
 /** Grille des programmes (guide TV) : chaînes en lignes, horaires en colonnes. */
 export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, guideState, onRetry, onConfigure, lockedGroups, unlocked, catchupDays, onCatchup, playlistId = '', tvMode = false, preview = false, previewMode = 'auto', onGuideSettings }: EPGGridProps) {
@@ -71,7 +174,8 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   // Zone visible (px) : seuls les programmes proches sont rendus.
   const [view, setView] = useState({ left: 0, width: Number.POSITIVE_INFINITY });
 
-  // Rappels EPG (cloche sur un programme).
+  // Rappels EPG (cloche sur un programme). Callback mémoïsé : les cellules sont mémoïsées,
+  // un handler recréé à chaque rendu les ferait toutes se re-rendre au défilement.
   const [reminders, setReminders] = useState<EpgReminder[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -80,7 +184,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     window.addEventListener(REMINDERS_EVENT, load);
     return () => { cancelled = true; window.removeEventListener(REMINDERS_EVENT, load); };
   }, []);
-  const toggleReminder = async (channel: Channel, program: EPGProgram) => {
+  const toggleReminder = useCallback(async (channel: Channel, program: EPGProgram) => {
     const startTime = program.startTime.getTime();
     const reminded = reminders.some(r => r.channelId === channel.id && r.startTime === startTime);
     try {
@@ -94,7 +198,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     } catch {
       toast.error('Impossible d’enregistrer le rappel.');
     }
-  };
+  }, [reminders]);
 
   // Programmations Android (pastille rouge sur les émissions à enregistrer).
   const [scheduled, setScheduled] = useState<ScheduledRecording[]>([]);
@@ -220,6 +324,11 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   const hours = useMemo(() => buildHourTicks(range), [range]);
   const nowOffset = useMemo(() => nowOffsetInDay(now, range), [now, range]);
   const offsetOf = (date: Date) => ((date.getTime() - range.start.getTime()) / 60000) * PX_PER_MINUTE;
+  // Fenêtre visible convertie en temps : les programmes hors fenêtre sont écartés avant
+  // tout calcul de layout (avant, layoutProgram tournait pour chaque programme de la ligne).
+  const rangeStartMs = range.start.getTime();
+  const windowStartMs = rangeStartMs + ((view.left - RENDER_BUFFER) / PX_PER_MINUTE) * 60000;
+  const windowEndMs = rangeStartMs + ((view.left + view.width + RENDER_BUFFER) / PX_PER_MINUTE) * 60000;
 
   // Suit le défilement horizontal (jour affiché, programmes à rendre).
   const hasGrid = !!epgData && guideState?.status !== 'absent' && guideState?.status !== 'error';
@@ -377,6 +486,8 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const { channel, programs } = rows[virtualRow.index];
             const playing = currentChannel?.id === channel.id;
+            // Jours d'archive propres à la chaîne : une lecture par ligne, plus par programme.
+            const rowArchiveDays = onCatchup && catchupDays ? catchupDays(channel) : 0;
             return (
               <div
                 key={channel.id}
@@ -399,86 +510,35 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
                 </button>
                 <div className="relative" style={{ width: timelineWidth }}>
                   {programs.map((p) => {
+                    // Filtre de fenêtre en temps : le layout n'est calculé que pour les
+                    // programmes proches de la zone visible.
+                    if (p.endTime.getTime() <= windowStartMs || p.startTime.getTime() >= windowEndMs) return null;
                     const layout = layoutProgram(p, range);
-                    if (!layout || layout.left + layout.width < view.left - RENDER_BUFFER || layout.left > view.left + view.width + RENDER_BUFFER) return null;
+                    if (!layout) return null;
                     const reminded = reminders.some(r => r.channelId === channel.id && r.startTime === p.startTime.getTime());
                     const isPast = p.endTime <= now;
                     const isCurrent = p.startTime <= now && now < p.endTime;
-                    const archiveDays = onCatchup && catchupDays ? catchupDays(channel) : 0;
-                    const replayable = archiveDays > 0 && isInArchive(p.startTime, archiveDays, now.getTime());
+                    const replayable = rowArchiveDays > 0 && isInArchive(p.startTime, rowArchiveDays, now.getTime());
                     const recording = !isPast && scheduled.length > 0 && !!findScheduled(scheduled, channel, p);
-                    // En cours : la chaîne ; passée rejouable : le replay ; sinon la fiche de l'émission.
-                    const activate = () => (isCurrent ? onSelectChannel(channel) : isPast && replayable ? onCatchup!(channel, p) : setSheet({ channel, program: p }));
-                    const openSheet = () => setSheet({ channel, program: p });
-                    const tone = isCurrent
-                      ? 'border-primary/50 bg-secondary bg-[linear-gradient(hsl(var(--primary)/0.2),hsl(var(--primary)/0.2))] hover:bg-accent'
-                      : isPast
-                        ? replayable ? 'border-neutral-800 bg-card text-neutral-300 hover:bg-accent' : 'border-neutral-900 bg-card text-neutral-500'
-                        : 'border-neutral-800 bg-secondary hover:bg-accent';
                     return (
-                      <div
+                      <ProgramCell
                         key={p.startTime.getTime()}
-                        role="button"
-                        tabIndex={0}
-                        onClick={activate}
-                        onContextMenu={(e) => { e.preventDefault(); openSheet(); }}
-                        onFocus={(e) => { if (e.target === e.currentTarget) setFocused({ channel, program: p }); }}
-                        // Appui court sur OK : action ; appui long : fiche (comme sur les box IPTV).
-                        onKeyDown={(e) => {
-                          if (e.target !== e.currentTarget || !isActivationKey(e.key)) return;
-                          e.preventDefault();
-                          if (e.repeat || press.current) return;
-                          const state = { timer: 0, long: false };
-                          // La fiche prend le focus : le relâchement de OK arrivera ailleurs. L'appui est
-                          // donc terminé ici ; les répétitions et le relâchement sont ignorés par la fiche.
-                          state.timer = window.setTimeout(() => {
-                            state.long = true;
-                            if (press.current === state) press.current = null;
-                            openSheet();
-                          }, LONG_PRESS_MS);
-                          press.current = state;
-                        }}
-                        onKeyUp={(e) => {
-                          if (e.target !== e.currentTarget || !isActivationKey(e.key) || !press.current) return;
-                          e.preventDefault();
-                          const { timer, long } = press.current;
-                          press.current = null;
-                          window.clearTimeout(timer);
-                          if (!long) activate();
-                        }}
-                        onBlur={() => { if (press.current) { window.clearTimeout(press.current.timer); press.current = null; } }}
-                        aria-label={isPast && replayable ? `Revoir « ${p.title} » (${formatTime(p.startTime)})` : `${p.title}, ${formatTime(p.startTime)} – ${formatTime(p.endTime)}${recording ? ', enregistrement programmé' : ''}`}
-                        className={`group absolute top-1 bottom-1 overflow-hidden rounded-lg border px-2 text-left cursor-pointer ${tone}`}
-                        style={{ left: layout.left + 1, width: Math.max(layout.width - 2, 24) }}
-                        title={`${formatTime(p.startTime)} – ${formatTime(p.endTime)} · ${p.title}${isPast && replayable ? ' · Revoir' : ''}`}
-                      >
-                        <span className="flex items-center gap-1 truncate text-xs font-medium leading-tight pr-5">
-                          {isPast && replayable && <RotateCcw aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />}
-                          {recording && <CircleDot aria-hidden="true" className="h-3 w-3 shrink-0 text-red-400" />}
-                          <span className="truncate">{p.title}</span>
-                        </span>
-                        <span className="block truncate font-mono text-[10px] text-neutral-400 leading-tight">
-                          {formatTime(p.startTime)} – {formatTime(p.endTime)}
-                        </span>
-                        {isCurrent && replayable && <button
-                          type="button"
-                          aria-label={`Regarder « ${p.title} » depuis le début`}
-                          title="Depuis le début"
-                          onClick={(e) => { e.stopPropagation(); onCatchup!(channel, p); }}
-                          className="absolute top-1 right-1 rounded-full p-1 text-primary hover:bg-primary/20"
-                        >
-                          <SkipBack className="h-3.5 w-3.5" />
-                        </button>}
-                        {!isPast && !isCurrent && <button
-                          type="button"
-                          aria-label={reminded ? `Retirer le rappel pour « ${p.title} »` : `Rappel pour « ${p.title} » à ${formatTime(p.startTime)}`}
-                          title={reminded ? 'Rappel activé : cliquer pour retirer' : 'Me prévenir au début de l’émission'}
-                          onClick={(e) => { e.stopPropagation(); void toggleReminder(channel, p); }}
-                          className={`absolute top-1 right-1 rounded p-1 transition ${reminded ? 'text-primary' : 'text-white/40 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-white'}`}
-                        >
-                          <Bell className="h-3.5 w-3.5" />
-                        </button>}
-                      </div>
+                        channel={channel}
+                        program={p}
+                        left={layout.left}
+                        width={layout.width}
+                        isCurrent={isCurrent}
+                        isPast={isPast}
+                        reminded={reminded}
+                        recording={recording}
+                        replayable={replayable}
+                        onSelectChannel={onSelectChannel}
+                        onCatchup={onCatchup}
+                        setSheet={setSheet}
+                        setFocused={setFocused}
+                        toggleReminder={toggleReminder}
+                        pressRef={press}
+                      />
                     );
                   })}
                   {nowOffset !== null && <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[1] border-l-2 border-live" style={{ left: nowOffset }} />}

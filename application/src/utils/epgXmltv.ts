@@ -275,6 +275,10 @@ export function getProgramProgress(program: EPGProgram, now: Date = new Date()):
   return Math.max(0, Math.min(100, (elapsed / totalDuration) * 100));
 }
 
+/** Formateur d'heure en cache : `toLocaleTimeString` construisait un Intl.DateTimeFormat à
+ * chaque appel, et la grille l'invoque plusieurs fois par programme affiché. */
+let timeFormatter: Intl.DateTimeFormat | undefined;
 export function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (!timeFormatter) timeFormatter = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
+  return timeFormatter.format(date);
 }

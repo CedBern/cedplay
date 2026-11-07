@@ -8,6 +8,10 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Les tests lents (catalogues de 150 titres, IndexedDB) dépassent 5 s quand la
+    // suite tourne en parallèle avec la couverture — un timeout court fabrique des
+    // échecs aléatoires, pas des défauts.
+    testTimeout: 15000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

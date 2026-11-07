@@ -104,6 +104,10 @@ public class RecordService extends Service {
                 if (recorders.get(token) != started) return;
                 finish(token, success ? "Enregistrement terminé : " + fileName : "Enregistrement annulé : " + finalTitle);
             }
+            @Override public void onRecordInterrupted(String fileName, long bytes) {
+                if (recorders.get(token) != started) return;
+                finish(token, "Enregistrement interrompu (réseau ou stockage) : " + fileName);
+            }
             @Override public void onRecordError(String message) {
                 if (recorders.get(token) != started) return;
                 finish(token, "Enregistrement impossible (" + finalTitle + ") : " + message);

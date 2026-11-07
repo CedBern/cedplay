@@ -41,12 +41,23 @@ export function normalizeTitle(raw: string): { title: string; year: string } { r
 
 const STOP_WORDS = new Set(['le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'the', 'and', 'of', 'd', 'l']);
 
-/** Similarité de titres par mots partagés (Jaccard), 0..1. */
-export function titleSimilarity(a: string, b: string): number {
-  const tokensA = new Set(a.split(' ').filter((w) => w.length > 2 && !STOP_WORDS.has(w)));
-  const tokensB = new Set(b.split(' ').filter((w) => w.length > 2 && !STOP_WORDS.has(w)));
+/** Mots significatifs d'un titre déjà normalisé (même filtre que titleSimilarity). */
+export function titleTokens(normalized: string): Set<string> {
+  return new Set(normalized.split(' ').filter((w) => w.length > 2 && !STOP_WORDS.has(w)));
+}
+
+/** Similarité entre des ensembles de mots déjà calculés : évite de re-découper les titres
+ * à chaque couple dans les boucles de scoring (recommandations). */
+export function titleSimilarityTokens(tokensA: Set<string>, tokensB: Set<string>): number {
   if (!tokensA.size || !tokensB.size) return 0;
   let shared = 0;
   for (const w of tokensA) if (tokensB.has(w)) shared += 1;
   return shared / Math.max(tokensA.size, tokensB.size);
+}
+
+/** Similarité de titres par mots partagés (Jaccard), 0..1. */
+export function titleSimilarity(a: string, b: string): number {
+  const tokensA = titleTokens(a);
+  const tokensB = titleTokens(b);
+  return titleSimilarityTokens(tokensA, tokensB);
 }

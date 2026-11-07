@@ -576,20 +576,34 @@ const videoStopCallbacks = new Set<() => void>();
 let nativeAudioListenerAttached = false;
 let webAudioEl: HTMLAudioElement | null = null;
 
-function emitAudioState(next: AudioPlaybackState): void {
+/** Intervalle minimal entre deux écritures de progression pendant la lecture : les ticks
+ * (~4×/s) relisaient et réécrivaient toute la table IndexedDB à chaque fois. */
+const AUDIO_SAVE_MIN_INTERVAL_MS = 5000;
+let lastAudioSave: { episodeId: string | null; at: number } = { episodeId: null, at: 0 };
+
+function emitAudioState(next: AudioPlaybackState, options?: { forceSave?: boolean }): void {
   currentAudioState = { ...next };
   if (next.active && next.episodeId) {
-    saveEpisodeProgress({
-      episodeId: next.episodeId,
-      feedUrl: next.feedUrl,
-      audioUrl: next.audioUrl,
-      title: next.title,
-      podcastTitle: next.podcastTitle,
-      ...(next.artworkUrl ? { artworkUrl: next.artworkUrl } : {}),
-      positionMs: next.positionMs,
-      durationMs: next.durationMs,
-      speed: next.speed,
-    });
+    // Écriture au plus toutes les 5 s pendant la lecture ; immédiate à la pause/fin
+    // (playing à false), au changement d'épisode, au premier état et après un seek.
+    // Les transitions écrivent en plus d'elles-mêmes (saveActiveEpisodeBeforeTransition),
+    // et le progrès natif de service sert de filet en cas de fermeture brutale.
+    const nowMs = Date.now();
+    if (options?.forceSave || next.episodeId !== lastAudioSave.episodeId || !next.playing
+        || nowMs - lastAudioSave.at >= AUDIO_SAVE_MIN_INTERVAL_MS) {
+      lastAudioSave = { episodeId: next.episodeId, at: nowMs };
+      saveEpisodeProgress({
+        episodeId: next.episodeId,
+        feedUrl: next.feedUrl,
+        audioUrl: next.audioUrl,
+        title: next.title,
+        podcastTitle: next.podcastTitle,
+        ...(next.artworkUrl ? { artworkUrl: next.artworkUrl } : {}),
+        positionMs: next.positionMs,
+        durationMs: next.durationMs,
+        speed: next.speed,
+      });
+    }
   }
   audioStateListeners.forEach(fn => {
     try { fn(currentAudioState); } catch { /* ignore */ }
@@ -918,7 +932,7 @@ export const AudioBridge = {
     const clamped = currentAudioState.durationMs > 0
       ? Math.max(0, Math.min(currentAudioState.durationMs, Math.round(positionMs)))
       : Math.max(0, Math.round(positionMs));
-    emitAudioState({ ...currentAudioState, positionMs: clamped });
+    emitAudioState({ ...currentAudioState, positionMs: clamped }, { forceSave: true });
     if (isAvailable()) {
       try { await NativePlayer.seekAudioTo({ positionMs: clamped }); } catch { /* ignore */ }
     } else if (webAudioEl) {

@@ -1,6 +1,7 @@
 import { v5 as uuidv5 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { getProxyBase } from '@/utils/proxy';
+import { httpGetJson } from '@/utils/userAgent';
 import type { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
 
 /**
@@ -42,9 +43,10 @@ export function liveCategoriesUrl(account: XtreamLiveAccount): string {
 }
 
 export async function fetchLiveCategories(account: XtreamLiveAccount): Promise<XtreamLiveCategory[]> {
-  const res = await fetch(liveCategoriesUrl(account));
-  if (!res.ok) throw new Error(`Catégories Xtream indisponibles (${res.status})`);
-  const data: unknown = await res.json();
+  // Android : requête native (httpGetJson) — le webview bloque un fetch direct vers
+  // un serveur Xtream qui n'envoie pas d'en-têtes CORS.
+  const { ok, status, data } = await httpGetJson(liveCategoriesUrl(account));
+  if (!ok) throw new Error(`Catégories Xtream indisponibles (${status})`);
   if (!Array.isArray(data)) throw new Error('Réponse Xtream inattendue');
   return data.filter((c): c is XtreamLiveCategory => !!c && typeof c === 'object'
     && (typeof c.category_id === 'string' || typeof c.category_id === 'number')
@@ -93,11 +95,11 @@ export async function fetchLiveChannels(
   const fetchCategory = async (index: number) => {
     const cat = categories[index];
     try {
-      const res = await fetch(liveApiUrl(account, 'streams', cat.category_id));
-      if (!res.ok) { failed.push(cat.category_name); return; }
-      const streams: unknown = await res.json();
-      if (!Array.isArray(streams)) { failed.push(cat.category_name); return; }
-      for (const s of streams as RawStream[]) {
+      const { ok, data } = await httpGetJson(liveApiUrl(account, 'streams', cat.category_id));
+      if (!ok) { failed.push(cat.category_name); return; }
+      const streams = Array.isArray(data) ? (data as RawStream[]) : null;
+      if (!streams) { failed.push(cat.category_name); return; }
+      for (const s of streams) {
         if (!s || s.stream_id === undefined || s.stream_id === null || typeof s.name !== 'string') continue;
         perCategory[index].push(buildLiveChannel(account, s, cat.category_name, format));
       }

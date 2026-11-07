@@ -3,6 +3,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button';
 import { AppSettings, StorageManager } from '@/utils/storage';
 import { getSettingsChangeLog, getSettingsMigrationStats } from '@/utils/idb';
+import { hashPin, isHashedPin, maybeUpgradePin } from '@/utils/pinHash';
+import { redactChangeLog } from '@/utils/redact';
 import { isValidPin } from '@/utils/parentalControl';
 import { toast } from 'sonner';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
@@ -23,29 +25,47 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
   const [pinOpen, setPinOpen] = useState(false);
   const [parentalEditAuthorized, setParentalEditAuthorized] = useState(false);
   useEffect(() => { if (open) setParentalEditAuthorized(false); else setPinOpen(false); }, [open]);
-  useEffect(() => { if (open) setDraft(currentSettings); }, [open, currentSettings]);
+  // Code PIN haché : le champ démarre vide, « vide = code inchangé ».
+  useEffect(() => { if (open) setDraft(isHashedPin(currentSettings.parentalPin) ? { ...currentSettings, parentalPin: '' } : currentSettings); }, [open, currentSettings]);
   useEffect(() => {
     let cancelled = false;
     if (open && diagnostics) {
       Promise.all([getSettingsChangeLog(), getSettingsMigrationStats()])
-        .then(([changes, migrations]) => { if (!cancelled) setDetails(JSON.stringify({ changes, migrations }, null, 2)); })
+        // Masquage à l'affichage aussi : couvre les entrées écrites avant l'introduction du masquage.
+        .then(([changes, migrations]) => { if (!cancelled) setDetails(JSON.stringify({ changes: redactChangeLog(changes), migrations }, null, 2)); })
         .catch(() => { if (!cancelled) setDetails('Diagnostics indisponibles.'); });
     }
     return () => { cancelled = true; };
   }, [open, diagnostics]);
   const save = async () => {
-    if (currentSettings.parentalControlEnabled && !parentalEditAuthorized &&
-      (draft.parentalPin !== currentSettings.parentalPin || !draft.parentalControlEnabled)) {
-      setPinOpen(true);
+    const pinDraft = draft.parentalPin ?? '';
+    // Champ rempli : la saisie doit valoir 4 à 8 chiffres (ou être une empreinte résiduelle),
+    // vérifiée avant la porte de déverrouillage — une saisie invalide ne doit jamais être
+    // enregistrée, même quand un ancien code exploitable existe déjà.
+    if (pinDraft !== '' && !isHashedPin(pinDraft) && !isValidPin(pinDraft)) {
+      toast.error('Le code PIN doit contenir de 4 à 8 chiffres.');
       return;
     }
-    if (draft.parentalControlEnabled && !isValidPin(draft.parentalPin ?? '')) {
+    // Champ vide = code inchangé (l'empreinte stockée est conservée) ; sans code exploitable
+    // déjà stocké, activer la protection exige d'en saisir un.
+    if (pinDraft === '' && draft.parentalControlEnabled &&
+      !isHashedPin(currentSettings.parentalPin) && !isValidPin(currentSettings.parentalPin ?? '')) {
       toast.error('Saisis un code PIN de 4 à 8 chiffres pour activer le contrôle parental.');
+      return;
+    }
+    if (currentSettings.parentalControlEnabled && !parentalEditAuthorized &&
+      ((pinDraft !== '' && pinDraft !== currentSettings.parentalPin) || !draft.parentalControlEnabled)) {
+      setPinOpen(true);
       return;
     }
     setSaving(true);
     try {
-      onSettingsChange(await StorageManager.saveSettings(draft));
+      // Le code n'est stocké qu'haché : un nouveau code est haché ici, un champ vide ne réécrit pas l'empreinte.
+      const { parentalPin, ...rest } = draft;
+      const draftToSave: Partial<AppSettings> = parentalPin
+        ? { ...draft, parentalPin: isHashedPin(parentalPin) ? parentalPin : await hashPin(parentalPin) }
+        : rest;
+      onSettingsChange(await StorageManager.saveSettings(draftToSave));
       onOpenChange(false);
       toast.success('Paramètres enregistrés');
     } catch { toast.error('Impossible d’enregistrer les paramètres'); }
@@ -139,7 +159,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
             <label className="block py-3">
               <span className="text-sm text-foreground">Code PIN (4 à 8 chiffres)</span>
               <input className={field} type="password" inputMode="numeric" placeholder="••••" value={draft.parentalPin ?? ''} onChange={e => setDraft({ ...draft, parentalPin: e.target.value.replace(/\D/g, '').slice(0, 8) })} />
-              <span className="mt-1 block text-xs text-muted-foreground">Nécessaire pour afficher les groupes détectés comme adultes.</span>
+              <span className="mt-1 block text-xs text-muted-foreground">Nécessaire pour afficher les groupes détectés comme adultes.{isHashedPin(currentSettings.parentalPin) && ' Laisse le champ vide pour conserver le code actuel.'}</span>
             </label>
           )}
         </>)}
@@ -227,12 +247,13 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           </div>
         </>)}
 
-        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.11.7 · Direct, films et séries</p>
+        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.11.11 · Direct, films et séries</p>
         <div className="sticky -bottom-6 -mx-6 flex justify-end gap-2 border-t border-neutral-900 bg-background px-6 py-3">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
           <Button disabled={saving} onClick={save}>{saving ? 'Enregistrement…' : 'Enregistrer'}</Button>
         </div>
       </div>
     </DialogContent>
-  </Dialog><ParentalPinDialog open={pinOpen} pin={currentSettings.parentalPin ?? ''} onOpenChange={setPinOpen} onUnlock={() => setParentalEditAuthorized(true)} /></>;
+  </Dialog><ParentalPinDialog open={pinOpen} pin={currentSettings.parentalPin ?? ''} onOpenChange={setPinOpen}
+    onUnlock={() => { setParentalEditAuthorized(true); void maybeUpgradePin(currentSettings.parentalPin, p => StorageManager.saveSettings(p)); }} /></>;
 }

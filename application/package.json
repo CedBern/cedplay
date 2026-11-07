@@ -1,6 +1,6 @@
 {
   "name": "cedplay",
-  "version": "1.11.7",
+  "version": "1.11.11",
   "packageManager": "pnpm@8.10.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5178 --strictPort",
@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:ui": "vitest",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit"
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "verify": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && eslint --quiet ./src && vitest run && vite build"
   },
   "dependencies": {
     "@capacitor/android": "6.2.3",

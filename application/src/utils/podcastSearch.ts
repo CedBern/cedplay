@@ -184,7 +184,7 @@ async function fetchHtmlText(url: string, signal?: AbortSignal): Promise<string 
       if (signal) proxyInit.signal = signal;
       const res = await fetch(proxyUrl, proxyInit);
       if (res.ok) return await res.text();
-    } catch {}
+    } catch { /* proxy injoignable : on rend null ci-dessous */ }
     return null;
   }
 }
@@ -468,7 +468,7 @@ export async function resolvePodcastLink(
             source: 'direct',
           },
         };
-      } catch {}
+      } catch { /* lien RSS mal formé : la détection continue sans résolution */ }
     }
   }
 

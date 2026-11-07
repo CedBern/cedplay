@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 
 import android.content.Intent;
@@ -143,6 +144,11 @@ public class NativePlayerActivity extends AppCompatActivity {
     private ArrayList<String> channelLogos;
     /** Taille de la liste complète côté page : au-delà du contexte, la page relance sur le numéro saisi. */
     private int channelTotal = 0;
+    /** Numéro normalisé → premier index de chaîne : la saisie ne rescanne pas la liste
+     *  (et ne rejoue pas une regex par entrée) à chaque chiffre tapé. */
+    private final HashMap<String, Integer> numberIndex = new HashMap<>();
+    /** Lecture de zaplist.tsv hors thread UI (démarrage à froid) : la fenêtre suffit à la première image. */
+    private java.util.concurrent.ExecutorService fullListExecutor;
     /** Saisie du numéro de chaîne aux touches 0-9 de la télécommande (9 chiffres : numéros choisis). */
     private final ChannelNumberInput numberBuffer = new ChannelNumberInput();
     private final Handler numberHandler = new Handler(Looper.getMainLooper());
@@ -395,11 +401,17 @@ public class NativePlayerActivity extends AppCompatActivity {
                 }
             } catch (Exception ignored) { channelUrls = null; channelTitles = null; programLineCache.clear(); }
         }
-        // Après une rotation, l'index sauvegardé désigne déjà la liste complète.
+        // Après une rotation, l'index sauvegardé désigne déjà la liste complète : l'adoption
+        // reste bloquante (cet index ne désigne pas la fenêtre). Au démarrage à froid, elle
+        // part en tâche de fond — la fenêtre de 300 chaînes suffit à lancer la première image.
         boolean savedFull = savedInstanceState != null && savedInstanceState.getBoolean("fullList", false);
-        adoptFullList(savedFull);
-        // Index sauvegardé sur la liste complète devenue illisible : pas de zapping plutôt qu'une mauvaise chaîne.
-        if (savedFull && !fullListAdopted) channelUrls = null;
+        if (savedFull) {
+            adoptFullList(true);
+            // Index sauvegardé sur la liste complète devenue illisible : pas de zapping plutôt qu'une mauvaise chaîne.
+            if (!fullListAdopted) channelUrls = null;
+        } else {
+            adoptFullListAsync();
+        }
         if (channelUrls == null || channelTitles == null
                 || channelUrls.size() != channelTitles.size()
                 || channelIndex < 0 || channelIndex >= channelUrls.size()) {
@@ -440,6 +452,8 @@ public class NativePlayerActivity extends AppCompatActivity {
             return;
         }
 
+        // Index des numéros construit une fois pour la liste chargée (fenêtre ou complète).
+        rebuildNumberIndex();
         createMediaSession();
         initCast();
         initRecorder();
@@ -912,6 +926,8 @@ public class NativePlayerActivity extends AppCompatActivity {
      * (zaplist.tsv : clé puis « url, titre, groupe, numéro » par ligne, séparés par des
      * tabulations). Le guide reste celui de la fenêtre, recopié à sa place. En cas de
      * doute (clé, taille, chaîne en cours), la fenêtre reste en place.
+     * <p>Version bloquante, réservée à la restauration après rotation (l'index sauvegardé
+     * ne désigne pas la fenêtre) ; au démarrage à froid, voir {@link #adoptFullListAsync()}.
      */
     private void adoptFullList(boolean savedIndexIsFull) {
         String path = getIntent().getStringExtra("channelList");
@@ -955,6 +971,72 @@ public class NativePlayerActivity extends AppCompatActivity {
             fullListAdopted = true;
             android.util.Log.i("IPTV-Playback", "zap_full_list channels=" + urls.size() + " load_ms=" + (SystemClock.elapsedRealtime() - started));
         } catch (Exception ignored) { /* la fenêtre reste en place */ }
+    }
+
+    /**
+     * Adoption de la liste complète hors thread UI (démarrage à froid) : la lecture ligne à
+     * ligne de zaplist.tsv — le seul gros fichier — se fait dans un executor et le thread UI
+     * garde la fenêtre de 300 chaînes pour lancer la première image sans attendre. À la
+     * publication, les index de fenêtre (chaîne courante, précédente, cible de rafale P+/P−)
+     * sont transposés vers la liste complète ; si la fenêtre a disparu entre-temps, on renonce.
+     */
+    private void adoptFullListAsync() {
+        String path = getIntent().getStringExtra("channelList");
+        String key = getIntent().getStringExtra("listKey");
+        final int windowStart = getIntent().getIntExtra("windowStart", -1);
+        if (path == null || key == null || channelUrls == null || channelIndex < 0 || windowStart < 0) return;
+        final long started = SystemClock.elapsedRealtime();
+        if (fullListExecutor == null) fullListExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        fullListExecutor.execute(() -> {
+            ArrayList<String> urls = new ArrayList<>(), titles = new ArrayList<>(), groups = new ArrayList<>(), numbers = new ArrayList<>();
+            try {
+                File file = new File(path);
+                if (!file.getCanonicalFile().getParentFile().equals(getCacheDir().getCanonicalFile()) || !file.getName().equals(NativePlayerPlugin.ZAP_LIST_NAME)) return;
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8), 1 << 16)) {
+                    if (!key.equals(reader.readLine())) return;
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        int a = line.indexOf('\t');
+                        int b = a < 0 ? -1 : line.indexOf('\t', a + 1);
+                        int c = b < 0 ? -1 : line.indexOf('\t', b + 1);
+                        if (c < 0) return;
+                        urls.add(line.substring(0, a)); titles.add(line.substring(a + 1, b));
+                        groups.add(line.substring(b + 1, c)); numbers.add(line.substring(c + 1));
+                    }
+                }
+            } catch (Exception ignored) {
+                return; // la fenêtre reste en place
+            }
+            runOnUiThread(() -> publishFullList(urls, titles, groups, numbers, windowStart, started));
+        });
+    }
+
+    /** Publie sur le thread UI les listes lues hors thread : mêmes gardes et mêmes
+     *  transpositions que adoptFullList, mais à partir de l'état courant — un zap P+/P−
+     *  peut avoir eu lieu pendant la lecture du fichier. */
+    private void publishFullList(ArrayList<String> urls, ArrayList<String> titles, ArrayList<String> groups, ArrayList<String> numbers, int windowStart, long started) {
+        if (isFinishing() || isDestroyed() || channelUrls == null || channelTitles == null || channelIndex < 0) return;
+        if (urls.isEmpty() || windowStart + channelUrls.size() > urls.size()) return;
+        // Indices de la fenêtre → indices de la liste complète, à partir de l'état courant.
+        int current = windowStart + channelIndex;
+        int previous = previousIndex < 0 ? -1 : windowStart + previousIndex;
+        if (current >= urls.size()) return;
+        ArrayList<JSONArray> programs = new ArrayList<>(urls.size());
+        for (int i = 0; i < urls.size(); i++) programs.add(UNKNOWN_EPG);
+        if (channelPrograms != null) for (int i = 0; i < channelPrograms.size(); i++) programs.set(windowStart + i, channelPrograms.get(i));
+        // Logos du bandeau : ceux de la fenêtre restent valables ; vide ailleurs (texte seul).
+        ArrayList<String> logos = new ArrayList<>(urls.size());
+        for (int i = 0; i < urls.size(); i++) logos.add("");
+        if (channelLogos != null) for (int i = 0; i < channelLogos.size(); i++) logos.set(windowStart + i, channelLogos.get(i));
+        // La chaîne lancée peut être une variante (autre qualité) de la ligne de la liste.
+        if (streamUrl != null) { urls.set(current, streamUrl); if (streamTitle != null) titles.set(current, streamTitle); }
+        channelUrls = urls; channelTitles = titles; channelGroups = groups; channelNumbers = numbers; channelPrograms = programs; channelLogos = logos;
+        channelIndex = current; previousIndex = previous; channelTotal = urls.size();
+        if (pendingZapTarget >= 0) pendingZapTarget = windowStart + pendingZapTarget;
+        programLineCache.clear();
+        rebuildNumberIndex();
+        fullListAdopted = true;
+        android.util.Log.i("IPTV-Playback", "zap_full_list channels=" + urls.size() + " load_ms=" + (SystemClock.elapsedRealtime() - started));
     }
 
     private void switchChannel(int delta) {
@@ -2200,6 +2282,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         zapHandler.removeCallbacksAndMessages(null);
         cancelPendingZap();
         if (logoExecutor != null) logoExecutor.shutdownNow();
+        if (fullListExecutor != null) fullListExecutor.shutdownNow();
         logSessionSummary();
         cancelNextEpisode();
         if (isFinishing()) {
@@ -2450,6 +2533,14 @@ public class NativePlayerActivity extends AppCompatActivity {
                 Toast.makeText(NativePlayerActivity.this,
                     success ? "Enregistrement terminé : " + fileName : "Enregistrement annulé", Toast.LENGTH_SHORT).show();
             }
+            @Override public void onRecordInterrupted(String fileName, long bytes) {
+                if (recorder != started) return;
+                recording = false;
+                recorder = null;
+                updateRecButton();
+                Toast.makeText(NativePlayerActivity.this,
+                    "Enregistrement interrompu (réseau ou stockage) : " + fileName, Toast.LENGTH_LONG).show();
+            }
             @Override public void onRecordError(String message) {
                 if (recorder != started) return;
                 recording = false;
@@ -2536,12 +2627,21 @@ public class NativePlayerActivity extends AppCompatActivity {
         return channelNumbers.get(index).trim();
     }
 
-    private int indexOfNumber(String typed) {
-        if (channelNumbers == null || typed.isEmpty()) return -1;
+    /** (Re)construit l'index numéro normalisé → premier index de chaîne. Changer de liste
+     *  (fenêtre ↔ complète) est le seul moment où la table doit être refaite. */
+    private void rebuildNumberIndex() {
+        numberIndex.clear();
+        if (channelNumbers == null) return;
         for (int i = 0; i < channelNumbers.size(); i++) {
-            if (typed.equals(normalizeNumber(channelNumbers.get(i)))) return i;
+            String normalized = normalizeNumber(channelNumbers.get(i));
+            if (!normalized.isEmpty()) numberIndex.putIfAbsent(normalized, i);
         }
-        return -1;
+    }
+
+    private int indexOfNumber(String typed) {
+        if (typed.isEmpty()) return -1;
+        Integer hit = numberIndex.get(typed);
+        return hit == null ? -1 : hit;
     }
 
     private void buildNumberOverlay(FrameLayout root) {
@@ -3038,6 +3138,10 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     /** Repart au direct en rouvrant le flux ; annonce pourquoi si la pause était trop longue. */
     private void reconnectLive(boolean announce) {
+        // Les reconnexions postées (fin de direct, retard au direct) peuvent arriver après
+        // onPause : ne pas recréer un lecteur fantôme en arrière-plan. En PiP l'activité
+        // reste visible et le lecteur n'a pas été libéré — la reprise y est légitime.
+        if ((!resumed && !isInPipMode()) || isFinishing() || isDestroyed()) return;
         pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false;
         playWhenReady = true;
         progressHandler.removeCallbacks(autoRetryRunnable);

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { verifyPin } from '@/utils/pinHash';
 import { toast } from 'sonner';
 
 interface ParentalPinDialogProps {
   open: boolean;
-  /** Code attendu. Vide = contrôle désactivé (ne devrait pas se produire en pratique). */
+  /** Valeur stockée (empreinte hachée, ou ancien code en clair pour les données migrées). Vide = contrôle désactivé. */
   pin: string;
   onOpenChange: (open: boolean) => void;
   onUnlock: () => void;
@@ -48,9 +49,10 @@ export function ParentalPinDialog({ open, pin, onOpenChange, onUnlock }: Parenta
     setLockRemaining(Math.ceil(LOCKOUT_MS / 1000));
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (lockUntilRef.current > Date.now()) return;
-    if (value === pin) {
+    // Vérification contre l'empreinte hachée (ou le code en clair des anciennes données).
+    if (await verifyPin(value, pin)) {
       setAttempts(0);
       onUnlock();
       onOpenChange(false);
@@ -75,7 +77,7 @@ export function ParentalPinDialog({ open, pin, onOpenChange, onUnlock }: Parenta
           <DialogTitle>Contenu protégé</DialogTitle>
           <DialogDescription>Saisis le code parental pour afficher ce groupe.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={e => { e.preventDefault(); submit(); }} className="space-y-3">
+        <form onSubmit={e => { e.preventDefault(); void submit(); }} className="space-y-3">
           <input
             type="password"
             inputMode="numeric"

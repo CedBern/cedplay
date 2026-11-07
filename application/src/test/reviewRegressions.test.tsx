@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
+import { webcrypto } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createBackup, parseBackup } from '@/utils/backup';
 import { getVodWatchlistFromDB, setMeta, toggleVodWatchlist } from '@/utils/idb';
@@ -9,6 +10,7 @@ import { GlobalSearchDialog } from '@/components/GlobalSearchDialog';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
 import { StorageManager } from '@/utils/storage';
 import { SettingsPanel } from '@/components/SettingsPanel';
+import { hashPin } from '@/utils/pinHash';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -77,6 +79,53 @@ it('exige le code actuel pour désactiver la protection parentale', async () => 
   const save = vi.spyOn(StorageManager, 'saveSettings').mockResolvedValue(StorageManager.getSettings());
   render(<SettingsPanel open onOpenChange={() => {}} currentSettings={{ ...StorageManager.getSettings(), parentalControlEnabled: true, parentalPin: '1234' }} onSettingsChange={() => {}} />);
   await userEvent.click(screen.getByLabelText('Verrouiller les groupes adultes derrière un code'));
+  await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+  expect(save).not.toHaveBeenCalled();
+});
+
+it('enregistre les autres réglages sans ressaisir un PIN haché (champ vide = inchangé)', async () => {
+  // jsdom ne fournit pas crypto.subtle : webcrypto de Node pour l'empreinte.
+  vi.stubGlobal('crypto', webcrypto);
+  const stored = await hashPin('1234');
+  const save = vi.spyOn(StorageManager, 'saveSettings').mockResolvedValue(StorageManager.getSettings());
+  render(<SettingsPanel open onOpenChange={() => {}} currentSettings={{ ...StorageManager.getSettings(), parentalControlEnabled: true, parentalPin: stored }} onSettingsChange={() => {}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+  expect(save).toHaveBeenCalledOnce();
+  // L'empreinte n'est pas renvoyée : elle reste stockée telle quelle.
+  expect(Object.prototype.hasOwnProperty.call(save.mock.calls[0][0], 'parentalPin')).toBe(false);
+  // Aucun dialogue de déverrouillage n'a été demandé.
+  expect(screen.queryByLabelText('Code parental')).toBeNull();
+});
+
+it('exige la saisie d\'un code quand la protection s\'active sans code stocké', async () => {
+  vi.stubGlobal('crypto', webcrypto);
+  const save = vi.spyOn(StorageManager, 'saveSettings').mockResolvedValue(StorageManager.getSettings());
+  render(<SettingsPanel open onOpenChange={() => {}} currentSettings={StorageManager.getSettings()} onSettingsChange={() => {}} />);
+  await userEvent.click(screen.getByLabelText('Verrouiller les groupes adultes derrière un code'));
+  await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+  expect(save).not.toHaveBeenCalled();
+});
+
+it('refuse un nouveau code trop court même après déverrouillage (champ rempli = 4 à 8 chiffres)', async () => {
+  // Scénario de revue : code actuel saisi (déverrouillage), puis « 12 » à la place —
+  // l'ancien code valide ne doit pas autoriser l'enregistrement d'une saisie invalide.
+  vi.stubGlobal('crypto', webcrypto);
+  const stored = await hashPin('1234');
+  const save = vi.spyOn(StorageManager, 'saveSettings').mockResolvedValue(StorageManager.getSettings());
+  render(<SettingsPanel open onOpenChange={() => {}} currentSettings={{ ...StorageManager.getSettings(), parentalControlEnabled: true, parentalPin: stored }} onSettingsChange={() => {}} />);
+  // Changement de code : la porte demande le code actuel.
+  // Le libellé du champ inclut le texte d'aide dans le même <label> : ancre sur le début.
+  const pinField = screen.getByLabelText(/^Code PIN/);
+  await userEvent.type(pinField, '5678');
+  await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
+  expect(screen.getByLabelText('Code parental')).toBeInTheDocument();
+  // Déverrouillage avec le code actuel.
+  await userEvent.type(screen.getByLabelText('Code parental'), '1234');
+  await userEvent.click(screen.getByRole('button', { name: 'Déverrouiller' }));
+  await waitFor(() => expect(screen.queryByLabelText('Code parental')).toBeNull());
+  // Puis code trop court : refusé, rien n'est enregistré.
+  await userEvent.clear(pinField);
+  await userEvent.type(pinField, '12');
   await userEvent.click(screen.getByRole('button', { name: 'Enregistrer' }));
   expect(save).not.toHaveBeenCalled();
 });

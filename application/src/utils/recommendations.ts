@@ -1,6 +1,6 @@
 import { CatalogItem } from '@/utils/xtreamCatalog';
 import { historyScope, PlayHistoryEntry } from '@/utils/idb';
-import { normalizeForCompare, normalizeTitle, titleSimilarity } from '@/utils/titleNormalize';
+import { normalizeForCompare, normalizeTitle, titleSimilarityTokens, titleTokens } from '@/utils/titleNormalize';
 
 export interface Recommendation {
   item: CatalogItem;
@@ -11,6 +11,27 @@ export interface Recommendation {
 const RECENCY_HALF_LIFE_MS = 30 * 24 * 3600 * 1000;
 const CATEGORY_BOOST = 1.5;
 const TITLE_BOOST = 2;
+
+/** Titre normalisé + mots par objet catalogue. Normaliser un catalogue de 20 000 titres
+ * coûte des centaines de ms : le travail ne doit pas se refaire à chaque changement
+ * d'historique. Les entrées meurent avec le catalogue (WeakMap). */
+const itemTitlesCache = new WeakMap<CatalogItem, { name: string; tokens: Set<string> }>();
+
+function catalogTitle(item: CatalogItem): { name: string; tokens: Set<string> } {
+  let cached = itemTitlesCache.get(item);
+  if (!cached) {
+    const name = normalizeForCompare(normalizeTitle(item.name).title);
+    cached = { name, tokens: titleTokens(name) };
+    itemTitlesCache.set(item, cached);
+  }
+  return cached;
+}
+
+/** Au moins un mot partagé : sans mot commun, la similarité vaut 0 (même filtre de mots). */
+function sharesToken(a: Set<string>, b: Set<string>): boolean {
+  for (const token of a) if (b.has(token)) return true;
+  return false;
+}
 
 /**
  * Recommandations « Pour toi » calculées localement à partir de l'historique VOD :
@@ -27,17 +48,29 @@ export function recommendForHistory(
   if (!watched.length) return [];
   const completedIds = new Set(watched.filter(e => e.status === 'completed').map(e => e.channelId));
 
+  // Visionnages normalisés et récence calculés UNE fois : dans la boucle interne, la
+  // normalisation + Math.exp par couple film × visionnage coûtait ~1 M d'appels sur un
+  // catalogue de 20 000 films (gel de plusieurs secondes à chaque recalcul).
+  const watchedMeta = watched.map((w) => {
+    const name = normalizeForCompare(normalizeTitle(w.name as string).title);
+    return {
+      categoryId: w.categoryId,
+      recency: Math.exp(-Math.LN2 * Math.max(0, now - w.ts) / RECENCY_HALF_LIFE_MS),
+      name,
+      tokens: titleTokens(name),
+    };
+  });
+
   const scored: Recommendation[] = [];
   for (const item of items) {
-    const name = normalizeForCompare(normalizeTitle(item.name).title);
+    const { name, tokens } = catalogTitle(item);
     if (!name || completedIds.has(`vod:${options.playlistId}:movie:${item.id}`)) continue;
     let score = 0;
-    for (const w of watched) {
-      const recency = Math.exp(-Math.LN2 * Math.max(0, now - w.ts) / RECENCY_HALF_LIFE_MS);
+    for (const w of watchedMeta) {
       let s = 0;
       if (w.categoryId && item.categoryId === w.categoryId) s += CATEGORY_BOOST;
-      s += titleSimilarity(name, normalizeForCompare(normalizeTitle(w.name as string).title)) * TITLE_BOOST;
-      score += recency * s;
+      if (sharesToken(tokens, w.tokens)) s += titleSimilarityTokens(tokens, w.tokens) * TITLE_BOOST;
+      score += w.recency * s;
     }
     if (score > 0) scored.push({ item, score });
   }

@@ -80,7 +80,9 @@ interface ChannelCardProps {
   /** Horloge partagée de la liste : fait passer la carte à l'émission suivante sans re-rendu du parent. */
   now: Date;
   groups: ChannelGroup[];
-  favorites: string[];
+  /** Favoris en Set : l'identité ne change qu'avec les favoris, pas à chaque rendu du parent —
+   * passer le tableau brut aurait re-rendu toutes les cartes à chaque zap ou frappe. */
+  favoriteSet: Set<string>;
   onChannelSelect: (channel: Channel) => void;
   onNativeChannelSelect: ((channel: Channel) => void) | undefined;
   onMosaic: ((channel: Channel) => void) | undefined;
@@ -94,7 +96,7 @@ interface ChannelCardProps {
  * re-rendu périodique, pour la zone EPG. */
 const ChannelCard = React.memo(function ChannelCard({
   channel, compactMode, showVariants, selectedGroup, isPlaying, isSelected, isFavorite,
-  favoriteNumber, searchTerm, epgData, now, groups, favorites,
+  favoriteNumber, searchTerm, epgData, now, groups, favoriteSet,
   onChannelSelect, onNativeChannelSelect, onMosaic, onRecord, onEditChannel, toggleFavorite,
 }: ChannelCardProps) {
   const variantList = showVariants ? channel.variants || [] : [];
@@ -109,7 +111,7 @@ const ChannelCard = React.memo(function ChannelCard({
         groups: groupsMap,
         totalChannelsBeforeDedup: variantsAll.length
       } as PlaylistInfo;
-      downloadPlaylistAdvanced(pl, favorites, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
+      downloadPlaylistAdvanced(pl, favoriteSet, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
       toast.success('Channel exported');
     } catch {
       toast.error('Export impossible');
@@ -301,7 +303,7 @@ const ChannelCard = React.memo(function ChannelCard({
                     groups: [{ name: channel.group || 'Variants', channels: channel.variants! }],
                     totalChannelsBeforeDedup: channel.variants!.length
                   } as PlaylistInfo;
-                  downloadPlaylistAdvanced(variantsOnly, favorites, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
+                  downloadPlaylistAdvanced(variantsOnly, favoriteSet, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
                   toast.success('Variantes exportées');
                 } catch { toast.error('Export impossible'); }
               }}>Exporter les variantes</ContextMenuItem>
@@ -332,10 +334,10 @@ const ChannelCard = React.memo(function ChannelCard({
                 <button
                   onClick={(e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); toggleFavorite(v, e); }}
                   className="text-muted-foreground hover:text-foreground"
-                  title={favorites.includes(v.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}
-                  aria-label={favorites.includes(v.id) ? `Retirer ${v.name} des favoris` : `Ajouter ${v.name} aux favoris`}
+                  title={favoriteSet.has(v.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                  aria-label={favoriteSet.has(v.id) ? `Retirer ${v.name} des favoris` : `Ajouter ${v.name} aux favoris`}
                 >
-                  {favorites.includes(v.id) ? '♥' : '♡'}
+                  {favoriteSet.has(v.id) ? '♥' : '♡'}
                 </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); onChannelSelect(v); }}
@@ -656,19 +658,21 @@ const ChannelCard = React.memo(function ChannelCard({
         keyboardNavigationEnabled
       );
 
-      // Callback stable (dépend uniquement de `favorites`) : la mémoïsation des cartes en dépend.
+      // Favoris en Set partagé par les cartes : identité stable tant que les favoris ne bougent pas.
+      const favoriteSet = useMemo(() => new Set(favorites), [favorites]);
+      // Derniers favoris par ref : le callback reste identique d'un rendu à l'autre (les cartes
+      // sont mémoïsées) tout en lisant toujours la valeur à jour, même pour des bascules rapprochées.
+      const favoritesRef = useRef(favorites);
+      favoritesRef.current = favorites;
       const toggleFavorite = useCallback(async (channel: Channel, event: React.MouseEvent) => {
         event.stopPropagation();
-        let next: string[];
-        if (favorites.includes(channel.id)) {
-          next = favorites.filter(f => f !== channel.id);
-        } else {
-          next = [...favorites, channel.id];
-        }
+        const current = favoritesRef.current;
+        const next = current.includes(channel.id) ? current.filter(f => f !== channel.id) : [...current, channel.id];
+        favoritesRef.current = next;
         setFavorites(next);
         await saveFavoritesToDB(next);
         window.dispatchEvent(new Event('favorites-updated'));
-      }, [favorites]);
+      }, []);
 
       const groupNames = useMemo(() => {
         const lists = (favoriteLists ?? []).map(l => `fav:${l.id}`);
@@ -827,11 +831,11 @@ const ChannelCard = React.memo(function ChannelCard({
                           isSelected={keyboardNavigationEnabled && selectedIndex === index}
                           isFavorite={favorites.includes(channel.id)}
                           favoriteNumber={favoriteNumbers.get(channel.id)}
-                          searchTerm={searchTerm}
+                          searchTerm={debouncedSearch}
                           epgData={epgData}
                           now={now}
                           groups={groups}
-                          favorites={favorites}
+                          favoriteSet={favoriteSet}
                           onChannelSelect={onChannelSelect}
                           onNativeChannelSelect={onNativeChannelSelect}
                           onMosaic={onMosaic}
@@ -883,11 +887,11 @@ const ChannelCard = React.memo(function ChannelCard({
                               isSelected={keyboardNavigationEnabled && selectedIndex === virtualRow.index}
                               isFavorite={favorites.includes(channel.id)}
                               favoriteNumber={favoriteNumbers.get(channel.id)}
-                              searchTerm={searchTerm}
+                              searchTerm={debouncedSearch}
                               epgData={epgData}
                               now={now}
                               groups={groups}
-                              favorites={favorites}
+                              favoriteSet={favoriteSet}
                               onChannelSelect={onChannelSelect}
                               onNativeChannelSelect={onNativeChannelSelect}
                               onMosaic={onMosaic}

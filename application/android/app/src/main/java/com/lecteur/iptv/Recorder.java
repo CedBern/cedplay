@@ -52,6 +52,8 @@ public class Recorder {
         void onRecordStarted(String fileName);
         /** L'enregistrement s'est arrêté (succès = fichier finalisé et lisible). */
         void onRecordStopped(String fileName, long bytes, boolean success);
+        /** L'enregistrement a été coupé par un incident (réseau, stockage) : le fichier partiel est conservé. */
+        void onRecordInterrupted(String fileName, long bytes);
         /** Échec : message lisible pour l'utilisateur. */
         void onRecordError(String message);
     }
@@ -171,6 +173,11 @@ public class Recorder {
         main.post(() -> { if (listener != null) listener.onRecordStopped(name, bytes, success); });
     }
 
+    /** Incident en cours d'enregistrement (réseau, stockage) : le fichier partiel est conservé mais signalé comme tronqué. */
+    private void postInterrupted(String name, long bytes) {
+        main.post(() -> { if (listener != null) listener.onRecordInterrupted(name, bytes); });
+    }
+
     private void postError(String message) {
         main.post(() -> { if (listener != null) listener.onRecordError(message); });
     }
@@ -186,6 +193,7 @@ public class Recorder {
         byte[] buffer = new byte[64 * 1024];
         long total = 0;
         boolean opened = false;
+        boolean interrupted = false;
         try (OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
             if (os == null) { postError("ouverture du fichier impossible"); return; }
             opened = true;
@@ -197,15 +205,26 @@ public class Recorder {
                     os.write(buffer, 0, read);
                     total += read;
                 }
-            } catch (Exception ignored) {
-                // Coupure réseau ou arrêt volontaire : les octets déjà écrits forment un .ts lisible.
+            } catch (Exception e) {
+                // Coupure réseau ou écriture impossible : les octets déjà écrits forment un .ts
+                // lisible. `stop()` a posé running=false AVANT de fermer la source : running
+                // encore vrai ici signifie un incident, pas un arrêt demandé.
+                interrupted = running.get();
             }
             os.flush();
         } finally {
             closeQuietly(source);
             activeSource = null;
             running.set(false);
-            if (opened) postStopped(name, total);
+            if (interrupted) {
+                if (total == 0) {
+                    try { out.delete(); } catch (Exception ignored) {}
+                    postError("enregistrement interrompu avant la première donnée (réseau ou stockage)");
+                } else postInterrupted(name, total);
+            } else if (opened) {
+                if (total == 0) { try { out.delete(); } catch (Exception ignored) {} } // arrêt avant la première donnée : pas de fichier vide
+                postStopped(name, total);
+            }
         }
     }
 
@@ -461,8 +480,13 @@ public class Recorder {
         if (error != null && total == 0) {
             try { out.delete(); } catch (Exception ignored) {}
             postError(error);
+        } else if (error != null) {
+            // Incident en cours d'enregistrement : ce qui a été capturé reste lisible,
+            // mais l'utilisateur doit savoir que le fichier est tronqué.
+            postInterrupted(name, total);
         } else {
-            // Un arrêt (volontaire ou sur incident) garde ce qui a été capturé : le fichier est lisible.
+            // Un arrêt volontaire garde ce qui a été capturé : le fichier est lisible.
+            if (total == 0) { try { out.delete(); } catch (Exception ignored) {} } // arrêt avant la première donnée : pas de fichier vide
             postStopped(name, total);
         }
     }

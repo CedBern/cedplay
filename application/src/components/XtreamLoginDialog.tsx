@@ -19,6 +19,7 @@ import { Progress } from '@/components/ui/progress';
 import type { PlaylistInfo } from '@/types/channel';
 import { fetchXtreamLimits, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { fetchLiveChannels, saveLiveSelection } from '@/utils/xtreamLive';
+import { httpGetJson } from '@/utils/userAgent';
 
 interface Category {
   category_id: string;
@@ -75,22 +76,21 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
       const url = isNative
         ? `${cleanServer}/player_api.php?username=${encodeURIComponent(cleanUser)}&password=${encodeURIComponent(cleanPass)}&action=get_live_categories`
         : `${getProxyBase()}/xtream/categories?server=${encodeURIComponent(cleanServer)}&username=${encodeURIComponent(cleanUser)}&password=${encodeURIComponent(cleanPass)}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        let errData: { error?: string; detail?: string; hints?: string[] } = {};
-        try {
-          errData = await res.json();
-        } catch { /* Une réponse HTTP non JSON conserve le message générique. */ }
+      // Android : requête native (httpGetJson) — le webview bloque un fetch direct
+      // vers un panneau Xtream qui n'envoie pas d'en-têtes CORS.
+      const { ok, status, data } = await httpGetJson(url);
+      if (!ok) {
+        const errData: { error?: string; detail?: string; hints?: string[] } =
+          data && typeof data === 'object' && !Array.isArray(data) ? data as { error?: string; detail?: string; hints?: string[] } : {};
         const errorMsg = errData.error
           ? `${errData.error}${errData.detail ? ` (${errData.detail})` : ''}`
-          : `Erreur ${isNative ? 'serveur' : 'proxy/serveur'} (${res.status})`;
+          : `Erreur ${isNative ? 'serveur' : 'proxy/serveur'} (${status})`;
         setLastError({
           message: errorMsg,
           ...(errData.hints ? { hints: errData.hints } : {}),
         });
         throw new Error(errorMsg);
       }
-      const data = await res.json();
       if (!Array.isArray(data)) {
         throw new Error('Réponse inattendue du fournisseur. Vérifiez vos identifiants.');
       }

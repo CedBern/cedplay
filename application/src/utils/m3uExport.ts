@@ -46,7 +46,7 @@ function buildExtinf(channel: Channel, options: AdvancedExportOptions, favorites
   ];
 }
 
-export function playlistToM3UAdvanced(playlist: PlaylistInfo, favorites: string[], options: AdvancedExportOptions = {}): string {
+export function playlistToM3UAdvanced(playlist: PlaylistInfo, favorites: Iterable<string>, options: AdvancedExportOptions = {}): string {
   const lines: string[] = ['#EXTM3U'];
   const favoritesSet = new Set(favorites);
   for (const ch of playlist.channels) {
@@ -64,7 +64,7 @@ export function playlistToM3UAdvanced(playlist: PlaylistInfo, favorites: string[
   return lines.join('\n');
 }
 
-export function downloadPlaylistAdvanced(playlist: PlaylistInfo, favorites: string[], options: AdvancedExportOptions) {
+export function downloadPlaylistAdvanced(playlist: PlaylistInfo, favorites: Iterable<string>, options: AdvancedExportOptions) {
   const content = playlistToM3UAdvanced(playlist, favorites, options);
   const blob = new Blob([content], { type: 'audio/x-mpegurl' });
   const a = document.createElement('a');

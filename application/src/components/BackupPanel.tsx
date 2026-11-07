@@ -59,7 +59,7 @@ export function BackupPanel({ onRestored, className, showLabel = false }: { onRe
       <DialogContent><DialogHeader><DialogTitle>Sauvegarder et restaurer</DialogTitle>
         <DialogDescription>Listes, favoris, réglages et historique dans un fichier sur ton appareil.</DialogDescription>
       </DialogHeader>
-      <p className="text-sm">Ce fichier contient les adresses de tes flux, parfois leurs identifiants. Garde-le privé.</p>
+      <p className="text-sm">Ce fichier contient tes listes, tes favoris, tes réglages — et, si tu en as enregistré, tes identifiants Xtream et tes clés API en clair. Garde-le privé (disque chiffré, coffre-fort de mots de passe).</p>
       <Button disabled={busy} onClick={download}>Télécharger la sauvegarde</Button>
       <label className="text-sm space-y-2">Ouvrir une sauvegarde JSON
         <input ref={input} type="file" accept=".json,application/json" disabled={busy} className="block w-full" onChange={e => void read(e.target.files?.[0])} />

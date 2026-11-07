@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
 vi.mock('@/utils/storage', () => ({
   StorageManager: {
     getSettings: () => state.settings,
+    getCachedSettings: () => state.settings,
     loadSettingsAsync: async () => state.settings,
     getLastPlaylist: () => 'Ma liste',
     setLastPlaylist: vi.fn(),

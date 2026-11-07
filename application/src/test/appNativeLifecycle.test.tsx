@@ -6,7 +6,7 @@ const native = vi.hoisted(() => ({ addListener: vi.fn() }));
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => true } }));
 vi.mock('@capacitor/app', () => ({ App: { addListener: native.addListener } }));
 vi.mock('@/pages/Index', () => ({ default: () => <div>Accueil test</div> }));
-vi.mock('@/utils/storage', () => ({ StorageManager: { getSettings: () => ({ theme: 'dark' }), loadSettingsAsync: async () => ({ theme: 'dark', telemetryPersistence: false }) } }));
+vi.mock('@/utils/storage', () => ({ StorageManager: { getSettings: () => ({ theme: 'dark' }), getCachedSettings: () => ({ theme: 'dark' }), loadSettingsAsync: async () => ({ theme: 'dark', telemetryPersistence: false }) } }));
 afterEach(cleanup);
 
 it('retire aussi les écouteurs Android dont l’inscription se termine après un démontage', async () => {

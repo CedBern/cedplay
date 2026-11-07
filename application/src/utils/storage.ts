@@ -1,4 +1,5 @@
 import { getSettingsFromDB, saveSettingsToDB, PersistedSettings, pushSettingsChangeLogEntry, updateSettingsMigrationStats, type SettingsChangeLogEntry } from '@/utils/idb';
+import { redactSetting } from '@/utils/redact';
 import { z } from 'zod';
 
 const STORAGE_KEYS = {
@@ -10,6 +11,10 @@ const STORAGE_KEYS = {
 
 // Les jetons de lecture TMDB sont plus longs que les anciennes clés API v3.
 const MAX_TMDB_CREDENTIAL_LENGTH = 4096;
+
+// Empreinte PIN « sha256:<sel 32 hex>:<SHA-256 64 hex> » = 104 caractères ;
+// l'ancien code en clair fait 4 à 8 chiffres. La limite basse (20) tronquait l'empreinte.
+const MAX_PARENTAL_PIN_LENGTH = 128;
 
 export interface AppSettings {
   volume: number;
@@ -32,7 +37,7 @@ export interface AppSettings {
   openSubtitlesApiKey?: string; // clé API OpenSubtitles v3 optionnelle
   subdlApiKey?: string; // clé API SubDL optionnelle
   parentalControlEnabled?: boolean; // verrouille les groupes adultes derrière un code
-  parentalPin?: string; // code PIN du contrôle parental (4 à 8 chiffres)
+  parentalPin?: string; // code PIN parental (4 à 8 chiffres) ou empreinte hachée « sha256:<sel>:<hex> »
   interfaceMode?: 'auto' | 'tv' | 'mobile'; // interface télécommande (TV) ou tactile ; auto = détectée
   tvPreview?: boolean; // ancien réglage aperçu (on/off) ; conservé pour la migration
   tvPreviewMode?: 'auto' | 'manual' | 'off'; // aperçu vidéo : au survol, via le bouton « Aperçu », ou désactivé
@@ -68,7 +73,7 @@ const appSettingsSchema = z.object({
   openSubtitlesApiKey: z.string().max(200).optional(),
   subdlApiKey: z.string().max(200).optional(),
   parentalControlEnabled: z.boolean().optional(),
-  parentalPin: z.string().max(20).optional(),
+  parentalPin: z.string().max(MAX_PARENTAL_PIN_LENGTH).optional(),
   interfaceMode: z.enum(['auto', 'tv', 'mobile']).optional(),
   tvPreview: z.boolean().optional(),
   tvPreviewMode: z.enum(['auto', 'manual', 'off']).optional(),
@@ -239,7 +244,8 @@ export class StorageManager {
     // Compute diff for changelog (only keys provided that changed)
     const diff: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(settings) as [keyof AppSettings, unknown][]) {
-      if (v !== undefined && current[k] !== merged[k]) diff[k] = merged[k];
+      // Clés API et PIN parental : seule l'occurrence du changement est journalisée, jamais la valeur.
+      if (v !== undefined && current[k] !== merged[k]) diff[k] = redactSetting(k as string, merged[k]);
     }
     // If nothing actually changed, avoid unnecessary write + changelog entry
     if (Object.keys(diff).length === 0) {
@@ -352,7 +358,7 @@ export class StorageManager {
       openSubtitlesApiKey: typeof s.openSubtitlesApiKey === 'string' ? String(s.openSubtitlesApiKey).slice(0, 200) : '',
       subdlApiKey: typeof s.subdlApiKey === 'string' ? String(s.subdlApiKey).slice(0, 200) : '',
       parentalControlEnabled: coerceBool(s.parentalControlEnabled, false),
-      parentalPin: typeof s.parentalPin === 'string' ? String(s.parentalPin).slice(0, 20) : '',
+      parentalPin: typeof s.parentalPin === 'string' ? String(s.parentalPin).slice(0, MAX_PARENTAL_PIN_LENGTH) : '',
       proxyUrl: typeof s.proxyUrl === 'string' ? String(s.proxyUrl).slice(0, 300) : '',
       tvPreview: coerceBool(s.tvPreview, base.tvPreview as boolean),
       tvPreviewMode: s.tvPreviewMode === 'manual' || s.tvPreviewMode === 'off' || s.tvPreviewMode === 'auto' ? s.tvPreviewMode : 'auto',

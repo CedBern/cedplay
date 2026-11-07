@@ -135,6 +135,9 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, [watchlistForKind]);
 
   const [historyRevision, setHistoryRevision] = useState(0);
+  // Dernier ensemble d'œuvres qualifiées vu par « Pour toi » (voir l'effet d'historique) :
+  // un tick de progression qui ne change pas cet ensemble ne doit pas replacer l'état.
+  const historySignatureRef = useRef('');
   useEffect(() => {
     const update = () => setHistoryRevision(r => r + 1);
     window.addEventListener('vod-history-updated', update);
@@ -143,7 +146,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   // Libellés de reprise : la fiche éclair les affiche à chaque déplacement de grille —
   // lecture localStorage mise en cache par titre, invalidée quand l'historique bouge
   // ou au retour de lecture (focus rendu à la fenêtre).
-  const progressCache = useRef(new Map<string, string>());
+  const progressCache = useRef(new Map<string, { label: string; saved: boolean }>());
   useEffect(() => {
     const invalidate = () => progressCache.current.clear();
     window.addEventListener('vod-history-updated', invalidate);
@@ -162,7 +165,18 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     let cancelled = false;
     void getPlayHistory().then(async (h) => {
       if (cancelled) return;
-      setVodHistory(h);
+      // « Pour toi » ne dépend que des œuvres qualifiées (terminées ou ≥ 1 min, avec un
+      // titre) : le tick de progression d'une lecture en cours (position avancée) ne
+      // change pas cet ensemble — ne pas replacer l'historique ni rescorcer le catalogue.
+      const signature = h.map(historyScope)
+        .filter(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && !!e.name && (e.status === 'completed' || (e.positionMs || 0) >= 60000))
+        .map(e => `${e.channelId}:${e.status}`)
+        .sort()
+        .join('|');
+      if (signature !== historySignatureRef.current) {
+        historySignatureRef.current = signature;
+        setVodHistory(h);
+      }
       if (!h.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && (e.status === 'completed' || (e.positionMs || 0) >= 60000))) return;
       const cached = fullCatalogCache.get(catalogCacheKey);
       if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) { setAllMovies(cached.items); return; }
@@ -282,17 +296,20 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     return searchIndex.filter(({ lower }) => lower.includes(q)).map(({ item }) => item);
   }, [searchIndex, debouncedSearch]);
   const mediaKey = (id: string) => `${playlist.id}:${kind}:${id}`;
-  const progressLabel = useCallback((id: string) => {
+  // Reprise lue une seule fois par titre et partagée par le libellé ET le bouton « Depuis le
+  // début » : la fiche interroge le film et chaque épisode de la saison à chaque rendu.
+  const cachedProgress = useCallback((id: string): { label: string; saved: boolean } => {
     const cache = progressCache.current;
     const cached = cache.get(id);
-    if (cached !== undefined) return cached;
+    if (cached) return cached;
     const saved = readVodProgress(mediaKey(id));
-    const label = saved ? `Reprendre à ${Math.floor(saved.positionMs / 60000)} min` : 'Regarder';
-    cache.set(id, label);
-    return label;
+    const entry = { label: saved ? `Reprendre à ${Math.floor(saved.positionMs / 60000)} min` : 'Regarder', saved: !!saved };
+    cache.set(id, entry);
+    return entry;
     // mediaKey ne dépend que de playlist.id et kind, stables pour la vie du composant.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const progressLabel = useCallback((id: string) => cachedProgress(id).label, [cachedProgress]);
   const play = async (id: string, ext: string, title: string, restart = false) => {
     if (!account || busy) return;
     try {
@@ -423,8 +440,14 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     });
   }, [playing, tvMode]);
 
-  // Réglages (sous-titres) : relus à chaque montage du panneau.
-  const settings = useMemo(() => StorageManager.getSettings(), []);
+  // Réglages (sous-titres) : la clé locale `iptv_settings` n'est plus écrite depuis la
+  // migration vers IndexedDB — partir du cache puis charger les vrais réglages au montage.
+  const [settings, setSettings] = useState(() => StorageManager.getCachedSettings());
+  useEffect(() => {
+    let cancelled = false;
+    void StorageManager.loadSettingsAsync().then(s => { if (!cancelled) setSettings(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Mode TV : actions de l'écran télécommande (TvVodScreen) ; fiches et lecture restent partagées.
   const handleSelectCategory = useCallback((id: string) => { setCategory(id); setShowWatchlistOnly(false); }, []);
@@ -528,10 +551,10 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         onSubtitleReady={setCurrentSub}
       />
     )}
-    {kind === 'movie' && selected && <div className="flex flex-wrap gap-2"><Button data-remote-start disabled={busy || !(details?.extension || selected.extension)} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name)}>{progressLabel(selected.id)}</Button>{readVodProgress(mediaKey(selected.id)) && <Button variant="secondary" disabled={busy} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name, true)}>Depuis le début</Button>}</div>}
+    {kind === 'movie' && selected && <div className="flex flex-wrap gap-2"><Button data-remote-start disabled={busy || !(details?.extension || selected.extension)} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name)}>{progressLabel(selected.id)}</Button>{cachedProgress(selected.id).saved && <Button variant="secondary" disabled={busy} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name, true)}>Depuis le début</Button>}</div>}
     {kind === 'movie' && details && !details.extension && !selected?.extension && <p className="text-amber-300">Le fournisseur n’a pas indiqué de format de lecture.</p>}
     {kind === 'series' && details && <div className="space-y-3">
-      {details.episodes.length === 0 ? <p>Aucun épisode fourni pour cette série.</p> : <><select aria-label="Saison" className="w-full bg-neutral-900 p-3 rounded-md" value={season} onChange={e => setSeason(e.target.value)}>{[...new Set(details.episodes.map(e => e.season))].map(s => <option key={s} value={s}>Saison {s}</option>)}</select><div className="space-y-2">{details.episodes.filter(e => e.season === season).map((e, idx) => <div key={e.id} className="bg-white/5 rounded-lg p-3 space-y-2"><p>{e.number}. {e.name}</p>{e.plot && <p className="text-xs text-neutral-400 line-clamp-3">{e.plot}</p>}<div className="flex flex-wrap gap-2">{settings.subtitlesEnabled !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setCurrentSub(null); setSubtitleEpisodeId(e.id); }}>Sous-titres épisode {e.number}</Button>}<Button size="sm" disabled={busy || !e.extension} {...(idx === 0 ? { 'data-remote-start': true } : {})} onClick={() => void play(e.id, e.extension, e.name)}>{progressLabel(e.id)}</Button>{readVodProgress(mediaKey(e.id)) && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void play(e.id, e.extension, e.name, true)}>Depuis le début</Button>}</div>{!e.extension && <p className="text-xs text-amber-300">Format non fourni.</p>}</div>)}</div></>}
+      {details.episodes.length === 0 ? <p>Aucun épisode fourni pour cette série.</p> : <><select aria-label="Saison" className="w-full bg-neutral-900 p-3 rounded-md" value={season} onChange={e => setSeason(e.target.value)}>{[...new Set(details.episodes.map(e => e.season))].map(s => <option key={s} value={s}>Saison {s}</option>)}</select><div className="space-y-2">{details.episodes.filter(e => e.season === season).map((e, idx) => <div key={e.id} className="bg-white/5 rounded-lg p-3 space-y-2"><p>{e.number}. {e.name}</p>{e.plot && <p className="text-xs text-neutral-400 line-clamp-3">{e.plot}</p>}<div className="flex flex-wrap gap-2">{settings.subtitlesEnabled !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setCurrentSub(null); setSubtitleEpisodeId(e.id); }}>Sous-titres épisode {e.number}</Button>}<Button size="sm" disabled={busy || !e.extension} {...(idx === 0 ? { 'data-remote-start': true } : {})} onClick={() => void play(e.id, e.extension, e.name)}>{progressLabel(e.id)}</Button>{cachedProgress(e.id).saved && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void play(e.id, e.extension, e.name, true)}>Depuis le début</Button>}</div>{!e.extension && <p className="text-xs text-amber-300">Format non fourni.</p>}</div>)}</div></>}
     </div>}
   </DialogContent></Dialog>;
   const playingDialog = <Dialog open={!!playing} onOpenChange={open => { if (!open) setPlaying(null); }}><DialogContent className="bg-neutral-950 text-white sm:max-w-4xl"><DialogHeader><DialogTitle>Lecture</DialogTitle><DialogDescription>Pause, déplacement et reprise de lecture.</DialogDescription></DialogHeader>{playing && <WebVodPlayer key={playing.url} {...playing} />}</DialogContent></Dialog>;

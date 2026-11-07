@@ -50,6 +50,17 @@ describe('recommendForHistory', () => {
     const recs = recommendForHistory([watched('Saga origine', '12')], items, { playlistId: '1', nowMs: now, limit: 5 });
     expect(recs).toHaveLength(5);
   });
+
+  it('renvoie le même résultat au second appel (cache de normalisation par objet)', () => {
+    const items = [item('1', 'Fast and Furious 8', '12'), item('2', 'Titanic', '99'), item('3', 'Les Évadés FRENCH 1080p', '12')];
+    const history = [watched('Fast and Furious 10', '12')];
+    const first = recommendForHistory(history, items, { playlistId: '1', nowMs: now });
+    const second = recommendForHistory(history, items, { playlistId: '1', nowMs: now });
+    expect(second.map((r) => [r.item.id, r.score])).toEqual(first.map((r) => [r.item.id, r.score]));
+    // La porte « mot commun » ne doit pas faire disparaître les recommandations de catégorie seule.
+    const categoryOnly = recommendForHistory(history, [item('9', 'Aucun mot commun ici', '12')], { playlistId: '1', nowMs: now });
+    expect(categoryOnly.map((r) => r.item.id)).toEqual(['9']);
+  });
 });
 
 it('ignore séries, autres listes et simples tentatives de lancement', () => {

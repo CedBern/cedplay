@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+// Signature release. Décision documentée (audit 2026-11-07, item 16) : l'APK personnel
+// reste signé avec le certificat de débogage (~/.android/debug.keystore) pour que chaque
+// version s'installe par-dessus la précédente sans réinstaller ni perdre les données.
+// SAUVEGARDE : si ce keystore debug est perdu, plus aucune mise à jour n'est possible
+// sans désinstallation — en garder une copie en lieu sûr.
+// Pour passer à un keystore dédié plus tard : créer android/keystore.properties (hors git) :
+//   storeFile=<chemin du .keystore, relatif à android/>
+//   storePassword=…  keyAlias=…  keyPassword=…
+// et la configuration ci-dessous bascule automatiquement (aucune modification du fichier).
+def keystoreProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+def hasReleaseKeystore = keystorePropsFile.exists()
+if (hasReleaseKeystore) keystorePropsFile.withInputStream { keystoreProps.load(it) }
+
 android {
     namespace "com.lecteur.iptv"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +21,8 @@ android {
         applicationId "com.lecteur.iptv"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 36
-        versionName "1.11.7"
+        versionCode 40
+        versionName "1.11.11"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,11 +30,21 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             // APK personnel : même certificat de débogage pour mettre à jour sans réinstaller,
             // minification R8 pour un APK plus léger et plus rapide à démarrer.
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'

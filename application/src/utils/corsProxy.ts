@@ -1,9 +1,37 @@
-// Legacy API name: only the supplied server is contacted.
+// Import de liste par adresse : web = fetch direct (le relais reste facultatif et
+// public ; sans en-têtes CORS du serveur, l'import échoue avec un message clair).
+// Android = requête native CapacitorHttp : ni CORS ni mixed content, la plupart des
+// serveurs M3U sont donc accessibles sans téléchargement manuel du fichier.
+
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { getActiveUserAgent } from '@/utils/userAgent';
+
 export class CORSProxy {
   static async fetchWithProxy(url: string, options: RequestInit = {}): Promise<string> {
     let target: URL;
     try { target = new URL(url); } catch { throw new Error('Adresse de playlist invalide.'); }
     if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Utilisez une adresse HTTP ou HTTPS.');
+    if (Capacitor.isNativePlatform()) {
+      try {
+        // request() et non get() : l'implémentation Android de get() force GET,
+        // y compris quand options.method vaut 'HEAD' (testConnectivity).
+        const response = await CapacitorHttp.request({
+          url: target.href,
+          method: (options.method as 'GET' | 'HEAD') ?? 'GET',
+          headers: { 'User-Agent': getActiveUserAgent() },
+          responseType: 'text',
+          connectTimeout: 15000,
+          readTimeout: 60000,
+        });
+        if (response.status < 200 || response.status >= 300) {
+          throw new Error(`Import impossible : HTTP ${response.status}. Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.`);
+        }
+        return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('Import impossible : HTTP')) throw err;
+        throw new Error('Import impossible (connexion ou accès). Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.');
+      }
+    }
     if (this.isMixedContentIssue(url)) throw new Error('Import HTTP impossible depuis une page HTTPS. Téléchargez puis importez le fichier M3U.');
     const controller = new AbortController();
     const abort = () => controller.abort();

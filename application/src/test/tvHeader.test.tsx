@@ -16,7 +16,7 @@ const fixture = vi.hoisted(() => {
 });
 vi.mock('@/utils/storage', () => {
   const settings = { theme: 'dark', autoLoadLastPlaylist: true, autoplay: false, keyboardNavigation: false, interfaceMode: 'tv' };
-  return { StorageManager: { getSettings: () => settings, loadSettingsAsync: async () => settings, getLastPlaylist: () => 'Liste test', setLastPlaylist: vi.fn() } };
+  return { StorageManager: { getSettings: () => settings, getCachedSettings: () => settings, loadSettingsAsync: async () => settings, getLastPlaylist: () => 'Liste test', setLastPlaylist: vi.fn() } };
 });
 vi.mock('@/utils/idb', () => ({
   getPlaylistsFromDB: async () => [fixture.playlist], getLastChannelForPlaylist: async () => fixture.channel.id,
