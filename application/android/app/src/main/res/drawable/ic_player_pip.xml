@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icône du lecteur (tracé Lucide, licence ISC), teintée à l'exécution. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M21,9 V6 A2,2 0 0,0 19,4 H4 A2,2 0 0,0 2,6 V16 C2,17.1 2.9,18 4,18 H8" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000" />
+    <path android:pathData="M14,13 H20 A2,2 0 0,1 22,15 V18 A2,2 0 0,1 20,20 H14 A2,2 0 0,1 12,18 V15 A2,2 0 0,1 14,13 Z" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000" />
+</vector>

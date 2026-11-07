@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 @layer base {
-  /* « Salle obscure » — thème clair : papier chaud, accent ambre foncé
-     (lisible en texte sur fond clair). */
+  /* « Salle obscure » — thème clair : papier chaud, orange du logo assombri
+     pour le texte (#C7401F, lisible sur fond clair) ; surfaces en #FF5A36. */
   :root {
     --background: 40 20% 96%;
     --foreground: 240 8% 9%;
@@ -15,7 +15,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 8% 9%;
 
-    --primary: 35 79% 34%;
+    --primary: 12 73% 45%;        /* #C7401F Orange du logo, texte */
     --primary-foreground: 0 0% 100%;
 
     --secondary: 40 14% 91%;
@@ -27,31 +27,32 @@
     --accent: 40 12% 89%;
     --accent-foreground: 240 8% 9%;
 
-    /* Rouge réservé au direct et à l'enregistrement. */
+    /* Rouge réservé aux erreurs et suppressions ; le direct prend l'orange du logo. */
     --destructive: 4 74% 49%;
     --destructive-foreground: 0 0% 100%;
-    --live: 4 74% 49%;
+    --live: 11 100% 61%;
 
     --border: 40 10% 86%;
     --input: 40 10% 84%;
-    --ring: 35 79% 34%;
+    --ring: 12 73% 45%;
 
     --radius: 1rem;
 
     --sidebar-background: 40 20% 97%;
     --sidebar-foreground: 240 8% 9%;
-    --sidebar-primary: 35 79% 34%;
+    --sidebar-primary: 12 73% 45%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 40 14% 91%;
     --sidebar-accent-foreground: 240 8% 9%;
     --sidebar-border: 40 10% 86%;
-    --sidebar-ring: 35 79% 34%;
+    --sidebar-ring: 12 73% 45%;
 
     color-scheme: light;
   }
 
-  /* « Salle obscure » — thème sombre : couches de graphite, un seul accent
-     ambre, aucun flou ni ombre (léger pour la WebView Android). */
+  /* « Salle obscure » — thème sombre : couches de graphite, un seul accent,
+     l'orange du logo (aussi couleur du direct), aucun flou ni ombre (léger pour
+     la WebView Android). Texte sur orange : noir (le blanc n'a que 3,1:1). */
   .dark {
     --background: 240 8% 5%;      /* #0B0B0D Fond   */
     --foreground: 40 20% 94%;     /* #F3F1ED Texte  */
@@ -62,8 +63,8 @@
     --popover: 240 8% 10%;
     --popover-foreground: 40 20% 94%;
 
-    --primary: 37 84% 64%;        /* #F0B455 Ambre  */
-    --primary-foreground: 36 63% 6%;
+    --primary: 11 100% 61%;       /* #FF5A36 Logo   */
+    --primary-foreground: 240 6% 5%;
 
     --secondary: 240 8% 12%;      /* #1C1C21 Élevé  */
     --secondary-foreground: 40 20% 94%;
@@ -74,24 +75,24 @@
     --accent: 240 8% 16%;         /* #26262D Piste  */
     --accent-foreground: 40 20% 94%;
 
-    --destructive: 6 100% 65%;    /* #FF5A4A Direct */
+    --destructive: 358 75% 59%;   /* #E5484D Erreur */
     --destructive-foreground: 0 0% 100%;
-    --live: 6 100% 65%;
+    --live: 11 100% 61%;          /* #FF5A36 Direct */
 
     --border: 240 6% 14%;
     --input: 240 6% 18%;
-    --ring: 37 84% 64%;
+    --ring: 11 100% 61%;
 
     --radius: 1rem;
 
     --sidebar-background: 240 8% 6%;
     --sidebar-foreground: 40 20% 90%;
-    --sidebar-primary: 37 84% 64%;
-    --sidebar-primary-foreground: 36 63% 6%;
+    --sidebar-primary: 11 100% 61%;
+    --sidebar-primary-foreground: 240 6% 5%;
     --sidebar-accent: 240 8% 12%;
     --sidebar-accent-foreground: 40 20% 94%;
     --sidebar-border: 240 6% 14%;
-    --sidebar-ring: 37 84% 64%;
+    --sidebar-ring: 11 100% 61%;
 
     color-scheme: dark;
   }

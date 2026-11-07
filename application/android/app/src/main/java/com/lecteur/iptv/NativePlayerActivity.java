@@ -37,7 +37,10 @@ import android.view.Choreographer;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.widget.HorizontalScrollView;
-import androidx.appcompat.app.AlertDialog;
+import android.widget.ImageButton;
+import android.content.res.ColorStateList;
+import androidx.media3.common.ForwardingPlayer;
+import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Format;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.Tracks;
@@ -153,7 +156,6 @@ public class NativePlayerActivity extends AppCompatActivity {
     private boolean pipActive = false;
     private final SimpleDateFormat hourFormat = new SimpleDateFormat("HH:mm", Locale.FRANCE);
     /** Bouton recevant la sélection télécommande à l'ouverture des commandes (aucun effet de bord sur la lecture). */
-    private Button btnAudio;
     /** Ligne de programme en cours par chaîne : le panneau relit chaque ligne à chaque défilement,
      *  le cache évite de refaire le scan EPG et un format d'heure à chaque bind. */
     private final SparseArray<ProgramLine> programLineCache = new SparseArray<>();
@@ -168,17 +170,56 @@ public class NativePlayerActivity extends AppCompatActivity {
         boolean hasProgram;
     }
 
-    // Palette « Salle obscure ».
-    private static final int C_BG = Color.parseColor("#0B0B0D");
-    private static final int C_CARD = Color.parseColor("#141417");
-    private static final int C_ELEV = Color.parseColor("#1C1C21");
-    private static final int C_TRACK = Color.parseColor("#26262D");
-    private static final int C_TEXT = Color.parseColor("#F3F1ED");
-    private static final int C_MUTED = Color.parseColor("#A7A39C");
-    private static final int C_DIM = Color.parseColor("#8A8680");
-    private static final int C_ACCENT = Color.parseColor("#F0B455");
-    private static final int C_ACCENT_FG = Color.parseColor("#1A1206");
-    private static final int C_LIVE = Color.parseColor("#FF5A4A");
+    // Palette « Salle obscure » : un seul accent, l'orange du logo, qui sert aussi au direct.
+    private static final int C_BG = PlayerOption.C_BG;
+    private static final int C_CARD = PlayerOption.C_CARD;
+    private static final int C_ELEV = PlayerOption.C_ELEV;
+    private static final int C_TRACK = PlayerOption.C_TRACK;
+    private static final int C_TEXT = PlayerOption.C_TEXT;
+    private static final int C_MUTED = PlayerOption.C_MUTED;
+    private static final int C_DIM = PlayerOption.C_DIM;
+    private static final int C_ACCENT = PlayerOption.C_ACCENT;
+    private static final int C_LIVE = PlayerOption.C_ACCENT;
+    /** Vitesses proposées (films et séries). */
+    private static final float[] SPEEDS = { 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f };
+    /** Retard sur le direct à partir duquel le lecteur l'affiche et propose d'y revenir. */
+    private static final long LIVE_DELAY_SHOWN_MS = 3_000;
+
+    /** Interface télécommande (TV, box) : bandeau en rangées en bas, pas de barre en haut. */
+    private boolean tvUi;
+    private TvBand tvBand;
+    private OptionsSheet optionsSheet;
+    /** Dernière commande du bandeau utilisée : le focus y revient à la réouverture. */
+    private String lastUsedKey;
+    /** Bandeau d'infos seul, sans commandes ni focus, après un zapping (TV). */
+    private boolean infoOnly;
+    private LinearLayout seekRow;
+    private ProgressBar seekBar;
+    private TextView seekElapsed, seekRemaining;
+    private TextView topSubtitle;
+    private ImageButton btnOptions;
+    private LinearLayout centerControls;
+    private ImageButton btnCenterPause;
+    private Button btnBackToLive;
+    private TextView cornerBadge;
+    private float playbackSpeed = 1f;
+    /** Orientation sur téléphone : 0 automatique, 1 paysage, 2 verrouillée. */
+    private int orientationMode;
+    // ── Pause du direct ──
+    /** Début de la pause en cours (horloge système), 0 en lecture. */
+    private long pausedAtMs;
+    /** Retard accumulé sur le direct par les pauses précédentes. */
+    private long liveDelayMs;
+    /** Le flux a lâché pendant la pause : la reprise repartira au direct. */
+    private boolean liveLostWhilePaused;
+    private final Handler tickHandler = new Handler(Looper.getMainLooper());
+    private final Runnable ticker = new Runnable() {
+        @Override public void run() {
+            updateInfoBar();
+            updateCornerBadge();
+            if (needsTicker()) tickHandler.postDelayed(this, 1000);
+        }
+    };
     private TextView tvTitle;
     private boolean vod;
     private boolean playWhenReady = true;
@@ -284,7 +325,15 @@ public class NativePlayerActivity extends AppCompatActivity {
         streamUrl = getIntent().getStringExtra(EXTRA_URL);
         streamTitle = getIntent().getStringExtra(EXTRA_TITLE);
         vod = getIntent().getBooleanExtra("vod", false);
-        channelIndex = savedInstanceState != null ? savedInstanceState.getInt("channelIndex", -1) : getIntent().getIntExtra("channelIndex", -1);
+        // La page transmet le mode d'interface choisi (Auto, TV, Mobile) ; sinon, détection.
+        tvUi = getIntent().hasExtra("tvUi") ? getIntent().getBooleanExtra("tvUi", false) : detectTelevision();
+        orientationMode = vod && !tvUi ? 1 : 0;
+        if (savedInstanceState != null) {
+            playbackSpeed = savedInstanceState.getFloat("playbackSpeed", 1f);
+            orientationMode = savedInstanceState.getInt("orientationMode", orientationMode);
+            lastUsedKey = savedInstanceState.getString("lastUsedKey");
+        }
+        channelIndex =savedInstanceState != null ? savedInstanceState.getInt("channelIndex", -1) : getIntent().getIntExtra("channelIndex", -1);
         String path = getIntent().getStringExtra("channelFile");
         if (path != null) {
             try {
@@ -401,8 +450,17 @@ public class NativePlayerActivity extends AppCompatActivity {
         );
         pvParams.gravity = Gravity.CENTER;
         playerView.setLayoutParams(pvParams);
-        playerView.setUseController(vod);
-        if (vod) { playerView.setShowSubtitleButton(true); playerView.setControllerShowTimeoutMs(3500); }
+        // Téléphone, films et séries : contrôleur Media3 (barre de temps, lecture). Ses propres
+        // réglages (vitesse, pistes) sont retirés : ils passent par le panneau Options. Sur TV,
+        // le bandeau du bas remplace le contrôleur, pour suivre les règles de la télécommande.
+        playerView.setUseController(vod && !tvUi);
+        playerView.setFocusable(false);
+        if (vod && !tvUi) {
+            playerView.setShowSubtitleButton(false);
+            playerView.setControllerShowTimeoutMs(3500);
+            View settings = playerView.findViewById(androidx.media3.ui.R.id.exo_settings);
+            if (settings != null) settings.setVisibility(View.GONE);
+        }
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
         root.addView(playerView);
 
@@ -454,219 +512,26 @@ public class NativePlayerActivity extends AppCompatActivity {
         btnVlc.setOnClickListener(v -> openInVlc());
         errorActions.addView(btnVlc, new LinearLayout.LayoutParams(0, dp(52), 1));
         errorPanel.addView(errorActions);
+        for (Button b : new Button[] { retryButton, btnNextChannel, btnVlc }) {
+            b.setTextColor(C_TEXT);
+            styleFocusable(b, C_TRACK, C_TEXT, C_TEXT);
+            ((LinearLayout.LayoutParams) b.getLayoutParams()).setMargins(dp(4), dp(8), dp(4), 0);
+        }
         root.addView(errorPanel);
 
-        // Top Toolbar
+        // Barre du haut (téléphone) : retour, titre, puis trois icônes. Le reste est dans Options.
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         // Dégradé vers la transparence : l'image reste visible sous les commandes.
         topBar.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
             new int[] { Color.parseColor("#E60B0B0D"), Color.parseColor("#990B0B0D"), Color.TRANSPARENT }));
-        topBar.setPadding(dp(12), dp(10), dp(12), dp(28));
+        topBar.setPadding(dp(8), dp(8), dp(8), dp(28));
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        topParams.gravity = Gravity.TOP;
-        topBar.setLayoutParams(topParams);
-
-        // Back button
-        Button btnBack = new Button(this);
-        btnBack.setText("←");
-        btnBack.setContentDescription("Retour à la liste des chaînes");
-        btnBack.setTextSize(18);
-        btnBack.setTextColor(Color.WHITE);
-        styleFocusable(btnBack, Color.TRANSPARENT, C_ACCENT, Color.WHITE);
-        btnBack.setPadding(dp(4), 0, dp(12), 0);
-        btnBack.setOnClickListener(v -> finish());
-        sizeToolbarButton(btnBack, 44);
-        topBar.addView(btnBack);
-
-        // Title
-        tvTitle = new TextView(this);
-        tvTitle.setText(streamTitle);
-        tvTitle.setTextSize(15);
-        tvTitle.setTextColor(Color.WHITE);
-        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        tvTitle.setSingleLine(true);
-        tvTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        tvTitle.setMinWidth(0);
-        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        titleParams.setMargins(0, 0, dp(8), 0);
-        tvTitle.setMaxWidth(dp(130));
-        tvTitle.setLayoutParams(titleParams);
-        topBar.addView(tvTitle);
-        // Action buttons container (with horizontal scrolling for narrow screens)
-        HorizontalScrollView actionScrollView = new HorizontalScrollView(this);
-        actionScrollView.setHorizontalScrollBarEnabled(false);
-        actionScrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
-            0,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            1.0f
-        );
-        actionScrollView.setLayoutParams(scrollParams);
-
-        LinearLayout actionsLayout = new LinearLayout(this);
-        actionsLayout.setOrientation(LinearLayout.HORIZONTAL);
-        actionsLayout.setGravity(Gravity.CENTER_VERTICAL);
-        actionScrollView.addView(actionsLayout);
-
-        // Channel / Episode zapping
-        if (channelUrls != null) {
-            Button btnPrev = new Button(this);
-            btnPrev.setText("‹");
-            btnPrev.setContentDescription(vod ? "Épisode précédent" : "Chaîne précédente");
-            btnPrev.setTextSize(16);
-            btnPrev.setTextColor(Color.WHITE);
-            styleFocusable(btnPrev, C_TRACK, C_ACCENT, Color.WHITE);
-            btnPrev.setPadding(dp(8), dp(2), dp(8), dp(2));
-            btnPrev.setOnClickListener(v -> switchChannel(-1));
-            sizeToolbarButton(btnPrev, 44);
-            actionsLayout.addView(btnPrev);
-
-            Button btnNext = new Button(this);
-            btnNext.setText("›");
-            btnNext.setContentDescription(vod ? "Épisode suivant" : "Chaîne suivante");
-            btnNext.setTextSize(16);
-            btnNext.setTextColor(Color.WHITE);
-            styleFocusable(btnNext, C_TRACK, C_ACCENT, Color.WHITE);
-            LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            nextParams.setMargins(dp(4), 0, 0, 0);
-            btnNext.setLayoutParams(nextParams);
-            btnNext.setPadding(dp(8), dp(2), dp(8), dp(2));
-            btnNext.setOnClickListener(v -> switchChannel(1));
-            sizeToolbarButton(btnNext, 44);
-            ((LinearLayout.LayoutParams) btnNext.getLayoutParams()).setMargins(dp(4), 0, 0, 0);
-            actionsLayout.addView(btnNext);
-
-            if (!vod) {
-                btnPrevious = toolbarButton("↺", "Revenir à la chaîne précédente", 44, C_TRACK, C_ACCENT, C_TEXT);
-                btnPrevious.setOnClickListener(v -> { if (previousIndex >= 0) switchTo(previousIndex); });
-                actionsLayout.addView(btnPrevious);
-                updatePreviousButton();
-
-                Button btnChannels = toolbarButton("Chaînes", "Ouvrir la liste des chaînes", 76, C_ACCENT, Color.WHITE, C_ACCENT_FG);
-                btnChannels.setTypeface(Typeface.DEFAULT_BOLD);
-                btnChannels.setOnClickListener(v -> openChannelPanel());
-                actionsLayout.addView(btnChannels);
-            }
-        }
-
-        if (pipSupported()) {
-            Button btnPip = toolbarButton("PiP", "Réduire en petite fenêtre (image dans l'image)", 48, C_TRACK, C_ACCENT, C_TEXT);
-            btnPip.setOnClickListener(v -> enterPip());
-            actionsLayout.addView(btnPip);
-        }
-
-        // Audio track button (Multi-audio VF/VO)
-        btnAudio = new Button(this);
-        btnAudio.setText("Audio");
-        btnAudio.setTextSize(11);
-        btnAudio.setTextColor(Color.WHITE);
-        styleFocusable(btnAudio, C_TRACK, C_ACCENT, Color.WHITE);
-        btnAudio.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btnAudio.setContentDescription("Sélectionner la piste audio");
-        btnAudio.setOnClickListener(v -> showAudioTrackDialog());
-        sizeToolbarButton(btnAudio, 48);
-        LinearLayout.LayoutParams audioParams = (LinearLayout.LayoutParams) btnAudio.getLayoutParams();
-        audioParams.setMargins(dp(6), 0, 0, 0);
-        btnAudio.setLayoutParams(audioParams);
-        actionsLayout.addView(btnAudio);
-
-        // Sleep Timer button
-        btnSleep = new Button(this);
-        btnSleep.setText("Veille");
-        btnSleep.setTextSize(11);
-        btnSleep.setTextColor(Color.WHITE);
-        styleFocusable(btnSleep, C_TRACK, C_ACCENT, Color.WHITE);
-        btnSleep.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btnSleep.setContentDescription("Minuteur de mise en veille");
-        btnSleep.setOnClickListener(v -> showSleepTimerDialog());
-        sizeToolbarButton(btnSleep, 52);
-        LinearLayout.LayoutParams sleepParams = (LinearLayout.LayoutParams) btnSleep.getLayoutParams();
-        sleepParams.setMargins(dp(6), 0, 0, 0);
-        btnSleep.setLayoutParams(sleepParams);
-        actionsLayout.addView(btnSleep);
-
-        // Aspect ratio button
-        Button btnRatio = new Button(this);
-        btnRatio.setText("Format");
-        btnRatio.setTextSize(11);
-        btnRatio.setTextColor(Color.WHITE);
-        styleFocusable(btnRatio, C_TRACK, C_ACCENT, Color.WHITE);
-        btnRatio.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btnRatio.setContentDescription("Changer le format d'image");
-        btnRatio.setOnClickListener(v -> toggleAspectRatio());
-        sizeToolbarButton(btnRatio, 58);
-        actionsLayout.addView(btnRatio);
-
-        // Rotation plein écran (Paysage / Portrait)
-        Button btnRotate = new Button(this);
-        btnRotate.setText("⛶");
-        btnRotate.setTextSize(13);
-        btnRotate.setTextColor(Color.WHITE);
-        styleFocusable(btnRotate, C_TRACK, C_ACCENT, Color.WHITE);
-        btnRotate.setContentDescription("Basculer entre plein écran paysage et portrait");
-        btnRotate.setOnClickListener(v -> toggleOrientation());
-        sizeToolbarButton(btnRotate, 44);
-        LinearLayout.LayoutParams rotParams = (LinearLayout.LayoutParams) btnRotate.getLayoutParams();
-        rotParams.setMargins(dp(6), 0, 0, 0);
-        btnRotate.setLayoutParams(rotParams);
-        actionsLayout.addView(btnRotate);
-
-        // VLC button
-        Button btnVlc = new Button(this);
-        btnVlc.setText("VLC");
-        btnVlc.setTextSize(11);
-        btnVlc.setTextColor(Color.WHITE);
-        styleFocusable(btnVlc, C_TRACK, C_ACCENT, Color.WHITE);
-        LinearLayout.LayoutParams vlcParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        );
-        vlcParams.setMargins(dp(8), 0, 0, 0);
-        btnVlc.setLayoutParams(vlcParams);
-        btnVlc.setPadding(dp(8), dp(4), dp(8), dp(4));
-        btnVlc.setOnClickListener(v -> openInVlc());
-        sizeToolbarButton(btnVlc, 48);
-        actionsLayout.addView(btnVlc);
-
-
-        // Enregistrement DVR : capture le direct en cours (TS brut, ou segments HLS mis bout à bout).
-        if (!vod) {
-            btnRec = new Button(this);
-            btnRec.setText(recording ? "■" : "REC");
-            btnRec.setTextSize(11);
-            btnRec.setTextColor(Color.WHITE);
-            styleFocusable(btnRec, recording ? C_LIVE : C_TRACK, C_ACCENT, Color.WHITE);
-            btnRec.setPadding(dp(8), dp(4), dp(8), dp(4));
-            btnRec.setContentDescription("Enregistrer le direct (DVR)");
-            btnRec.setOnClickListener(v -> toggleRecording());
-            sizeToolbarButton(btnRec, 52);
-            LinearLayout.LayoutParams recParams = (LinearLayout.LayoutParams) btnRec.getLayoutParams();
-            recParams.setMargins(dp(8), 0, 0, 0);
-            btnRec.setLayoutParams(recParams);
-            actionsLayout.addView(btnRec);
-        }
-
-        // Chromecast : envoie le flux vers un téléviseur/écran compatible (HTTP uniquement).
-        if (castContext != null && isHttpUrl(streamUrl)) {
-            MediaRouteButton castButton = new MediaRouteButton(this);
-            castButton.setContentDescription("Envoyer vers un écran (Chromecast)");
-            LinearLayout.LayoutParams castParams = new LinearLayout.LayoutParams(dp(48), dp(48));
-            castParams.setMargins(dp(8), 0, 0, 0);
-            castButton.setLayoutParams(castParams);
-            CastButtonFactory.setUpMediaRouteButton(getApplicationContext(), castButton);
-            actionsLayout.addView(castButton);
-        }
-
-        topBar.addView(actionScrollView);
+        topBar.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+        buildPhoneTopBar();
         root.addView(topBar);
+        // Sur TV, tout passe par le bandeau du bas, ouvert par OK.
+        if (tvUi) topBar.setVisibility(View.GONE);
         // Floating Gesture HUD
         gestureHudLayout = new LinearLayout(this);
         gestureHudLayout.setOrientation(LinearLayout.VERTICAL);
@@ -687,7 +552,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         gestureHudLayout.addView(gestureHudIcon);
 
         gestureHudValue = new TextView(this);
-        gestureHudValue.setTextColor(Color.parseColor("#F0B455"));
+        gestureHudValue.setTextColor(C_ACCENT);
         gestureHudValue.setTextSize(22);
         gestureHudValue.setTypeface(Typeface.DEFAULT_BOLD);
         gestureHudValue.setGravity(Gravity.CENTER);
@@ -705,7 +570,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         gestureHudProgress.setLayoutParams(progParams);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             gestureHudProgress.setProgressTintBlendMode(android.graphics.BlendMode.SRC_IN);
-            gestureHudProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#F0B455")));
+            gestureHudProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(C_ACCENT));
         }
         gestureHudLayout.addView(gestureHudProgress);
 
@@ -795,7 +660,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             return handled;
         });
 
-        if (vod) {
+        if (vod && !tvUi) {
             playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
                 // Le contrôleur Media3 se masque aussi tout seul (et après ses menus).
                 // La prochaine pression doit rouvrir ses réglages, dont la vitesse.
@@ -803,9 +668,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                 topBar.animate().cancel();
                 topBar.setAlpha(1.0f);
                 topBar.setVisibility(visibility);
-                // Sélection télécommande posée à l'affichage, comme pour le direct.
-                if (visibility == View.VISIBLE) { if (btnAudio != null && topBar.findFocus() == null) btnAudio.requestFocus(); }
-                else hideSystemUI();
+                if (visibility != View.VISIBLE) hideSystemUI();
             });
         }
 
@@ -832,17 +695,177 @@ public class NativePlayerActivity extends AppCompatActivity {
         watchNext.setAllCaps(false);
         watchNext.setOnClickListener(v -> { cancelNextEpisode(); switchChannel(1); });
         nextActions.addView(watchNext, new LinearLayout.LayoutParams(0, dp(52), 1));
+        for (Button b : new Button[] { stay, watchNext }) {
+            b.setTextColor(C_TEXT);
+            styleFocusable(b, C_TRACK, C_TEXT, C_TEXT);
+            ((LinearLayout.LayoutParams) b.getLayoutParams()).setMargins(dp(4), dp(8), dp(4), 0);
+        }
         nextEpisodePanel.addView(nextActions);
         nextEpisodePanel.setVisibility(View.GONE);
         root.addView(nextEpisodePanel);
         if (!vod) {
+            if (!tvUi) buildCenterControls(root);
             buildInfoBar(root);
-            if (channelUrls != null) buildChannelPanel(root);
-            if (channelUrls != null) buildNumberOverlay(root);
+        } else if (tvUi) {
+            buildInfoBar(root);
+        }
+        if (tvUi) buildTvBand(root);
+        // Liste des chaînes (direct) ou des épisodes (série).
+        if (channelUrls != null && (!vod || episodeIds != null)) buildChannelPanel(root);
+        if (!vod && channelUrls != null) buildNumberOverlay(root);
+        buildCornerBadge(root);
+        if (!tvUi) {
+            optionsSheet = new OptionsSheet(this, root, new OptionsSheet.Listener() {
+                @Override public void onOpened() { hideHandler.removeCallbacksAndMessages(null); }
+                @Override public void onClosed() { hideSystemUI(); scheduleHideControls(); }
+            });
         }
         setContentView(root);
         updateInfoBar();
-        scheduleHideControls();
+        if (tvUi) showInfoOnly(); else scheduleHideControls();
+    }
+
+    // ── Barre du haut et commandes du téléphone ─────────────────────
+
+    private void buildPhoneTopBar() {
+        topBar.addView(iconButton(R.drawable.ic_player_back, "Retour", v -> finish(), 44));
+
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.setPadding(dp(4), 0, dp(8), 0);
+        tvTitle = new TextView(this);
+        tvTitle.setText(streamTitle);
+        tvTitle.setTextSize(15);
+        tvTitle.setTextColor(C_TEXT);
+        tvTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvTitle.setSingleLine(true);
+        tvTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        titles.addView(tvTitle);
+        topSubtitle = new TextView(this);
+        topSubtitle.setTextSize(12);
+        topSubtitle.setTextColor(C_MUTED);
+        topSubtitle.setSingleLine(true);
+        topSubtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        topSubtitle.setVisibility(View.GONE);
+        titles.addView(topSubtitle);
+        topBar.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        // Chromecast : envoie le flux vers un téléviseur/écran compatible (HTTP uniquement).
+        if (castContext != null && isHttpUrl(streamUrl)) {
+            MediaRouteButton castButton = new MediaRouteButton(this);
+            castButton.setContentDescription("Envoyer vers un écran (Chromecast)");
+            CastButtonFactory.setUpMediaRouteButton(getApplicationContext(), castButton);
+            topBar.addView(castButton, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        }
+        if (pipSupported()) {
+            topBar.addView(iconButton(R.drawable.ic_player_pip, "Image dans l'image", v -> enterPip(), 44));
+        }
+        btnOptions = iconButton(R.drawable.ic_player_options, "Options de lecture", v -> openOptions(), 44);
+        topBar.addView(btnOptions);
+    }
+
+    /** Bouton icône : fond discret à l'appui, pastille blanche au focus (clavier, télécommande). */
+    private ImageButton iconButton(int icon, String description, View.OnClickListener click, int sizeDp) {
+        ImageButton b = new ImageButton(this);
+        b.setImageResource(icon);
+        b.setContentDescription(description);
+        b.setScaleType(android.widget.ImageView.ScaleType.CENTER);
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] { android.R.attr.state_focused }, rounded(C_TEXT, 12));
+        bg.addState(new int[] { android.R.attr.state_pressed }, rounded(C_TRACK, 12));
+        bg.addState(new int[] {}, rounded(Color.TRANSPARENT, 12));
+        b.setBackground(bg);
+        b.setImageTintList(new ColorStateList(
+            new int[][] { new int[] { android.R.attr.state_focused }, new int[] {} },
+            new int[] { C_BG, C_TEXT }));
+        b.setOnClickListener(click);
+        b.setLayoutParams(new LinearLayout.LayoutParams(dp(sizeDp), dp(sizeDp)));
+        return b;
+    }
+
+    /** Pastille texte du téléphone (« Chaînes », « ↺ France 3 », « Revenir au direct »). */
+    private Button phonePill(String label, int icon, String description, View.OnClickListener click) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(13);
+        b.setSingleLine(true);
+        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0);
+        b.setPadding(dp(14), 0, dp(14), 0);
+        b.setStateListAnimator(null);
+        b.setContentDescription(description);
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] { android.R.attr.state_focused }, rounded(C_TEXT, 20));
+        bg.addState(new int[] { android.R.attr.state_pressed }, rounded(C_TRACK, 20));
+        bg.addState(new int[] {}, rounded(PlayerOption.C_PILL, 20));
+        b.setBackground(bg);
+        ColorStateList fg = new ColorStateList(
+            new int[][] { new int[] { android.R.attr.state_focused }, new int[] {} },
+            new int[] { C_BG, C_TEXT });
+        b.setTextColor(fg);
+        if (icon != 0) {
+            android.graphics.drawable.Drawable d = androidx.core.content.ContextCompat.getDrawable(this, icon);
+            if (d != null) d.setBounds(0, 0, dp(16), dp(16));
+            b.setCompoundDrawablesRelative(d, null, null, null);
+            b.setCompoundDrawablePadding(dp(6));
+            androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(b, fg);
+        }
+        b.setOnClickListener(click);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+        lp.setMargins(dp(8), 0, 0, 0);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    /** Centre de l'écran (téléphone, direct) : chaîne précédente, pause, chaîne suivante. */
+    private void buildCenterControls(FrameLayout root) {
+        centerControls = new LinearLayout(this);
+        centerControls.setOrientation(LinearLayout.HORIZONTAL);
+        centerControls.setGravity(Gravity.CENTER);
+        if (channelUrls != null) {
+            ImageButton up = iconButton(R.drawable.ic_player_up, "Chaîne précédente", v -> switchChannel(-1), 56);
+            up.setBackground(roundedState(Color.parseColor("#590B0B0D"), 28));
+            centerControls.addView(up);
+        }
+        btnCenterPause = iconButton(R.drawable.ic_player_pause, "Pause", v -> togglePause(), 64);
+        btnCenterPause.setBackground(roundedState(Color.parseColor("#590B0B0D"), 32));
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(dp(64), dp(64));
+        pp.setMargins(dp(36), 0, dp(36), 0);
+        centerControls.addView(btnCenterPause, pp);
+        if (channelUrls != null) {
+            ImageButton down = iconButton(R.drawable.ic_player_down, "Chaîne suivante", v -> switchChannel(1), 56);
+            down.setBackground(roundedState(Color.parseColor("#590B0B0D"), 28));
+            centerControls.addView(down);
+        }
+        root.addView(centerControls, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+    }
+
+    private StateListDrawable roundedState(int color, int radiusDp) {
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] { android.R.attr.state_focused }, rounded(C_TEXT, radiusDp));
+        bg.addState(new int[] { android.R.attr.state_pressed }, rounded(C_TRACK, radiusDp));
+        bg.addState(new int[] {}, rounded(color, radiusDp));
+        return bg;
+    }
+
+    /** Retard sur le direct, visible bandeau fermé : discret, dans le coin. */
+    private void buildCornerBadge(FrameLayout root) {
+        cornerBadge = new TextView(this);
+        cornerBadge.setTextSize(12);
+        cornerBadge.setTypeface(Typeface.DEFAULT_BOLD);
+        cornerBadge.setLetterSpacing(0.06f);
+        cornerBadge.setTextColor(C_TEXT);
+        cornerBadge.setPadding(dp(10), dp(5), dp(10), dp(5));
+        cornerBadge.setBackground(rounded(Color.parseColor("#CC0B0B0D"), 8));
+        cornerBadge.setVisibility(View.GONE);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
+        lp.setMargins(dp(tvUi ? 48 : 16), dp(tvUi ? 32 : 16), 0, 0);
+        root.addView(cornerBadge, lp);
+    }
+
+    private void openOptions() {
+        if (optionsSheet == null || pipActive) return;
+        optionsSheet.show(settingOptions(), phoneActions());
     }
 
     /** Guide inconnu (chaîne hors de la fenêtre transmise avec la liste complète). */
@@ -937,13 +960,17 @@ public class NativePlayerActivity extends AppCompatActivity {
             if (subtitleFile != null) new File(subtitleFile).delete();
             getIntent().removeExtra("subtitleFile");
         }
-        if (!vod) previousIndex = channelIndex;
+        if (!vod) {
+            previousIndex = channelIndex;
+            // Nouvelle chaîne : elle démarre au direct, la pause et le retard sont abandonnés.
+            pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false; playWhenReady = true;
+        }
         channelIndex = next;
         streamUrl = channelUrls.get(next);
         streamTitle = channelTitles.get(next);
         if (tvTitle != null) tvTitle.setText(streamTitle);
-        // En direct, le bandeau affiche déjà le nom de la chaîne.
-        if (vod) Toast.makeText(this, streamTitle, Toast.LENGTH_SHORT).show();
+        // En direct, le bandeau affiche déjà le nom de la chaîne ; sur TV, le bandeau du film aussi.
+        if (vod && !tvUi) Toast.makeText(this, streamTitle, Toast.LENGTH_SHORT).show();
         updatePreviousButton();
         if (channelAdapter != null) channelAdapter.notifyDataSetChanged();
         if (player != null) {
@@ -952,40 +979,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         } else {
             initPlayer(streamUrl);
         }
-        showControls();
-    }
-
-    private void toggleOrientation() {
-        int orientation = getResources().getConfiguration().orientation;
-        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
-            Toast.makeText(this, "Mode portrait", Toast.LENGTH_SHORT).show();
-        } else {
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
-            Toast.makeText(this, "Plein écran paysage", Toast.LENGTH_SHORT).show();
-        }
-        scheduleHideControls();
-    }
-
-    private void toggleAspectRatio() {
-        int orientation = getResources().getConfiguration().orientation;
-        if (currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FIT) {
-            if (orientation == Configuration.ORIENTATION_PORTRAIT) {
-                currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
-                Toast.makeText(this, "Format adapté (remplissage)", Toast.LENGTH_SHORT).show();
-            } else {
-                currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM;
-                Toast.makeText(this, "Zoom plein écran", Toast.LENGTH_SHORT).show();
-            }
-        } else if (currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM) {
-            currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL;
-            Toast.makeText(this, "Étiré", Toast.LENGTH_SHORT).show();
-        } else {
-            currentResizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
-            Toast.makeText(this, "Format original (ajusté)", Toast.LENGTH_SHORT).show();
-        }
-        playerView.setResizeMode(currentResizeMode);
-        scheduleHideControls();
+        // TV : bandeau ouvert, il le reste ; sinon, bandeau d'infos seul, sans prendre le focus.
+        if (tvUi && !isControlsVisible) showInfoOnly(); else showControls();
     }
 
     private void openInVlc() {
@@ -1019,55 +1014,86 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void showControls() {
         if (pipActive) return;
-        if (vod && playerView != null) {
-            playerView.showController();
-            return;
-        }
-        topBar.animate().cancel();
+        boolean wasOpen = isControlsVisible && !infoOnly;
+        infoOnly = false;
         isControlsVisible = true;
-        topBar.setVisibility(View.VISIBLE);
-        topBar.animate().alpha(1.0f).setDuration(200).start();
+        if (!tvUi) {
+            topBar.animate().cancel();
+            topBar.setVisibility(View.VISIBLE);
+            topBar.animate().alpha(1.0f).setDuration(200).start();
+            if (centerControls != null) {
+                centerControls.animate().cancel();
+                centerControls.setVisibility(View.VISIBLE);
+                centerControls.animate().alpha(1.0f).setDuration(200).start();
+            }
+        }
         if (infoBar != null) {
             updateInfoBar();
             infoBar.animate().cancel();
             infoBar.setVisibility(View.VISIBLE);
             infoBar.animate().alpha(1.0f).setDuration(200).start();
         }
+        if (tvBand != null) {
+            tvBand.view().setVisibility(View.VISIBLE);
+            tvBand.refresh();
+            if (!wasOpen || !tvBand.hasFocus()) focusBandOnOpen();
+        }
+        refreshControls();
         scheduleHideControls();
-        // Initialiser la sélection à l'ouverture, sans déplacer celle déjà présente :
-        // après un zapping par ‹ ou ›, OK doit pouvoir changer de nouveau la chaîne.
-        if (btnAudio != null && topBar.findFocus() == null) btnAudio.requestFocus();
+        ensureTicker();
+    }
+
+    /** TV, après un zapping : nom et programme 4 s, sans commandes ni focus ; ▲ ▼ zappent encore. */
+    private void showInfoOnly() {
+        if (pipActive || infoBar == null) return;
+        if (tvBand != null) { tvBand.closeList(false); tvBand.view().setVisibility(View.GONE); }
+        isControlsVisible = false;
+        infoOnly = true;
+        updateInfoBar();
+        infoBar.animate().cancel();
+        infoBar.setVisibility(View.VISIBLE);
+        infoBar.animate().alpha(1.0f).setDuration(200).start();
+        updateCornerBadge();
+        scheduleHideControls();
     }
 
     private void hideControls() {
-        if (vod && playerView != null) {
-            playerView.hideController();
-            return;
-        }
-        topBar.animate().cancel();
         isControlsVisible = false;
+        infoOnly = false;
+        if (tvBand != null) tvBand.closeList(false);
         if (infoBar != null) {
             infoBar.animate().cancel();
             infoBar.animate().alpha(0.0f).setDuration(300).withEndAction(() -> infoBar.setVisibility(View.GONE)).start();
         }
+        if (centerControls != null) {
+            centerControls.animate().cancel();
+            centerControls.animate().alpha(0.0f).setDuration(300).withEndAction(() -> centerControls.setVisibility(View.GONE)).start();
+        }
+        topBar.animate().cancel();
         topBar.animate().alpha(0.0f).setDuration(300).withEndAction(() -> {
             topBar.setVisibility(View.GONE);
             hideSystemUI();
         }).start();
+        updateCornerBadge();
     }
 
     private void scheduleHideControls() {
-        if (vod) return;
+        // Téléphone, films et séries : le contrôleur Media3 gère son propre masquage.
+        if (vod && !tvUi) return;
         hideHandler.removeCallbacksAndMessages(null);
-        // Le bandeau du programme reste un peu plus longtemps : il se lit.
-        hideHandler.postDelayed(hideControlsRunnable, 5000);
+        // TV : 8 s sans touche (4 s pour le bandeau d'infos seul) ; téléphone : 5 s.
+        hideHandler.postDelayed(hideControlsRunnable, tvUi ? (infoOnly ? 4000 : 8000) : 5000);
     }
 
-    /** Masquage différé : tant que la télécommande sélectionne un bouton de la barre, les
-     *  commandes restent affichées (reprogrammation au lieu d'un masquage en pleine navigation). */
+    /** Masquage différé, sauf pendant qu'une liste ou le panneau Options est ouvert, ou en pause :
+     *  l'image arrêtée garde ses commandes. */
     private final Runnable hideControlsRunnable = new Runnable() {
         @Override public void run() {
-            if (topBar != null && topBar.findFocus() != null) { hideHandler.postDelayed(this, 5000); return; }
+            boolean hold = (tvBand != null && tvBand.isListOpen())
+                || (optionsSheet != null && optionsSheet.isOpen())
+                || (!infoOnly && isPaused())
+                || (!tvUi && topBar != null && topBar.findFocus() != null);
+            if (hold) { hideHandler.postDelayed(this, 2000); return; }
             hideControls();
         }
     };
@@ -1102,7 +1128,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         button.setOnFocusChangeListener((v, hasFocus) -> {
             button.setTextColor(hasFocus ? C_BG : normalText);
             // VOD : le contrôleur Media3 s'efface après 3,5 s — pas pendant la navigation.
-            if (vod && playerView != null) playerView.setControllerShowTimeoutMs(hasFocus ? 0 : 3500);
+            if (vod && !tvUi && playerView != null) playerView.setControllerShowTimeoutMs(hasFocus ? 0 : 3500);
         });
         // Réapplique l'état courant : REC restylé alors qu'il a le focus (lancement au OK)
         // capturait sinon la couleur inversée sombre comme « normale » — texte sombre sur
@@ -1110,23 +1136,14 @@ public class NativePlayerActivity extends AppCompatActivity {
         button.setTextColor(button.isFocused() ? C_BG : normalText);
     }
 
-    private Button toolbarButton(String label, String description, int widthDp, int color, int focusBg, int normalText) {
-        Button b = new Button(this);
-        b.setText(label);
-        b.setTextSize(label.length() > 2 ? 12 : 16);
-        b.setTextColor(normalText);
-        b.setContentDescription(description);
-        styleFocusable(b, color, focusBg, normalText);
-        sizeToolbarButton(b, widthDp);
-        ((LinearLayout.LayoutParams) b.getLayoutParams()).setMargins(dp(6), 0, 0, 0);
-        return b;
-    }
-
     private void updatePreviousButton() {
         if (btnPrevious == null) return;
-        boolean available = previousIndex >= 0 && previousIndex != channelIndex;
-        btnPrevious.setEnabled(available);
-        btnPrevious.setAlpha(available ? 1f : 0.35f);
+        boolean available = previousIndex >= 0 && previousIndex != channelIndex && channelTitles != null && previousIndex < channelTitles.size();
+        btnPrevious.setVisibility(available ? View.VISIBLE : View.GONE);
+        if (available) {
+            btnPrevious.setText(channelTitles.get(previousIndex));
+            btnPrevious.setContentDescription("Revenir à " + channelTitles.get(previousIndex) + ", dernière chaîne regardée");
+        }
     }
 
     // ── Bandeau du programme (direct) ────────────────────────────────
@@ -1134,20 +1151,22 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void buildInfoBar(FrameLayout root) {
         infoBar = new LinearLayout(this);
         infoBar.setOrientation(LinearLayout.VERTICAL);
-        infoBar.setPadding(dp(20), dp(36), dp(20), dp(18));
+        // TV : marges de sécurité des téléviseurs (environ 5 % de l'image).
+        if (tvUi) infoBar.setPadding(dp(48), dp(72), dp(48), dp(28));
+        else infoBar.setPadding(dp(20), dp(36), dp(20), dp(14));
         infoBar.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
-            new int[] { Color.parseColor("#F00B0B0D"), Color.parseColor("#B30B0B0D"), Color.TRANSPARENT }));
+            new int[] { Color.parseColor("#F50B0B0D"), Color.parseColor("#E60B0B0D"), Color.TRANSPARENT }));
 
         infoChannel = new TextView(this);
-        infoChannel.setTextSize(12);
-        infoChannel.setTextColor(C_MUTED);
+        infoChannel.setTextSize(tvUi ? 15 : 12);
+        infoChannel.setTextColor(tvUi ? PlayerOption.C_SOFT : C_MUTED);
         infoChannel.setSingleLine(true);
         infoChannel.setEllipsize(android.text.TextUtils.TruncateAt.END);
         infoChannel.setLetterSpacing(0.04f);
         infoBar.addView(infoChannel);
 
         infoNow = new TextView(this);
-        infoNow.setTextSize(19);
+        infoNow.setTextSize(tvUi ? 26 : 19);
         infoNow.setTextColor(C_TEXT);
         infoNow.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         infoNow.setSingleLine(true);
@@ -1161,31 +1180,52 @@ public class NativePlayerActivity extends AppCompatActivity {
         infoTimeRow.setGravity(Gravity.CENTER_VERTICAL);
         infoProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         infoProgress.setMax(1000);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            infoProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(C_ACCENT));
-            infoProgress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#40F3F1ED")));
-        }
-        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(dp(120), dp(4));
-        progressParams.setMargins(0, 0, dp(10), 0);
+        infoProgress.setProgressTintList(ColorStateList.valueOf(C_ACCENT));
+        infoProgress.setProgressBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#40F3F1ED")));
+        LinearLayout.LayoutParams progressParams = tvUi
+            ? new LinearLayout.LayoutParams(0, dp(4), 1f)
+            : new LinearLayout.LayoutParams(dp(120), dp(4));
+        progressParams.setMargins(0, 0, dp(12), 0);
         infoTimeRow.addView(infoProgress, progressParams);
         infoTimes = new TextView(this);
-        infoTimes.setTextSize(12);
+        infoTimes.setTextSize(tvUi ? 14 : 12);
         infoTimes.setTextColor(C_MUTED);
         infoTimes.setTypeface(Typeface.MONOSPACE);
         infoTimes.setSingleLine(true);
         infoTimeRow.addView(infoTimes);
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rowParams.setMargins(0, dp(8), 0, 0);
+        rowParams.setMargins(0, dp(10), 0, 0);
         infoBar.addView(infoTimeRow, rowParams);
 
         infoNext = new TextView(this);
-        infoNext.setTextSize(13);
+        infoNext.setTextSize(tvUi ? 14 : 13);
         infoNext.setTextColor(C_DIM);
         infoNext.setSingleLine(true);
         infoNext.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        nextParams.setMargins(0, dp(6), 0, 0);
-        infoBar.addView(infoNext, nextParams);
+        if (!tvUi && !vod) {
+            // Téléphone : « Ensuite… » à gauche ; à droite, retour au direct, dernière chaîne, liste.
+            LinearLayout bottom = new LinearLayout(this);
+            bottom.setOrientation(LinearLayout.HORIZONTAL);
+            bottom.setGravity(Gravity.CENTER_VERTICAL);
+            bottom.addView(infoNext, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            btnBackToLive = phonePill("Revenir au direct", 0, "Revenir au direct", v -> backToLive());
+            btnBackToLive.setVisibility(View.GONE);
+            bottom.addView(btnBackToLive);
+            if (channelUrls != null) {
+                btnPrevious = phonePill("", R.drawable.ic_player_replay, "Revenir à la chaîne précédente", v -> { if (previousIndex >= 0) switchTo(previousIndex); });
+                bottom.addView(btnPrevious);
+                updatePreviousButton();
+                bottom.addView(phonePill("Chaînes", R.drawable.ic_player_list, "Ouvrir la liste des chaînes", v -> openChannelPanel()));
+            }
+            LinearLayout.LayoutParams bottomParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            bottomParams.setMargins(0, dp(8), 0, 0);
+            infoBar.addView(bottom, bottomParams);
+        } else {
+            LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            nextParams.setMargins(0, dp(6), 0, 0);
+            infoBar.addView(infoNext, nextParams);
+        }
+        if (vod) { infoTimeRow.setVisibility(View.GONE); infoNext.setVisibility(View.GONE); }
 
         infoBar.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
         root.addView(infoBar);
@@ -1247,17 +1287,31 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void updateInfoBar() {
-        if (infoBar == null) return;
+        if (vod) { updateVodHeader(); return; }
         long now = System.currentTimeMillis();
-        String group = channelGroups != null && channelIndex >= 0 && channelIndex < channelGroups.size() ? channelGroups.get(channelIndex) : "";
         String number = numberAt(channelIndex);
-        String head = "●  DIRECT  ·  " + (number.isEmpty() ? "" : number + "  ") + streamTitle + (group.isEmpty() ? "" : "  ·  " + group);
-        SpannableString label = new SpannableString(head);
-        label.setSpan(new ForegroundColorSpan(C_LIVE), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        infoChannel.setText(label);
-
         int current = currentProgramIndex(channelIndex, now);
         JSONArray p = current >= 0 ? programAt(channelIndex, current) : null;
+        if (topSubtitle != null) {
+            // Téléphone : la barre du haut porte le nom de la chaîne et le programme en cours.
+            if (tvTitle != null) tvTitle.setText((number.isEmpty() ? "" : number + " · ") + streamTitle);
+            String program = p != null ? p.optString(2, "") + " · " + hour(p.optLong(0)) + " – " + hour(p.optLong(1)) : "";
+            topSubtitle.setText(program);
+            topSubtitle.setVisibility(program.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+        if (infoBar == null) return;
+        String group = channelGroups != null && channelIndex >= 0 && channelIndex < channelGroups.size() ? channelGroups.get(channelIndex) : "";
+        String badge = liveBadge();
+        String word = badge == null ? "DIRECT" : badge;
+        String mark = badge == null || pausedAtMs == 0 ? "●" : "❚❚";
+        String state = mark + "  " + word;
+        String head = state + "  ·  " + (number.isEmpty() ? "" : number + "  ") + streamTitle + (group.isEmpty() ? "" : "  ·  " + group);
+        SpannableString label = new SpannableString(head);
+        label.setSpan(new ForegroundColorSpan(badge == null ? C_LIVE : C_DIM), 0, mark.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        label.setSpan(new ForegroundColorSpan(C_TEXT), mark.length(), state.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        label.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), mark.length(), state.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        infoChannel.setText(label);
+
         if (p != null) {
             long start = p.optLong(0), end = p.optLong(1);
             infoNow.setText(p.optString(2, streamTitle));
@@ -1277,7 +1331,33 @@ public class NativePlayerActivity extends AppCompatActivity {
             infoNext.setText("Pas de guide pour cette chaîne");
             infoNext.setVisibility(View.VISIBLE);
         } else {
-            infoNext.setVisibility(View.GONE);
+            infoNext.setVisibility(tvUi ? View.GONE : View.INVISIBLE);
+        }
+        if (btnBackToLive != null) btnBackToLive.setVisibility(isBehindLive() ? View.VISIBLE : View.GONE);
+    }
+
+    /** TV, films et séries : titre, épisode, heure de fin, barre de progression. */
+    private void updateVodHeader() {
+        if (tvTitle != null) tvTitle.setText(streamTitle);
+        if (infoBar == null) return;
+        infoNow.setText(streamTitle);
+        long position = player != null ? Math.max(0, player.getCurrentPosition()) : positionMs;
+        long duration = player != null && player.getDuration() != C.TIME_UNSET ? player.getDuration() : durationMs;
+        StringBuilder head = new StringBuilder();
+        if (episodeIds != null && channelUrls != null && channelIndex >= 0) {
+            head.append("Épisode ").append(channelIndex + 1).append(" sur ").append(channelUrls.size());
+        }
+        if (duration > 0) {
+            long endsAt = System.currentTimeMillis() + (long) ((duration - position) / Math.max(0.25f, playbackSpeed));
+            if (head.length() > 0) head.append("  ·  ");
+            head.append("Fin à ").append(hour(endsAt));
+        }
+        infoChannel.setText(head);
+        infoChannel.setVisibility(head.length() == 0 ? View.GONE : View.VISIBLE);
+        if (seekBar != null) {
+            seekBar.setProgress(duration > 0 ? (int) Math.min(1000, position * 1000 / duration) : 0);
+            seekElapsed.setText(formatMs(position));
+            seekRemaining.setText(duration > 0 ? "−" + formatMs(Math.max(0, duration - position)) : "");
         }
     }
 
@@ -1305,7 +1385,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(20), 0, dp(12), dp(8));
         TextView title = new TextView(this);
-        title.setText("Chaînes");
+        title.setText(vod ? "Épisodes" : "Chaînes");
         title.setTextSize(22);
         title.setTextColor(C_TEXT);
         title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
@@ -1314,11 +1394,11 @@ public class NativePlayerActivity extends AppCompatActivity {
         close.setText("✕");
         close.setTextSize(15);
         close.setTextColor(C_MUTED);
-        close.setContentDescription("Fermer la liste des chaînes");
+        close.setContentDescription(vod ? "Fermer la liste des épisodes" : "Fermer la liste des chaînes");
         close.setOnClickListener(v -> closeChannelPanel());
         sizeToolbarButton(close, 44);
         close.setTextColor(C_MUTED);
-        styleFocusable(close, C_CARD, C_ACCENT, C_MUTED);
+        styleFocusable(close, C_CARD, C_TEXT, C_MUTED);
         header.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
         channelSheet.addView(header);
 
@@ -1384,19 +1464,30 @@ public class NativePlayerActivity extends AppCompatActivity {
         return chip;
     }
 
+    /** Catégorie active : contour et texte orange (elle signale) ; focus : pastille blanche. */
     private void styleChip(Button chip, boolean active) {
-        GradientDrawable bg = rounded(active ? C_TEXT : Color.TRANSPARENT, 18);
-        if (!active) bg.setStroke(dp(1), Color.parseColor("#26F3F1ED"));
+        GradientDrawable bg = rounded(active ? C_ELEV : Color.TRANSPARENT, 18);
+        bg.setStroke(dp(1), active ? C_ACCENT : Color.parseColor("#26F3F1ED"));
         StateListDrawable states = new StateListDrawable();
-        states.addState(new int[] { android.R.attr.state_focused }, rounded(C_ACCENT, 18));
-        states.addState(new int[] { android.R.attr.state_pressed }, rounded(C_ACCENT, 18));
+        states.addState(new int[] { android.R.attr.state_focused }, rounded(C_TEXT, 18));
+        states.addState(new int[] { android.R.attr.state_pressed }, rounded(C_TEXT, 18));
         states.addState(new int[] {}, bg);
         chip.setBackground(states);
-        final int normalText = active ? C_BG : Color.parseColor("#C9C5BE");
-        // Chip resstylé pendant qu'il a le focus (sélection au OK → refreshGroupChips) :
-        // garder l'inversion sombre tant que le fond ambré de sélection est affiché.
+        final int normalText = active ? C_ACCENT : PlayerOption.C_SOFT;
+        // Chip restylé pendant qu'il a le focus (sélection au OK → refreshGroupChips) :
+        // garder l'inversion sombre tant que la pastille blanche de sélection est affichée.
         chip.setTextColor(chip.isFocused() ? C_BG : normalText);
         chip.setOnFocusChangeListener((v, hasFocus) -> chip.setTextColor(hasFocus ? C_BG : normalText));
+    }
+
+    /** TV, liste ouverte : ◀ va aux catégories, sur celle en cours. */
+    private void focusActiveChip() {
+        if (groupChips == null) return;
+        for (int i = 0; i < groupChips.getChildCount(); i++) {
+            Button chip = (Button) groupChips.getChildAt(i);
+            String tag = (String) chip.getTag();
+            if (panelGroup == null ? tag.isEmpty() : tag.equals(panelGroup)) { chip.requestFocus(); return; }
+        }
     }
 
     private void refreshGroupChips() {
@@ -1585,12 +1676,16 @@ public class NativePlayerActivity extends AppCompatActivity {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         pipActive = isInPictureInPictureMode;
         if (playerView != null) {
-            playerView.setUseController(vod && !isInPictureInPictureMode);
+            playerView.setUseController(vod && !tvUi && !isInPictureInPictureMode);
             if (isInPictureInPictureMode) playerView.hideController();
         }
         if (isInPictureInPictureMode) {
             hideHandler.removeCallbacksAndMessages(null);
             if (channelPanel != null) channelPanel.setVisibility(View.GONE);
+            if (optionsSheet != null) optionsSheet.close();
+            if (tvBand != null) tvBand.closeList(false);
+            if (centerControls != null) centerControls.setVisibility(View.GONE);
+            if (cornerBadge != null) cornerBadge.setVisibility(View.GONE);
             topBar.setVisibility(View.GONE);
             if (infoBar != null) infoBar.setVisibility(View.GONE);
             if (gestureHudLayout != null) gestureHudLayout.setVisibility(View.GONE);
@@ -1681,7 +1776,8 @@ public class NativePlayerActivity extends AppCompatActivity {
             .setHandleAudioBecomingNoisy(true)
             .build();
 
-        playerView.setPlayer(player);
+        playerView.setPlayer(vod && !tvUi ? viewPlayer(player) : player);
+        if (vod) player.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
         TrackSelectionParameters.Builder trackParamsBuilder = player.getTrackSelectionParameters().buildUpon()
             .setPreferredAudioLanguage("fra");
         if (vod) {
@@ -1729,6 +1825,14 @@ public class NativePlayerActivity extends AppCompatActivity {
                     if (vod && episodeIds != null && channelUrls != null && channelIndex + 1 < channelUrls.size()) {
                         startNextEpisodeCountdown();
                     }
+                    // Un direct ne finit pas : le serveur a coupé (souvent après une longue pause).
+                    if (!vod && !casting && playerView != null) {
+                        playerView.post(() -> {
+                            if (isBehindLive()) { reconnectLive(true); return; }
+                            if (autoRetriesLeft > 0) { autoRetriesLeft--; reconnectLive(false); }
+                            else showError("Le flux s'est arrêté.");
+                        });
+                    }
                 }
                 updateMediaSessionState();
             }
@@ -1736,6 +1840,13 @@ public class NativePlayerActivity extends AppCompatActivity {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 updateMediaSessionState();
+                refreshControls();
+            }
+
+            @Override
+            public void onTracksChanged(Tracks tracks) {
+                // Pistes connues : Qualité apparaît, Audio et Sous-titres affichent la bonne valeur.
+                refreshControls();
             }
 
             @Override
@@ -1744,6 +1855,10 @@ public class NativePlayerActivity extends AppCompatActivity {
                 errorCount++;
                 lastErrorCode = String.valueOf(error.errorCode);
                 loadingBar.setVisibility(View.GONE);
+                // Direct en pause ou en retard : le flux n'a pas gardé la pause. Reprise au direct,
+                // tout de suite si l'on regardait, au prochain « Lecture » si l'image est arrêtée.
+                if (!vod && pausedAtMs > 0) { liveLostWhilePaused = true; refreshControls(); return; }
+                if (!vod && liveDelayMs >= LIVE_DELAY_SHOWN_MS) { playerView.post(() -> reconnectLive(true)); return; }
                 String cause = describeError(error);
                 // Coupure réseau ou serveur surchargé : quelques reprises espacées avant d'abandonner.
                 if (autoRetriesLeft > 0 && isTransientError(error)) {
@@ -1905,7 +2020,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         errorText.setText(message);
         btnNextChannel.setVisibility(!vod && channelUrls != null && channelUrls.size() > 1 ? View.VISIBLE : View.GONE);
         errorPanel.setVisibility(View.VISIBLE);
-        showControls();
+        if (tvUi) { hideControls(); retryButton.requestFocus(); }
+        else showControls();
     }
 
     private void hideError() {
@@ -1995,6 +2111,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
         stopPanelFrameSampling(); // ceinture et bretelles : onPause devrait déjà l'avoir arrêté
         hideHandler.removeCallbacksAndMessages(null);
+        tickHandler.removeCallbacksAndMessages(null);
         progressHandler.removeCallbacksAndMessages(null);
         cancelSleepTimer();
         gestureHudHandler.removeCallbacksAndMessages(null);
@@ -2020,6 +2137,9 @@ public class NativePlayerActivity extends AppCompatActivity {
         state.putLong("positionMs", positionMs);
         state.putBoolean("playWhenReady", playWhenReady);
         state.putString("mediaId", mediaId);
+        state.putFloat("playbackSpeed", playbackSpeed);
+        state.putInt("orientationMode", orientationMode);
+        state.putString("lastUsedKey", lastUsedKey);
         state.putString("visitedProgress", new JSONArray(visitedProgress.values()).toString());
         super.onSaveInstanceState(state);
     }
@@ -2071,8 +2191,8 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void createMediaSession() {
         mediaSession = new MediaSession(this, "CedPlay");
         mediaSession.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { if (player != null) player.play(); }
-            @Override public void onPause() { if (player != null) player.pause(); }
+            @Override public void onPlay() { setPaused(false); }
+            @Override public void onPause() { setPaused(true); }
             @Override public void onSeekTo(long pos) { if (player != null) player.seekTo(pos); }
         });
         MediaMetadata metadata = new MediaMetadata.Builder()
@@ -2253,9 +2373,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void updateRecButton() {
-        if (btnRec == null) return;
-        btnRec.setText(recording ? "■" : "REC");
-        styleFocusable(btnRec, recording ? C_LIVE : C_TRACK, C_ACCENT, Color.WHITE);
+        refreshControls();
     }
 
 
@@ -2263,6 +2381,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         hideSystemUI();
+        if (optionsSheet != null) optionsSheet.relayout();
         if (playerView != null) {
             // En mode portrait, forcer RESIZE_MODE_FIT pour que l'image ne soit jamais coupée
             if (newConfig.orientation == Configuration.ORIENTATION_PORTRAIT) {
@@ -2282,6 +2401,11 @@ public class NativePlayerActivity extends AppCompatActivity {
         nextEpisodePlayer = player;
         nextEpisodeDeadline = SystemClock.elapsedRealtime() + 8000;
         nextEpisodePanel.setVisibility(View.VISIBLE);
+        if (tvUi) {
+            hideControls();
+            LinearLayout actions = (LinearLayout) nextEpisodePanel.getChildAt(1);
+            actions.getChildAt(1).requestFocus();
+        }
         nextEpisodeHandler.post(nextEpisodeTicker);
     }
 
@@ -2337,6 +2461,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void typeDigit(int digit) {
         if (numberOverlay == null) return;
+        // TV : taper un numéro ferme le bandeau.
+        if (tvUi && isControlsVisible) hideControls();
         numberBuffer.append(digit);
         String typed = normalizeNumber(numberBuffer.toString());
         int match = indexOfNumber(typed);
@@ -2393,7 +2519,15 @@ public class NativePlayerActivity extends AppCompatActivity {
     public void onBackPressed() {
         if (numberBuffer.length() > 0) { cancelNumberEntry(); return; }
         if (nextEpisodePanel != null && nextEpisodePanel.getVisibility() == View.VISIBLE) { cancelNextEpisode(); return; }
+        // Retour remonte d'un cran : liste des vitesses, puis panneau, puis lecteur.
+        if (optionsSheet != null && optionsSheet.isOpen()) { optionsSheet.back(); return; }
+        if (tvBand != null && tvBand.isListOpen()) { tvBand.closeList(true); scheduleHideControls(); return; }
         if (isChannelPanelOpen()) { closeChannelPanel(); return; }
+        if (tvUi) {
+            if (isControlsVisible) { hideControls(); return; }
+            super.onBackPressed();
+            return;
+        }
         // Retour ferme d'abord les commandes (direct) ou le contrôleur (VOD) avant de quitter.
         if (isControlsVisible || (vod && playerView != null && playerView.isControllerFullyVisible())) {
             if (vod && playerView != null && playerView.isControllerFullyVisible()) playerView.hideController();
@@ -2416,89 +2550,6 @@ public class NativePlayerActivity extends AppCompatActivity {
             player = null;
         }
         if (mediaSession != null) mediaSession.setActive(false);
-    }
-
-    private static class AudioTrackOption {
-        final Tracks.Group group;
-        final int trackIndex;
-        final String label;
-        final boolean isSelected;
-
-        AudioTrackOption(Tracks.Group group, int trackIndex, String label, boolean isSelected) {
-            this.group = group;
-            this.trackIndex = trackIndex;
-            this.label = label;
-            this.isSelected = isSelected;
-        }
-    }
-
-    private void showAudioTrackDialog() {
-        if (player == null) return;
-        Tracks tracks = player.getCurrentTracks();
-        List<AudioTrackOption> options = new ArrayList<>();
-
-        options.add(new AudioTrackOption(null, -1, "Automatique (Français prioritaire)", false));
-
-        int selectedOptionIndex = 0;
-        int trackCounter = 1;
-
-        for (Tracks.Group group : tracks.getGroups()) {
-            if (group.getType() == C.TRACK_TYPE_AUDIO) {
-                for (int i = 0; i < group.length; i++) {
-                    Format format = group.getTrackFormat(i);
-                    boolean isSelected = group.isTrackSelected(i);
-                    String label = formatAudioTrackLabel(format, trackCounter++);
-                    AudioTrackOption opt = new AudioTrackOption(group, i, label, isSelected);
-                    options.add(opt);
-                    if (isSelected) {
-                        selectedOptionIndex = options.size() - 1;
-                    }
-                }
-            }
-        }
-
-        if (options.size() <= 1) {
-            Toast.makeText(this, "Une seule piste audio disponible sur ce flux", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        String[] items = new String[options.size()];
-        for (int i = 0; i < options.size(); i++) {
-            AudioTrackOption opt = options.get(i);
-            items[i] = opt.label + (opt.isSelected ? "  ✓" : "");
-        }
-
-        // Le dialog fait partie de l'utilisation des commandes : pas de masquage pendant.
-        hideHandler.removeCallbacksAndMessages(null);
-        new AlertDialog.Builder(this)
-            .setTitle("Piste audio (langue)")
-            .setSingleChoiceItems(items, selectedOptionIndex, (dialog, which) -> {
-                dialog.dismiss();
-                if (which == 0) {
-                    player.setTrackSelectionParameters(
-                        player.getTrackSelectionParameters().buildUpon()
-                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
-                            .setPreferredAudioLanguage("fra")
-                            .build()
-                    );
-                    Toast.makeText(this, "Audio : Automatique (Français prioritaire)", Toast.LENGTH_SHORT).show();
-                } else {
-                    AudioTrackOption chosen = options.get(which);
-                    TrackSelectionOverride override = new TrackSelectionOverride(
-                        chosen.group.getMediaTrackGroup(),
-                        Collections.singletonList(chosen.trackIndex)
-                    );
-                    player.setTrackSelectionParameters(
-                        player.getTrackSelectionParameters().buildUpon()
-                            .setOverrideForType(override)
-                            .build()
-                    );
-                    Toast.makeText(this, "Audio : " + chosen.label, Toast.LENGTH_SHORT).show();
-                }
-            })
-            .setNegativeButton("Fermer", null)
-            .setOnDismissListener(dialog -> scheduleHideControls())
-            .show();
     }
 
     private String formatAudioTrackLabel(Format format, int trackNumber) {
@@ -2614,7 +2665,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             target = Math.max(0, current + deltaMs);
         }
         player.seekTo(target);
-        String label = deltaMs > 0 ? "⏩  +10 s" : "⏪  -10 s";
+        String label = (deltaMs > 0 ? "⏩  +" : "⏪  −") + (Math.abs(deltaMs) / 1000) + " s";
         showGestureHud(label, formatMs(target), -1);
     }
 
@@ -2631,60 +2682,6 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
 
-    private void showSleepTimerDialog() {
-        final String[] options;
-        if (vod) {
-            options = new String[] {
-                "15 minutes",
-                "30 minutes",
-                "45 minutes",
-                "60 minutes",
-                "90 minutes",
-                "Fin de la vidéo",
-                "Désactiver le minuteur"
-            };
-        } else {
-            options = new String[] {
-                "15 minutes",
-                "30 minutes",
-                "45 minutes",
-                "60 minutes",
-                "90 minutes",
-                "Désactiver le minuteur"
-            };
-        }
-
-        // Le dialog fait partie de l'utilisation des commandes : pas de masquage pendant.
-        hideHandler.removeCallbacksAndMessages(null);
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Minuteur de mise en veille");
-        builder.setItems(options, (dialog, which) -> {
-            String selected = options[which];
-            if ("Désactiver le minuteur".equals(selected)) {
-                cancelSleepTimer();
-                Toast.makeText(this, "Minuteur de veille désactivé", Toast.LENGTH_SHORT).show();
-            } else if ("Fin de la vidéo".equals(selected)) {
-                cancelSleepTimer();
-                sleepOnEnd = true;
-                if (btnSleep != null) {
-                    btnSleep.setText("🌙 Fin");
-                    styleFocusable(btnSleep, C_ACCENT, Color.WHITE, Color.WHITE);
-                }
-                Toast.makeText(this, "Arrêt prévu à la fin de la vidéo", Toast.LENGTH_SHORT).show();
-            } else {
-                int minutes = 15;
-                if (selected.startsWith("30")) minutes = 30;
-                else if (selected.startsWith("45")) minutes = 45;
-                else if (selected.startsWith("60")) minutes = 60;
-                else if (selected.startsWith("90")) minutes = 90;
-                startSleepTimer(minutes);
-            }
-        });
-        builder.setNegativeButton("Annuler", null);
-        builder.setOnDismissListener(dialog -> scheduleHideControls());
-        builder.show();
-    }
-
     private void startSleepTimer(int minutes) {
         cancelSleepTimer();
         sleepTargetTimeMs = android.os.SystemClock.elapsedRealtime() + (minutes * 60_000L);
@@ -2693,7 +2690,6 @@ public class NativePlayerActivity extends AppCompatActivity {
             styleFocusable(btnSleep, C_ACCENT, Color.WHITE, Color.WHITE);
             btnSleep.setText("🌙 " + minutes + "m");
         }
-        Toast.makeText(this, "Mise en veille dans " + minutes + " min", Toast.LENGTH_SHORT).show();
 
         sleepTicker = new Runnable() {
             @Override
@@ -2736,4 +2732,643 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
     }
 
+    // ── Détection TV (quand la page ne l'a pas transmise) ───────────
+
+    private boolean detectTelevision() {
+        try {
+            android.app.UiModeManager ui = (android.app.UiModeManager) getSystemService(Context.UI_MODE_SERVICE);
+            PackageManager pm = getPackageManager();
+            return (ui != null && ui.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
+                || pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                || !pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // ── Pause, et reprise du direct ─────────────────────────────────
+
+    private boolean isPaused() {
+        return player != null ? !player.getPlayWhenReady() : !playWhenReady;
+    }
+
+    /** Direct en pause ou en retard (au-delà du seuil d'affichage). */
+    private boolean isBehindLive() {
+        return !vod && (pausedAtMs > 0 || liveDelayMs >= LIVE_DELAY_SHOWN_MS);
+    }
+
+    private long currentLiveDelayMs() {
+        return liveDelayMs + (pausedAtMs > 0 ? SystemClock.elapsedRealtime() - pausedAtMs : 0);
+    }
+
+    /** « EN PAUSE · 0:42 », « DIFFÉRÉ −0:42 », ou null au direct. */
+    private String liveBadge() {
+        if (vod) return null;
+        if (pausedAtMs > 0) return "EN PAUSE · " + formatClock(currentLiveDelayMs());
+        if (liveDelayMs >= LIVE_DELAY_SHOWN_MS) return "DIFFÉRÉ −" + formatClock(liveDelayMs);
+        return null;
+    }
+
+    private static String formatClock(long ms) {
+        long seconds = Math.max(0, ms / 1000);
+        if (seconds >= 3600) return String.format(Locale.FRANCE, "%d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+        return String.format(Locale.FRANCE, "%d:%02d", seconds / 60, seconds % 60);
+    }
+
+    private void togglePause() {
+        setPaused(!isPaused());
+    }
+
+    /** Seuls « Pause » (qui devient « Lecture ») et la touche ⏯ mettent en pause. */
+    private void setPaused(boolean pause) {
+        if (player == null || casting) return;
+        if (pause == isPaused()) return;
+        if (pause) {
+            player.setPlayWhenReady(false);
+            playWhenReady = false;
+            if (!vod) pausedAtMs = SystemClock.elapsedRealtime();
+        } else if (!vod && liveLostWhilePaused) {
+            reconnectLive(true);
+            return;
+        } else {
+            if (!vod && pausedAtMs > 0) {
+                liveDelayMs += SystemClock.elapsedRealtime() - pausedAtMs;
+                pausedAtMs = 0;
+            }
+            player.setPlayWhenReady(true);
+            playWhenReady = true;
+        }
+        refreshControls();
+        if (isControlsVisible) scheduleHideControls();
+        // Reprise en différé : « Revenir au direct » arrive en tête, focus dessus.
+        if (!pause && tvUi && isControlsVisible && tvBand != null && isBehindLive()) {
+            tvBand.refresh();
+            tvBand.focusKey("live");
+        }
+        ensureTicker();
+    }
+
+    private void backToLive() {
+        boolean seekable = player != null && !liveLostWhilePaused
+            && player.isCurrentMediaItemLive() && player.isCurrentMediaItemSeekable();
+        if (seekable) {
+            // Flux avec fenêtre de différé (HLS) : on saute au bord du direct, sans reconnexion.
+            pausedAtMs = 0; liveDelayMs = 0;
+            player.seekToDefaultPosition();
+            player.setPlayWhenReady(true);
+            playWhenReady = true;
+        } else {
+            reconnectLive(false);
+        }
+        lastUsedKey = "pause";
+        refreshControls();
+        if (tvUi && isControlsVisible && tvBand != null) tvBand.focusKey("pause");
+    }
+
+    /** Repart au direct en rouvrant le flux ; annonce pourquoi si la pause était trop longue. */
+    private void reconnectLive(boolean announce) {
+        pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false;
+        playWhenReady = true;
+        progressHandler.removeCallbacks(autoRetryRunnable);
+        hideError();
+        if (player != null) prepareMedia(streamUrl); else initPlayer(streamUrl);
+        if (announce) Toast.makeText(this, "Reprise au direct · la pause dépassait ce que le flux garde", Toast.LENGTH_LONG).show();
+        refreshControls();
+    }
+
+    private boolean needsTicker() {
+        if (pipActive) return false;
+        if (!vod && (pausedAtMs > 0 || liveDelayMs > 0)) return true;
+        return vod && tvUi && isControlsVisible;
+    }
+
+    private void ensureTicker() {
+        tickHandler.removeCallbacks(ticker);
+        if (needsTicker()) tickHandler.post(ticker);
+    }
+
+    /** Bandeau fermé en différé : le retard reste affiché dans le coin. */
+    private void updateCornerBadge() {
+        if (cornerBadge == null) return;
+        String badge = liveBadge();
+        boolean show = badge != null && !pipActive && !isControlsVisible && !infoOnly;
+        cornerBadge.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) {
+            String mark = pausedAtMs > 0 ? "❚❚  " : "●  ";
+            SpannableString text = new SpannableString(mark + badge);
+            text.setSpan(new ForegroundColorSpan(C_DIM), 0, mark.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            cornerBadge.setText(text);
+        }
+    }
+
+    /** Relit tout ce qui affiche un état : pastilles, panneau Options, bouton central, badges. */
+    private void refreshControls() {
+        if (btnCenterPause != null) {
+            boolean paused = isPaused();
+            btnCenterPause.setImageResource(paused ? R.drawable.ic_player_play : R.drawable.ic_player_pause);
+            btnCenterPause.setContentDescription(paused ? "Lecture" : "Pause");
+        }
+        if (tvBand != null) tvBand.refresh();
+        if (optionsSheet != null) optionsSheet.refresh();
+        updateInfoBar();
+        updateCornerBadge();
+    }
+
+    // ── Bandeau TV ──────────────────────────────────────────────────
+
+    private void buildTvBand(FrameLayout root) {
+        tvBand = new TvBand(this, root, new TvBand.Host() {
+            @Override public void onOptionUsed(PlayerOption option) { lastUsedKey = option.key; }
+            @Override public void onListChanged(boolean open) { scheduleHideControls(); }
+        });
+        List<TvBand.Row> rows = new ArrayList<>();
+        if (vod) rows.add(new TvBand.Row("Progression", buildSeekRow(), null));
+        rows.add(new TvBand.Row("Lecture", null, tvPlaybackOptions()));
+        rows.add(new TvBand.Row("Réglages", null, settingOptions()));
+        tvBand.setRows(rows);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(8), 0, 0);
+        infoBar.addView(tvBand.view(), lp);
+        tvBand.view().setVisibility(View.GONE);
+    }
+
+    /** Rangée Progression : focusable ; ◀ ▶ reculent ou avancent, maintenir accélère. */
+    private View buildSeekRow() {
+        seekRow = new LinearLayout(this);
+        seekRow.setOrientation(LinearLayout.HORIZONTAL);
+        seekRow.setGravity(Gravity.CENTER_VERTICAL);
+        seekRow.setFocusable(true);
+        // OK sur la progression : pause ou reprise, comme ⏯.
+        seekRow.setClickable(true);
+        seekRow.setOnClickListener(v -> { lastUsedKey = "leading"; togglePause(); });
+        seekRow.setPadding(dp(14), dp(10), dp(14), dp(10));
+        seekRow.setContentDescription("Progression de la lecture");
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] { android.R.attr.state_focused }, rounded(PlayerOption.C_PILL, 24));
+        bg.addState(new int[] {}, rounded(Color.TRANSPARENT, 24));
+        seekRow.setBackground(bg);
+        seekElapsed = new TextView(this);
+        seekElapsed.setTextSize(14);
+        seekElapsed.setTextColor(PlayerOption.C_SOFT);
+        seekElapsed.setTypeface(Typeface.MONOSPACE);
+        seekRow.addView(seekElapsed);
+        seekBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        seekBar.setMax(1000);
+        seekBar.setProgressTintList(ColorStateList.valueOf(C_ACCENT));
+        seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#29FFFFFF")));
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(0, dp(4), 1f);
+        bp.setMargins(dp(16), 0, dp(16), 0);
+        seekRow.addView(seekBar, bp);
+        seekRemaining = new TextView(this);
+        seekRemaining.setTextSize(14);
+        seekRemaining.setTextColor(PlayerOption.C_SOFT);
+        seekRemaining.setTypeface(Typeface.MONOSPACE);
+        seekRow.addView(seekRemaining);
+        seekRow.setOnFocusChangeListener((v, has) -> {
+            // Au focus, la barre s'épaissit et passe en blanc : on voit ce que ◀ ▶ vont déplacer.
+            ViewGroup.LayoutParams lp = seekBar.getLayoutParams();
+            lp.height = dp(has ? 6 : 4);
+            seekBar.setLayoutParams(lp);
+            seekBar.setProgressTintList(ColorStateList.valueOf(has ? C_TEXT : C_ACCENT));
+        });
+        return seekRow;
+    }
+
+    /** Réouverture : dernière commande utilisée (ou sa voisine), sinon Chaînes / Pause. */
+    private void focusBandOnOpen() {
+        if (tvBand == null) return;
+        if (isBehindLive() && pausedAtMs == 0 && tvBand.focusKey("live")) return;
+        if (lastUsedKey != null && tvBand.focusPreferred(lastUsedKey)) return;
+        if (!tvBand.focusKey(vod ? "pause" : "channels")) tvBand.focusKey("pause");
+    }
+
+    private void seekBy(int direction, int repeat) {
+        // Maintenir la touche accélère : 10 s, puis 30 s, puis 1 min par pas.
+        long step = repeat < 6 ? 10_000 : repeat < 20 ? 30_000 : 60_000;
+        seekRelative(direction * step);
+        updateInfoBar();
+    }
+
+    // ── Commandes partagées (Options du téléphone, bandeau TV) ───────
+
+    /** Réglages : panneau Options (téléphone) et rangée Réglages (TV). */
+    private List<PlayerOption> settingOptions() {
+        List<PlayerOption> list = new ArrayList<>();
+        if (vod) list.add(speedOption());
+        list.add(audioOption());
+        list.add(subtitleOption());
+        list.add(formatOption());
+        list.add(qualityOption());
+        if (!tvUi) list.add(orientationOption());
+        list.add(sleepOption());
+        return list;
+    }
+
+    /** Actions du panneau Options, sous les réglages. */
+    private List<PlayerOption> phoneActions() {
+        List<PlayerOption> list = new ArrayList<>();
+        if (vod) {
+            list.add(PlayerOption.action("episodes", "Épisodes", this::openChannelPanel)
+                .visible(() -> channelPanel != null).build());
+            list.add(PlayerOption.action("next", "Épisode suivant", () -> switchChannel(1))
+                .visible(this::hasNextEpisode).build());
+            list.add(PlayerOption.action("restart", "Reprendre depuis le début", this::restartFromBeginning).build());
+        } else {
+            list.add(recordOption("Enregistrer le direct"));
+        }
+        list.add(PlayerOption.action("openWith", "Ouvrir avec… (VLC)", this::openInVlc).build());
+        return list;
+    }
+
+    /** Rangée Lecture du bandeau TV. */
+    private List<PlayerOption> tvPlaybackOptions() {
+        List<PlayerOption> list = new ArrayList<>();
+        if (!vod) {
+            list.add(PlayerOption.action("live", "Revenir au direct", this::backToLive)
+                .visible(() -> isBehindLive() && pausedAtMs == 0).build());
+        }
+        list.add(PlayerOption.action("pause", "Pause", this::togglePause)
+            .label(() -> isPaused() ? "Lecture" : "Pause")
+            .icon(() -> isPaused() ? R.drawable.ic_player_play : R.drawable.ic_player_pause).build());
+        if (!vod) {
+            list.add(PlayerOption.action("channels", "Chaînes", this::openChannelPanel)
+                .icon(() -> R.drawable.ic_player_list)
+                .visible(() -> channelPanel != null).build());
+            list.add(PlayerOption.action("previous", "Revenir à", () -> { if (previousIndex >= 0) switchTo(previousIndex); })
+                .value(() -> previousIndex >= 0 && channelTitles != null && previousIndex < channelTitles.size() ? channelTitles.get(previousIndex) : null)
+                .visible(() -> previousIndex >= 0 && previousIndex != channelIndex && channelTitles != null && previousIndex < channelTitles.size()).build());
+            list.add(recordOption("Enregistrer"));
+        } else {
+            list.add(PlayerOption.action("episodes", "Épisodes", this::openChannelPanel)
+                .icon(() -> R.drawable.ic_player_list)
+                .visible(() -> channelPanel != null).build());
+            list.add(PlayerOption.action("next", "Suivant", () -> switchChannel(1))
+                .value(() -> hasNextEpisode() ? "É" + (channelIndex + 2) : null)
+                .visible(this::hasNextEpisode).build());
+            list.add(PlayerOption.action("restart", "Depuis le début", this::restartFromBeginning).build());
+        }
+        list.add(PlayerOption.action("openWith", "Ouvrir avec…", this::openInVlc).build());
+        return list;
+    }
+
+    private boolean hasNextEpisode() {
+        return vod && episodeIds != null && channelUrls != null && channelIndex >= 0 && channelIndex + 1 < channelUrls.size();
+    }
+
+    private void restartFromBeginning() {
+        if (player == null) return;
+        player.seekTo(0);
+        player.setPlayWhenReady(true);
+        playWhenReady = true;
+        refreshControls();
+    }
+
+    private PlayerOption recordOption(String label) {
+        return PlayerOption.action("record", label, this::toggleRecording)
+            .label(() -> recording ? "Arrêter l'enregistrement" : label)
+            .dot(C_LIVE)
+            .visible(() -> isHttpUrl(streamUrl)).build();
+    }
+
+    private static String formatSpeed(float speed) {
+        String text = String.format(Locale.FRANCE, "%.2f", speed).replaceAll("0+$", "").replaceAll(",$", "");
+        return text + "×";
+    }
+
+    private PlayerOption speedOption() {
+        return PlayerOption.list("speed", "Vitesse")
+            .value(() -> formatSpeed(playbackSpeed))
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                for (float speed : SPEEDS) {
+                    final float value = speed;
+                    out.add(new PlayerOption.Choice(formatSpeed(value), Math.abs(playbackSpeed - value) < 0.01f, () -> setSpeed(value)));
+                }
+                return out;
+            }).build();
+    }
+
+    /** Vitesse gardée pendant toute la séance (épisodes suivants, pause, rotation) ;
+     *  un autre film ou une autre série repart à 1×. */
+    private void setSpeed(float speed) {
+        playbackSpeed = speed;
+        if (player != null) player.setPlaybackParameters(new PlaybackParameters(speed));
+        updateInfoBar();
+    }
+
+    private boolean hasOverride(int trackType) {
+        if (player == null) return false;
+        for (TrackSelectionOverride o : player.getTrackSelectionParameters().overrides.values()) {
+            if (o.getType() == trackType) return true;
+        }
+        return false;
+    }
+
+    private String trackLabel(Format format, int number, int trackType) {
+        if (trackType == C.TRACK_TYPE_AUDIO) return formatAudioTrackLabel(format, number);
+        String language = getLanguageDisplayName(format.language);
+        if (language != null && format.label != null && !format.label.trim().isEmpty() && !format.label.equalsIgnoreCase(language)) {
+            return language + " (" + format.label.trim() + ")";
+        }
+        if (language != null) return language;
+        if (format.label != null && !format.label.trim().isEmpty()) return format.label.trim();
+        return "Piste " + number;
+    }
+
+    /** Valeur affichée : langue de la piste en cours, sans détails. */
+    private String selectedTrackName(int trackType) {
+        if (player == null) return null;
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != trackType) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (!group.isTrackSelected(i)) continue;
+                Format f = group.getTrackFormat(i);
+                String language = getLanguageDisplayName(f.language);
+                if (language != null) return language;
+                if (f.label != null && !f.label.trim().isEmpty()) return f.label.trim();
+                return "Piste " + (i + 1);
+            }
+        }
+        return null;
+    }
+
+    /** Pistes d'un type, avec l'action qui les choisit. */
+    private List<PlayerOption.Choice> trackChoices(int trackType) {
+        List<PlayerOption.Choice> out = new ArrayList<>();
+        if (player == null) return out;
+        int number = 1;
+        boolean overridden = hasOverride(trackType);
+        for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != trackType) continue;
+            for (int i = 0; i < group.length; i++) {
+                if (!group.isTrackSupported(i)) { number++; continue; }
+                final Tracks.Group g = group;
+                final int index = i;
+                boolean checked = (overridden || trackType == C.TRACK_TYPE_TEXT) && group.isTrackSelected(i);
+                out.add(new PlayerOption.Choice(trackLabel(group.getTrackFormat(i), number++, trackType), checked, () -> {
+                    if (player == null) return;
+                    player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                        .setTrackTypeDisabled(trackType, false)
+                        .setOverrideForType(new TrackSelectionOverride(g.getMediaTrackGroup(), Collections.singletonList(index)))
+                        .build());
+                }));
+            }
+        }
+        return out;
+    }
+
+    private PlayerOption audioOption() {
+        return PlayerOption.list("audio", "Audio")
+            .value(() -> { String name = selectedTrackName(C.TRACK_TYPE_AUDIO); return name != null ? name : "Auto"; })
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                out.add(new PlayerOption.Choice("Automatique (français d'abord)", !hasOverride(C.TRACK_TYPE_AUDIO), () -> {
+                    if (player == null) return;
+                    player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                        .clearOverridesOfType(C.TRACK_TYPE_AUDIO).setPreferredAudioLanguage("fra").build());
+                }));
+                out.addAll(trackChoices(C.TRACK_TYPE_AUDIO));
+                return out;
+            }).build();
+    }
+
+    private boolean subtitlesOff() {
+        if (player == null) return true;
+        if (player.getTrackSelectionParameters().disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)) return true;
+        return selectedTrackName(C.TRACK_TYPE_TEXT) == null;
+    }
+
+    private PlayerOption subtitleOption() {
+        return PlayerOption.list("subtitles", "Sous-titres")
+            .value(() -> subtitlesOff() ? "Désactivés" : selectedTrackName(C.TRACK_TYPE_TEXT))
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                out.add(new PlayerOption.Choice("Désactivés", subtitlesOff(), () -> {
+                    if (player == null) return;
+                    player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                        .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+                }));
+                out.addAll(trackChoices(C.TRACK_TYPE_TEXT));
+                return out;
+            }).build();
+    }
+
+    private PlayerOption formatOption() {
+        return PlayerOption.list("format", "Format")
+            .value(() -> currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM ? "Zoom"
+                : currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL ? "Étiré" : "Ajusté")
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                int[] modes = { AspectRatioFrameLayout.RESIZE_MODE_FIT, AspectRatioFrameLayout.RESIZE_MODE_ZOOM, AspectRatioFrameLayout.RESIZE_MODE_FILL };
+                String[] names = { "Ajusté (image entière)", "Zoom (remplit l'écran)", "Étiré" };
+                for (int i = 0; i < modes.length; i++) {
+                    final int mode = modes[i];
+                    out.add(new PlayerOption.Choice(names[i], currentResizeMode == mode, () -> {
+                        currentResizeMode = mode;
+                        if (playerView != null) playerView.setResizeMode(mode);
+                    }));
+                }
+                return out;
+            }).build();
+    }
+
+    /** Hauteurs vidéo distinctes proposées par le flux (plusieurs qualités : HLS adaptatif). */
+    private List<int[]> videoHeights() {
+        List<int[]> out = new ArrayList<>(); // [hauteur, index du groupe, index de piste]
+        if (player == null) return out;
+        List<Tracks.Group> groups = player.getCurrentTracks().getGroups();
+        for (int g = 0; g < groups.size(); g++) {
+            Tracks.Group group = groups.get(g);
+            if (group.getType() != C.TRACK_TYPE_VIDEO) continue;
+            for (int i = 0; i < group.length; i++) {
+                int height = group.getTrackFormat(i).height;
+                if (!group.isTrackSupported(i) || height <= 0) continue;
+                boolean seen = false;
+                for (int[] h : out) if (h[0] == height) { seen = true; break; }
+                if (!seen) out.add(new int[] { height, g, i });
+            }
+        }
+        Collections.sort(out, (a, b) -> b[0] - a[0]);
+        return out;
+    }
+
+    private PlayerOption qualityOption() {
+        return PlayerOption.list("quality", "Qualité")
+            .visible(() -> videoHeights().size() > 1)
+            .value(() -> {
+                if (!hasOverride(C.TRACK_TYPE_VIDEO)) return "Auto";
+                Format f = player != null ? player.getVideoFormat() : null;
+                return f != null && f.height > 0 ? f.height + "p" : "Auto";
+            })
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                boolean auto = !hasOverride(C.TRACK_TYPE_VIDEO);
+                out.add(new PlayerOption.Choice("Auto (selon le débit)", auto, () -> {
+                    if (player == null) return;
+                    player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                        .clearOverridesOfType(C.TRACK_TYPE_VIDEO).build());
+                }));
+                Format current = player != null ? player.getVideoFormat() : null;
+                List<Tracks.Group> groups = player != null ? player.getCurrentTracks().getGroups() : new ArrayList<>();
+                for (int[] h : videoHeights()) {
+                    final Tracks.Group group = groups.get(h[1]);
+                    final int track = h[2];
+                    boolean checked = !auto && current != null && current.height == h[0];
+                    out.add(new PlayerOption.Choice(h[0] + "p", checked, () -> {
+                        if (player == null) return;
+                        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                            .setOverrideForType(new TrackSelectionOverride(group.getMediaTrackGroup(), Collections.singletonList(track)))
+                            .build());
+                    }));
+                }
+                return out;
+            }).build();
+    }
+
+    private PlayerOption orientationOption() {
+        String[] names = { "Auto", "Paysage", "Verrouillée" };
+        return PlayerOption.list("orientation", "Orientation")
+            .value(() -> names[orientationMode])
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                String[] labels = { "Auto (suit le téléphone)", "Paysage", "Verrouillée (position actuelle)" };
+                for (int i = 0; i < labels.length; i++) {
+                    final int mode = i;
+                    out.add(new PlayerOption.Choice(labels[i], orientationMode == mode, () -> {
+                        orientationMode = mode;
+                        setRequestedOrientation(mode == 1 ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            : mode == 2 ? ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                            : ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+                    }));
+                }
+                return out;
+            }).build();
+    }
+
+    private PlayerOption sleepOption() {
+        return PlayerOption.list("sleep", "Veille")
+            .value(() -> {
+                if (sleepOnEnd) return "Fin de la vidéo";
+                if (sleepTargetTimeMs <= 0) return "Non";
+                long remaining = sleepTargetTimeMs - SystemClock.elapsedRealtime();
+                return "Dans " + Math.max(1, (remaining + 59_999) / 60_000) + " min";
+            })
+            .choices(() -> {
+                List<PlayerOption.Choice> out = new ArrayList<>();
+                boolean off = !sleepOnEnd && sleepTargetTimeMs <= 0;
+                out.add(new PlayerOption.Choice("Non", off, this::cancelSleepTimer));
+                for (int minutes : new int[] { 15, 30, 45, 60, 90 }) {
+                    final int m = minutes;
+                    out.add(new PlayerOption.Choice(minutes + " min", false, () -> startSleepTimer(m)));
+                }
+                if (vod) {
+                    out.add(new PlayerOption.Choice("Fin de la vidéo", sleepOnEnd, () -> { cancelSleepTimer(); sleepOnEnd = true; }));
+                }
+                return out;
+            }).build();
+    }
+
+    /** Lecteur vu par le contrôleur Media3 (téléphone, films) : sans ses réglages de vitesse et de
+     *  pistes, qui passent par le panneau Options — sa liste de vitesses se bloquait au second choix. */
+    private Player viewPlayer(ExoPlayer exo) {
+        return new ForwardingPlayer(exo) {
+            @Override public Player.Commands getAvailableCommands() {
+                return super.getAvailableCommands().buildUpon()
+                    .remove(Player.COMMAND_SET_SPEED_AND_PITCH)
+                    .remove(Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS)
+                    .build();
+            }
+            @Override public boolean isCommandAvailable(int command) {
+                if (command == Player.COMMAND_SET_SPEED_AND_PITCH || command == Player.COMMAND_SET_TRACK_SELECTION_PARAMETERS) return false;
+                return super.isCommandAvailable(command);
+            }
+        };
+    }
+
+    // ── Télécommande : une touche fait une chose, selon ce qui est ouvert ──
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int code = event.getKeyCode();
+        if (code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || code == KeyEvent.KEYCODE_MEDIA_PLAY || code == KeyEvent.KEYCODE_MEDIA_PAUSE) {
+            // ⏯ partout, quel que soit ce qui est ouvert ; le bandeau reste comme il est.
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 && player != null && !casting) {
+                if (code == KeyEvent.KEYCODE_MEDIA_PLAY) setPaused(false);
+                else if (code == KeyEvent.KEYCODE_MEDIA_PAUSE) setPaused(true);
+                else togglePause();
+                if (!tvUi && !isControlsVisible && !vod) showControls();
+            }
+            return true;
+        }
+        if (tvUi && handleTvKey(event)) return true;
+        return super.dispatchKeyEvent(event);
+    }
+
+    private boolean handleTvKey(KeyEvent event) {
+        int code = event.getKeyCode();
+        boolean up = code == KeyEvent.KEYCODE_DPAD_UP, down = code == KeyEvent.KEYCODE_DPAD_DOWN;
+        boolean left = code == KeyEvent.KEYCODE_DPAD_LEFT, right = code == KeyEvent.KEYCODE_DPAD_RIGHT;
+        boolean arrow = up || down || left || right;
+        boolean ok = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
+        if (!arrow && !ok) return false;
+        if (pipActive || casting) return false;
+        boolean pressed = event.getAction() == KeyEvent.ACTION_DOWN;
+        // Panneaux qui gardent la navigation par défaut : erreur, épisode suivant, saisie d'un numéro.
+        if (errorPanel != null && errorPanel.getVisibility() == View.VISIBLE && !isControlsVisible) return false;
+        if (nextEpisodePanel != null && nextEpisodePanel.getVisibility() == View.VISIBLE) return false;
+        if (ok && numberBuffer.length() > 0) return false;
+
+        if (isChannelPanelOpen()) {
+            // Liste des chaînes : ▲ ▼ parcourent, OK lance ; ◀ va aux catégories, ▶ ferme la liste.
+            boolean inList = channelListView != null && channelListView.hasFocus();
+            if (right && inList) { if (pressed) closeChannelPanel(); return true; }
+            if (left && inList) {
+                if (pressed && groupChips != null) focusActiveChip();
+                return true;
+            }
+            return false;
+        }
+
+        if (tvBand != null && tvBand.isListOpen()) {
+            // Liste d'un réglage : ▲ ▼ choisissent, OK applique, ◀ ▶ sans effet.
+            if (!arrow) return false;
+            if (pressed && (up || down)) tvBand.moveInList(up ? -1 : 1);
+            scheduleHideControls();
+            return true;
+        }
+
+        if (isControlsVisible) {
+            scheduleHideControls();
+            if (!arrow) return false; // OK : la commande sous le focus s'active.
+            if (!pressed) return true;
+            if (!tvBand.hasFocus()) { focusBandOnOpen(); return true; }
+            View focused = getCurrentFocus();
+            if (focused != null && focused == seekRow && (left || right)) {
+                seekBy(left ? -1 : 1, event.getRepeatCount());
+                lastUsedKey = "leading";
+                return true;
+            }
+            if (up || down) tvBand.moveRow(up ? -1 : 1);
+            else tvBand.moveInRow(left ? -1 : 1);
+            return true;
+        }
+
+        // Rien d'ouvert.
+        if (!pressed) return true;
+        if (vod) {
+            if (left || right) { seekBy(left ? -1 : 1, event.getRepeatCount()); return true; }
+            if (up || down) {
+                if (event.getRepeatCount() > 0) return true;
+                showControls();
+                if (tvBand != null) tvBand.focusLeading();
+                return true;
+            }
+            if (event.getRepeatCount() == 0) showControls();
+            return true;
+        }
+        if (channelUrls != null && (up || down)) { switchChannel(up ? -1 : 1); return true; }
+        if (channelUrls != null && left) { openChannelPanel(); return true; }
+        if ((ok || right) && event.getRepeatCount() == 0) showControls();
+        return true;
+    }
 }

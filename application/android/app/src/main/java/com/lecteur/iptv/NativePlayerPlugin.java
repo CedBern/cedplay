@@ -85,6 +85,7 @@ public class NativePlayerPlugin extends Plugin {
             Intent intent = new Intent(getContext(), NativePlayerActivity.class);
             intent.putExtra(NativePlayerActivity.EXTRA_URL, url);
             intent.putExtra(NativePlayerActivity.EXTRA_TITLE, title);
+            putTvUi(call, intent);
             // Le contexte reste dans le cache privé : aucune grande liste dans le message Binder.
             JSArray urls = call.getArray("channelUrls", null);
             JSArray titles = call.getArray("channelTitles", null);
@@ -191,6 +192,7 @@ public class NativePlayerPlugin extends Plugin {
             intent.putExtra(NativePlayerActivity.EXTRA_URL, url);
             intent.putExtra(NativePlayerActivity.EXTRA_TITLE, call.getString("title", "Vidéo"));
             intent.putExtra("vod", true);
+            putTvUi(call, intent);
             intent.putExtra("mediaId", call.getString("mediaId", ""));
             intent.putExtra("startPositionMs", Math.max(0, call.getDouble("startPositionMs", 0.0).longValue()));
             intent.putExtra("restart", call.getBoolean("restart", false));
@@ -284,6 +286,12 @@ public class NativePlayerPlugin extends Plugin {
         } catch (Exception e) {
             call.reject("Impossible de lancer le lecteur externe");
         }
+    }
+
+    /** Mode d'interface de la page (réglage Auto / TV / Mobile) : le lecteur adopte le même. */
+    private static void putTvUi(PluginCall call, Intent intent) {
+        Boolean tvUi = call.getBoolean("tvUi");
+        if (tvUi != null) intent.putExtra("tvUi", tvUi.booleanValue());
     }
 
     private boolean isHttpUrl(String url) {
@@ -483,6 +491,7 @@ public class NativePlayerPlugin extends Plugin {
             intent.putExtra(NativePlayerActivity.EXTRA_URL, uri);
             intent.putExtra(NativePlayerActivity.EXTRA_TITLE, title);
             intent.putExtra("vod", true);
+            putTvUi(call, intent);
             intent.putExtra("mediaId", "local:" + uri);
             String subUri = call.getString("subtitleUri");
             if (subUri != null && !subUri.isEmpty()) intent.putExtra("subtitleUrl", subUri);

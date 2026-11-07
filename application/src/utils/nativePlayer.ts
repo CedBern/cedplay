@@ -38,16 +38,16 @@ export interface ScheduledRecording {
 }
 
 interface NativePlayerPluginType {
-  open(options: { url: string; title?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
+  open(options: { url: string; title?: string | undefined; tvUi?: boolean | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
   openWeb(options: { url: string; title?: string | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
-  openVod(options: { url: string; title: string; mediaId: string; startPositionMs: number; restart: boolean; subtitleUrl?: string | undefined; subtitleContent?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; episodeIds?: string[] | undefined; channelIndex?: number | undefined }): Promise<VodResult>;
+  openVod(options: { url: string; title: string; tvUi?: boolean | undefined; mediaId: string; startPositionMs: number; restart: boolean; subtitleUrl?: string | undefined; subtitleContent?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; episodeIds?: string[] | undefined; channelIndex?: number | undefined }): Promise<VodResult>;
   pickFolder(): Promise<{ uri: string; name: string } | null>;
   listFolders(): Promise<{ folders: LocalFolder[] }>;
   scanLibrary(options: { uri?: string }): Promise<{ files: LocalMedia[]; count: number; truncated: boolean }>;
   removeFolder(options: { uri: string }): Promise<void>;
-  playLocal(options: { uri: string; title: string; subtitleUri?: string }): Promise<{ positionMs: number; durationMs: number; completed?: boolean }>;
+  playLocal(options: { uri: string; title: string; subtitleUri?: string; tvUi?: boolean }): Promise<{ positionMs: number; durationMs: number; completed?: boolean }>;
   pickRecordingsFolder(): Promise<{ uri: string; name: string } | null>;
   getRecordingsFolder(): Promise<{ uri: string; name: string } | null>;
   listRecordings(): Promise<{ files: LocalMedia[] }>;
@@ -243,6 +243,12 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
   return zap;
 }
 
+/** Interface télécommande en cours (réglage Affichage › Interface, ou détection TV) :
+ *  le lecteur natif l'adopte pour ses commandes (bandeau en rangées au lieu de la barre tactile). */
+function isTvUi(): boolean {
+  return typeof document !== 'undefined' && document.documentElement.classList.contains('tv-mode');
+}
+
 async function openPlayer(method: 'open' | 'openExternal', url: string, title?: string, zap?: NativeZapContext, onReturned?: (url: string) => void, onJump?: (number: string) => void): Promise<boolean> {
   if (!isAvailable() || isPlaybackDelegated()) return false;
   try {
@@ -257,6 +263,7 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
     // The Android plugin resolves when the activity closes, not when it opens.
     const result = await NativePlayer[method]({
       url, title,
+      ...(method === 'open' ? { tvUi: isTvUi() } : {}),
       ...(zap && zap.urls.length === zap.titles.length && zap.index >= 0 && zap.index < zap.urls.length
         ? {
           channelUrls: zap.urls, channelTitles: zap.titles, channelIndex: zap.index,
@@ -363,6 +370,7 @@ export const NativePlayerBridge = {
       const result = await NativePlayer.openVod({
         url,
         title,
+        tvUi: isTvUi(),
         mediaId,
         startPositionMs: restart ? 0 : readVodProgress(mediaId)?.positionMs || 0,
         restart,
@@ -446,7 +454,7 @@ export const LocalLibraryBridge = {
     if (!isAvailable() || isPlaybackDelegated()) return null;
     setPlaybackDelegated(true);
     try {
-      return await NativePlayer.playLocal({ uri, title, ...(subtitleUri ? { subtitleUri } : {}) });
+      return await NativePlayer.playLocal({ uri, title, tvUi: isTvUi(), ...(subtitleUri ? { subtitleUri } : {}) });
     } catch { toast.error('Impossible de lire ce fichier.'); return null; }
     finally { setPlaybackDelegated(false); }
   },
