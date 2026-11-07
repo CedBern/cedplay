@@ -158,14 +158,20 @@ public class AudioProgressStore {
         }
 
         /**
-         * Bascule proprement de l'épisode en cours vers un nouvel épisode :
-         * 1. Si un épisode différent est actif, sa dernière position (`currentPositionMs`) et sa vitesse
-         *    (`currentSpeed`) sont d'abord enregistrées sous SON propre `activeEpisodeId`.
+         * Bascule proprement de l'épisode effectivement chargé dans le lecteur (`loadedEpisodeId`)
+         * vers un nouvel épisode (`nextEpisodeId`) :
+         * 1. Si un épisode différent est réellement chargé dans le lecteur (`loadedEpisodeId` non vide
+         *    et distinct de `nextEpisodeId`), sa dernière position (`currentPositionMs`) et sa vitesse
+         *    (`currentSpeed`) sont d'abord enregistrées sous `loadedEpisodeId`.
+         *    En revanche, si le lecteur est vide (ex. service recréé au lancement de l'application alors
+         *    qu'`activeEpisodeId` pointe encore vers l'épisode mémorisé A), on NE sauvegarde PAS les
+         *    valeurs par défaut du lecteur vide (0 s / 1.0x) sur A afin de ne pas effacer sa reprise.
          * 2. L'épisode actif devient `nextEpisodeId`.
          * 3. Renvoie l'entrée de `nextEpisodeId` avec sa position de reprise et sa vitesse restaurée
          *    (priorité : `explicitSpeed` si > 0, sinon vitesse sauvegardée de `nextEpisodeId`, sinon `currentSpeed` ou 1.0x).
          */
         public synchronized Entry transitionToEpisode(
+                String loadedEpisodeId,
                 long currentPositionMs,
                 long currentDurationMs,
                 float currentSpeed,
@@ -178,11 +184,11 @@ public class AudioProgressStore {
                 long explicitStartPositionMs,
                 float explicitSpeed,
                 long nowMs) {
-            if (activeEpisodeId != null && !activeEpisodeId.isEmpty() && !activeEpisodeId.equals(nextEpisodeId)) {
-                Entry currentEntry = entries.get(activeEpisodeId);
+            if (loadedEpisodeId != null && !loadedEpisodeId.isEmpty() && !loadedEpisodeId.equals(nextEpisodeId)) {
+                Entry currentEntry = entries.get(loadedEpisodeId);
                 if (currentEntry != null) {
                     saveProgress(
-                            activeEpisodeId,
+                            loadedEpisodeId,
                             currentEntry.feedUrl,
                             currentEntry.audioUrl,
                             currentEntry.title,
@@ -220,6 +226,39 @@ public class AudioProgressStore {
             entries.put(nextEpisodeId, nextEntry);
             activeEpisodeId = nextEpisodeId;
             return nextEntry;
+        }
+
+        /**
+         * Surcharge de compatibilité lorsque l'épisode actif correspond à l'épisode réellement chargé
+         * dans le lecteur.
+         */
+        public synchronized Entry transitionToEpisode(
+                long currentPositionMs,
+                long currentDurationMs,
+                float currentSpeed,
+                String nextEpisodeId,
+                String nextFeedUrl,
+                String nextAudioUrl,
+                String nextTitle,
+                String nextPodcastTitle,
+                String nextArtworkUrl,
+                long explicitStartPositionMs,
+                float explicitSpeed,
+                long nowMs) {
+            return transitionToEpisode(
+                    activeEpisodeId,
+                    currentPositionMs,
+                    currentDurationMs,
+                    currentSpeed,
+                    nextEpisodeId,
+                    nextFeedUrl,
+                    nextAudioUrl,
+                    nextTitle,
+                    nextPodcastTitle,
+                    nextArtworkUrl,
+                    explicitStartPositionMs,
+                    explicitSpeed,
+                    nowMs);
         }
     }
 

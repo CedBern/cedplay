@@ -412,10 +412,14 @@ public class AudioPlaybackService extends MediaSessionService {
         }
 
         // Transition atomique : sauvegarde l'épisode précédent sous son propre identifiant AVANT
-        // de basculer currentEpisodeId, puis récupère la position et la vitesse de reprise du nouvel épisode.
+        // de basculer currentEpisodeId, UNIQUEMENT si cet épisode précédent était réellement chargé
+        // dans le lecteur (sinon, après recréation du service avec un lecteur vide, on n'écrase pas
+        // la reprise sauvegardée de l'ancien épisode avec 0 s / 1.0x).
+        String loadedEpisodeId = "";
         long prevPos = 0L;
         long prevDur = 0L;
         if (!currentEpisodeId.isEmpty() && player != null && player.getMediaItemCount() > 0) {
+            loadedEpisodeId = currentEpisodeId;
             prevPos = Math.max(0L, player.getCurrentPosition());
             long d = player.getDuration();
             if (d != C.TIME_UNSET && d > 0) prevDur = d;
@@ -423,6 +427,7 @@ public class AudioPlaybackService extends MediaSessionService {
 
         AudioProgressStore.SessionTracker tracker = AudioProgressStore.tracker(this);
         AudioProgressStore.Entry target = tracker.transitionToEpisode(
+                loadedEpisodeId,
                 prevPos,
                 prevDur,
                 currentSpeed,
@@ -513,18 +518,82 @@ public class AudioPlaybackService extends MediaSessionService {
         emitState();
     }
 
+    /**
+     * Exécute la séquence logique d'arrêt explicite sur le tracker :
+     * 1. Si un épisode est encore chargé dans le lecteur (`loadedEpisodeId` non vide), sauvegarde sa position finale.
+     * 2. Vide `currentEpisodeId` (via la valeur de retour `""`) AVANT que `player.stop()` ne déclenche ses écouteurs.
+     * 3. Même si un écouteur synchrone de `player.stop()` tente une sauvegarde avec l'identifiant déjà vidé,
+     *    rien n'est réinscrit, et `clearActiveEpisodeId()` finalise l'effacement après l'arrêt.
+     */
+    static String performStopAndClearActive(
+            AudioProgressStore.SessionTracker tracker,
+            String loadedEpisodeId,
+            String feedUrl,
+            String audioUrl,
+            String title,
+            String podcastTitle,
+            String artworkUrl,
+            long positionMs,
+            long durationMs,
+            float speed,
+            long nowMs,
+            @Nullable Runnable stopPlayerAction) {
+        if (tracker != null && loadedEpisodeId != null && !loadedEpisodeId.isEmpty()) {
+            tracker.saveProgress(
+                    loadedEpisodeId,
+                    feedUrl,
+                    audioUrl,
+                    title,
+                    podcastTitle,
+                    artworkUrl,
+                    positionMs,
+                    durationMs,
+                    speed,
+                    false,
+                    nowMs);
+        }
+        String clearedEpisodeId = "";
+        if (stopPlayerAction != null) {
+            stopPlayerAction.run();
+        }
+        if (tracker != null) {
+            tracker.clearActiveEpisodeId();
+        }
+        return clearedEpisodeId;
+    }
+
     private void stopAndSave() {
         mainHandler.removeCallbacks(checkpointRunnable);
-        saveCurrentProgress(false);
-        AudioProgressStore.tracker(this).clearActiveEpisodeId();
-        AudioProgressStore.persist(this);
-        if (player != null) {
-            player.stop();
-            player.clearMediaItems();
-        }
+        String loadedId = (player != null && player.getMediaItemCount() > 0) ? currentEpisodeId : "";
+        String savedAudioUrl = currentAudioUrl;
+        long pos = (player != null && player.getMediaItemCount() > 0) ? Math.max(0L, player.getCurrentPosition()) : 0L;
+        long dur = (player != null && player.getMediaItemCount() > 0) ? player.getDuration() : 0L;
+        long validDur = (dur != C.TIME_UNSET && dur > 0) ? dur : 0L;
+
+        // Vider currentEpisodeId avant player.stop() pour neutraliser saveCurrentProgress() dans les callbacks d'arrêt
         currentEpisodeId = "";
         currentAudioUrl = "";
         lastError = null;
+
+        performStopAndClearActive(
+                AudioProgressStore.tracker(this),
+                loadedId,
+                currentFeedUrl,
+                savedAudioUrl,
+                currentTitle,
+                currentPodcastTitle,
+                currentArtworkUrl,
+                pos,
+                validDur,
+                currentSpeed,
+                System.currentTimeMillis(),
+                () -> {
+                    if (player != null) {
+                        player.stop();
+                        player.clearMediaItems();
+                    }
+                });
+        AudioProgressStore.persist(this);
         emitState();
         stopSelf();
     }

@@ -229,4 +229,107 @@ public class AudioProgressStoreTest {
         tracker.clearActiveEpisodeId();
         assertEquals(null, AudioPlaybackService.resolveSavedEntryForResume(tracker, ""));
     }
+
+    @Test
+    public void lancerUnAutreEpisodeApresRecreationDuServiceConserveLaRepriseDuPrecedent() {
+        AudioProgressStore.SessionTracker tracker = new AudioProgressStore.SessionTracker();
+        // L'épisode A est sauvegardé à 5 min 12 s (312 000 ms), vitesse 1.5x, et est l'épisode actif mémorisé
+        tracker.saveProgress(
+                "ep-A",
+                "https://example.test/feed.xml",
+                "https://example.test/a.mp3",
+                "Épisode A",
+                "Podcast Test",
+                "",
+                312_000L,
+                1_800_000L,
+                1.5f,
+                false,
+                1000L);
+        assertEquals("ep-A", tracker.getActiveEpisodeId());
+
+        // Le service est recréé : son lecteur est vide (loadedEpisodeId == "", position 0L, durée 0L, vitesse 1.0f).
+        // L'utilisateur lance directement l'épisode B.
+        AudioProgressStore.Entry nextB = tracker.transitionToEpisode(
+                "",
+                0L,
+                0L,
+                1.0f,
+                "ep-B",
+                "https://example.test/feed.xml",
+                "https://example.test/b.mp3",
+                "Épisode B",
+                "Podcast Test",
+                "",
+                -1L,
+                0f,
+                2000L);
+
+        assertNotNull(nextB);
+        assertEquals("ep-B", tracker.getActiveEpisodeId());
+
+        // La reprise de A (5 min 12 s, vitesse 1.5x) ne doit PAS avoir été écrasée par les valeurs du lecteur vide (0 s, 1.0x)
+        AudioProgressStore.Entry savedA = tracker.getEntry("ep-A");
+        assertNotNull(savedA);
+        assertEquals(312_000L, savedA.positionMs);
+        assertEquals(1_800_000L, savedA.durationMs);
+        assertEquals(1.5f, savedA.speed, 0.001f);
+        assertFalse(savedA.completed);
+    }
+
+    @Test
+    public void fermerLeLecteurPendantLEcouteEffaceActiveEpisodeIdMemeSiLesCallbacksDArretSeDeclenchent() {
+        AudioProgressStore.SessionTracker tracker = new AudioProgressStore.SessionTracker();
+        tracker.saveProgress(
+                "ep-en-cours",
+                "https://example.test/feed.xml",
+                "https://example.test/live.mp3",
+                "Épisode en cours",
+                "Podcast Test",
+                "",
+                120_000L,
+                1_800_000L,
+                1.25f,
+                false,
+                1000L);
+        assertEquals("ep-en-cours", tracker.getActiveEpisodeId());
+
+        // Simule stopAndSave() alors que player.stop() déclenche un callback onIsPlayingChanged(false) / onPlaybackStateChanged(IDLE)
+        String clearedId = AudioPlaybackService.performStopAndClearActive(
+                tracker,
+                "ep-en-cours",
+                "https://example.test/feed.xml",
+                "https://example.test/live.mp3",
+                "Épisode en cours",
+                "Podcast Test",
+                "",
+                185_000L,
+                1_800_000L,
+                1.25f,
+                2000L,
+                () -> {
+                    // Si un callback synchrone s'exécutait pendant player.stop(), il ne doit pas laisser activeEpisodeId non nul après coup
+                    tracker.saveProgress(
+                            "ep-en-cours",
+                            "https://example.test/feed.xml",
+                            "https://example.test/live.mp3",
+                            "Épisode en cours",
+                            "Podcast Test",
+                            "",
+                            185_000L,
+                            1_800_000L,
+                            1.25f,
+                            false,
+                            2001L);
+                });
+
+        assertEquals("", clearedId);
+        // L'identifiant actif est bien effacé une fois l'arrêt terminé (le mini-lecteur ne réapparaîtra pas au prochain lancement)
+        assertEquals(null, tracker.getActiveEpisodeId());
+        // Mais la position atteinte (185 000 ms) et la vitesse (1.25x) restent bien mémorisées sur l'épisode lui-même
+        AudioProgressStore.Entry saved = tracker.getEntry("ep-en-cours");
+        assertNotNull(saved);
+        assertEquals(185_000L, saved.positionMs);
+        assertEquals(1.25f, saved.speed, 0.001f);
+    }
 }
