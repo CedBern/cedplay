@@ -454,23 +454,71 @@ Points ouverts pour continuer :
    - Contrôles au clavier étendus en plein écran (flèches, pavé numérique pour numéro de chaîne, OSD automatique).
    - Reconnexion automatique avec backoff exponentiel lors des coupures de réseau.
 
-## Reprise et d�blocage d�marrage 1.6.1 (4 novembre 2026)
+## Reprise et déblocage démarrage 1.6.1 (4 novembre 2026)
 
 ### Diagnostic de la cause du gel de 20s
 1. Le bouton ? envoyait vers le lecteur Webview au lieu du lecteur Android natif.
-2. Surcharge IPC/Binder critique : avec 22 314 cha�nes, uildNativeZap s�rialisait 4,3 Mo de donn�es que Capacitor persistait dans savedInstanceState, provoquant TransactionTooLargeException: data parcel size 8578508 bytes et un crash imm�diat.
+2. Surcharge IPC/Binder critique : avec 22 314 chaînes, buildNativeZap sérialisait 4,3 Mo de données que Capacitor persistait dans savedInstanceState, provoquant TransactionTooLargeException: data parcel size 8578508 bytes et un crash immédiat.
 3. Allocations et transferts lourds (plusieurs secondes de freeze JS).
 
-### Correctifs appliqu�s
-- Bouton ? et carte rout�s directement vers le lecteur Android natif (ExoPlayer).
-- Fen�trage dynamique � 60 cha�nes entourant la s�lection dans uildNativeZap (charge divis�e par 300).
-- Purge de call.getData() avant startActivityForResult dans NativePlayerPlugin.java pour �liminer tout risque de TransactionTooLargeException.
-- Suppression des allocations superflues et virtualisation forc�e pour > 400 cha�nes.
-- Fausse notification r�seau supprim�e � l'initialisation.
+### Correctifs appliqués
+- Bouton ? et carte routés directement vers le lecteur Android natif (ExoPlayer).
+- Fenêtrage dynamique à 60 chaînes entourant la sélection dans buildNativeZap (charge divisée par 300).
+- Purge de call.getData() avant startActivityForResult dans NativePlayerPlugin.java pour éliminer tout risque de TransactionTooLargeException.
+- Suppression des allocations superflues et virtualisation forcée pour > 400 chaînes.
+- Fausse notification réseau supprimée à l'initialisation.
 
-### Mesures r�elles sur t�l�phone (Motorola Edge 70)
+### Mesures réelles sur téléphone (Motorola Edge 70)
 - Lancement de l'activity : **102 ms**.
-- Premi�re image vid�o d�cod�e : **2,2 secondes**.
-- TF1 HD et TF1 4K UHD test�s avec succ�s et fluidit� mat�rielle.
-- Retour arri�re et r�tention de s�lection v�rifi�s.
-- 320/320 tests Vitest pass�s. APK d�ploy� et disponible � la racine (Lecteur-IPTV.apk).
+- Première image vidéo décodée : **2,2 secondes**.
+- TF1 HD et TF1 4K UHD testés avec succès et fluidité matérielle.
+- Retour arrière et rétention de sélection vérifiés.
+- 320/320 tests Vitest passés. APK déployé et disponible à la racine (Lecteur-IPTV.apk).
+
+
+---
+
+## Consolidation, audit intégral et livraison 1.11.11 (7 novembre 2026)
+
+### État canonique actuel
+- **Branche consolidée** : `consolidate/v1.11.4` (commits `3fd7cd0` et `1a5cda0`)
+- **Version livrée** : **CedPlay 1.11.11** (`versionCode=40`) — APK racine : `CedPlay-1.11.11.apk` (**4 579 467 octets**, soit −48 % par rapport aux 8,71 Mo précédents après retrait des médias de vérification de `public/`).
+- **Rapport complet** : [AUDIT_INTEGRAL_2026-11-07.md](AUDIT_INTEGRAL_2026-11-07.md).
+- **Fiche de suivi Second Cerveau** : [CedPlay.md](C:/Users/C2k/Documents/Second%20Cerveau/10%20Projets/CedPlay.md).
+
+### Évolutions intégrées depuis la 1.6.1 (05/11 → 07/11)
+1. **Navigation TV, EPG, Replay, Podcasts (`1.8.x` → `1.11.7`)** :
+   - Ergonomie télécommande 3 colonnes, bandeau de zapping avec logo, rafale P+/P-, horloge EPG, replay M3U et enregistrement depuis le guide, fiches TMDb enrichies.
+   - Module Podcasts complet : service audio natif Media3, reprise position + vitesse, mini-lecteur, recherche par nom, pochettes et suggestions au démarrage.
+2. **Lot A — Performance chaude et fiabilité (`1.11.8` / code 37)** :
+   - Recalcul des recommandations VOD optimisé : **4 200–7 700 ms → 287 ms** (premier calcul) / **~140 ms** (suivants) sur 20 000 films × 50 visionnages ; plus aucun recalcul pendant la lecture.
+   - Réglages paresseux (`IPTVPlayer`) et sous-titres VOD lus depuis IndexedDB (`VodLibrary`).
+   - Garde `resumed`/PiP sur `reconnectLive` et remontée des interruptions d'enregistrement (`onRecordInterrupted`).
+3. **Lot B — Fluidité perçue (`1.11.9` / code 38)** :
+   - Index `HashMap` O(1) des numéros de chaîne en natif (`rebuildNumberIndex`).
+   - Lecture de `zaplist.tsv` hors du thread UI (`adoptFullListAsync` + `publishFullList`).
+   - Mémoïsation réelle des cartes `ChannelList` et des cellules `ProgramCell` de l'EPG ; écriture de progression podcasts bridée à 5 s.
+4. **Lot C + corrections de revue — Sécurité et hygiène (`1.11.10` → `1.11.11` / code 40)** :
+   - Masquage des secrets (`tmdbApiKey`, `deeplApiKey`, `openSubtitlesApiKey`, `subdlApiKey`, `parentalPin`) dans le journal des réglages et les Diagnostics (`redact.ts`).
+   - Activation d'une CSP partielle dans `index.html`.
+   - Hachage SHA-256 salé du PIN parental (`pinHash.ts`), migration silencieuse au déverrouillage, plafond de stockage porté à 128 caractères (`MAX_PARENTAL_PIN_LENGTH`), règle stricte « champ vide = code inchangé, champ rempli = 4 à 8 chiffres ».
+   - Passage par `CapacitorHttp.request()` sur les derniers chemins natifs sujets au CORS (respect de la méthode `HEAD`).
+
+### Vérifications reproduites le 07/11/2026
+- `tsc -p tsconfig.app.json --noEmit` et `tsc -p tsconfig.node.json --noEmit` : **0 erreur**
+- `eslint ./src` : **0 erreur**
+- `vitest run` : **544/544 tests réussis** (89 fichiers)
+- `vite build`, `cap sync android`, `./gradlew assembleRelease` : **0 erreur** (`CedPlay-1.11.11.apk`, code 40, 0 média de test embarqué).
+
+### Ce qui reste à valider / prochaines actions
+1. **Recette sur appareil réel (box Android TV et téléphone)** : installer `CedPlay-1.11.11.apk` et vérifier le chargement asynchrone de la liste complète, la saisie de numéro O(1), le PIN parental haché et les appels Xtream/M3U via `CapacitorHttp`.
+2. **Hygiène Git et fichiers** : après validation de la `1.11.11`, fusionner `consolidate/v1.11.4` dans `main`, archiver/supprimer les anciens APK à la racine et nettoyer les 3 worktrees `.claude/worktrees/*`.
+3. **Suite fonctionnelle éventuelle (Lot D)** : rappels EPG en notification système (`AlarmManager`), sous-titres du direct web, épisode suivant automatique web, préréglages de mosaïques.
+
+
+## Réparation de l'encodage du suivi — 7 novembre 2026
+
+- Ancien contenu récupéré depuis Git : le fichier mélangeait une partie UTF-8 et une fin Windows-1252 avant sa relecture globale en Windows-1252. Toutes les entrées ajoutées depuis sont conservées à l'identique.
+- Fichier réécrit intégralement en UTF-8, sans caractère de remplacement ni caractère de contrôle parasite ; deux noms `buildNativeZap` altérés par un caractère de contrôle dans l'historique sont restaurés.
+- Pour les prochaines écritures : lecture et écriture explicitement en UTF-8 ; ne jamais utiliser l'encodage implicite de Windows PowerShell pour ce fichier.
+- Sauvegardes brutes et contrôles : `preuves/reparation-encodage-2026-11-07/RAPPORT.md`. Aucun code applicatif ni APK modifié, aucun test sur appareil effectué.
