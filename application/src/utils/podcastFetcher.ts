@@ -1,5 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { parsePodcastRss, type ParsedPodcastFeed } from './podcastParser';
+import { FeedFormatError, parsePodcastRss, type ParsedPodcastFeed } from './podcastParser';
 
 /**
  * Récupère et analyse un flux RSS de podcast :
@@ -47,7 +47,7 @@ export async function fetchPodcastFeed(rawUrl: string): Promise<ParsedPodcastFee
     return parsePodcastRss(xmlText, normalizedUrl);
   } catch (directError) {
     // Si c'est déjà une erreur d'analyse RSS (flux vide ou malformé), on la remonte directement
-    if (directError instanceof Error && (directError.message.includes('flux RSS') || directError.message.includes('<channel>'))) {
+    if (directError instanceof FeedFormatError) {
       throw directError;
     }
     // Repli Web lecture seule si le serveur du podcast n'envoie pas d'en-tête Access-Control-Allow-Origin
@@ -57,7 +57,8 @@ export async function fetchPodcastFeed(rawUrl: string): Promise<ParsedPodcastFee
       if (!proxyRes.ok) throw new Error(`HTTP ${proxyRes.status}`);
       const xmlText = await proxyRes.text();
       return parsePodcastRss(xmlText, normalizedUrl);
-    } catch {
+    } catch (proxyError) {
+      if (proxyError instanceof FeedFormatError) throw proxyError;
       throw new Error('Impossible de charger ce flux RSS (vérifie l’adresse ou la connexion).');
     }
   }

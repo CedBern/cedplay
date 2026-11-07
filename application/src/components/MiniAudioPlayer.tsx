@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Headphones, Pause, Play, RotateCcw, RotateCw, X } from 'lucide-react';
 import type { AudioPlaybackState } from '@/types/podcast';
 import { AudioBridge } from '@/utils/nativePlayer';
-import { formatAudioTime } from './PodcastsPanel';
+import { formatAudioTime, formatEpisodeLength } from '@/utils/podcastFormat';
 
 const SPEEDS = [0.8, 1, 1.25, 1.5, 1.75, 2] as const;
 
@@ -23,6 +23,9 @@ export function MiniAudioPlayer({ tv = false, onOpenPodcasts }: MiniAudioPlayerP
   const percent = state.durationMs > 0
     ? Math.min(100, Math.max(0, Math.round((state.positionMs / state.durationMs) * 100)))
     : 0;
+  const remaining = state.durationMs > 0
+    ? `Reste ${formatEpisodeLength(Math.max(0, state.durationMs - state.positionMs))}`
+    : '';
 
   const cycleSpeed = () => {
     const idx = SPEEDS.findIndex(s => Math.abs(s - state.speed) < 0.03);
@@ -45,6 +48,7 @@ export function MiniAudioPlayer({ tv = false, onOpenPodcasts }: MiniAudioPlayerP
         <div
           role="progressbar"
           aria-label="Progression de l’épisode en cours"
+          aria-valuetext={`${formatAudioTime(state.positionMs)} sur ${formatAudioTime(state.durationMs)}`}
           aria-valuenow={percent}
           aria-valuemin={0}
           aria-valuemax={100}
@@ -60,27 +64,33 @@ export function MiniAudioPlayer({ tv = false, onOpenPodcasts }: MiniAudioPlayerP
           className="flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg p-1"
           title="Ouvrir l’espace Écouter"
         >
+          {/* Téléphone : la place va au titre, la pochette n'apparaît qu'à partir de sm (et sur TV). */}
           {state.artworkUrl ? (
             <img
               src={state.artworkUrl}
               alt=""
               referrerPolicy="no-referrer"
-              className="h-10 w-10 shrink-0 rounded-lg object-cover bg-neutral-800"
+              className={`${tv ? 'block' : 'hidden sm:block'} h-10 w-10 shrink-0 rounded-lg object-cover bg-neutral-800`}
             />
           ) : (
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-primary">
+            <span className={`${tv ? 'flex' : 'hidden sm:flex'} h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-primary`}>
               <Headphones className="h-5 w-5" aria-hidden="true" />
             </span>
           )}
+          {/* Titre, puis émission · temps restant. Le reste ne se coupe jamais : c'est le
+              nom de l'émission qui cède la place. Durée audio restante, indépendante de la
+              vitesse — la même que dans la liste des épisodes et sur l'Accueil. */}
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-semibold text-white">
+            <span className="block truncate text-[13px] font-semibold text-white">
               {state.title}
             </span>
-            <span className="block truncate text-[11px] text-neutral-400">
-              {state.podcastTitle ? `${state.podcastTitle} · ` : ''}
-              <span className="font-mono">{formatAudioTime(state.positionMs)}</span>
-              {state.durationMs > 0 ? <span className="font-mono">{` / ${formatAudioTime(state.durationMs)}`}</span> : null}
-            </span>
+            {(state.podcastTitle || remaining) && (
+              <span className="flex min-w-0 gap-1 text-[11px] text-neutral-400">
+                {state.podcastTitle && <span className="truncate">{state.podcastTitle}</span>}
+                {state.podcastTitle && remaining && <span aria-hidden="true">·</span>}
+                {remaining && <span className="shrink-0">{remaining}</span>}
+              </span>
+            )}
           </span>
         </button>
 
