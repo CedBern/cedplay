@@ -341,11 +341,12 @@ const GENERIC_AUTHOR_WORDS = new Set(['radio', 'france', 'podcast', 'podcasts', 
 export function authorsMatch(a: string, b: string): boolean {
   const na = normalizeName(a);
   const nb = normalizeName(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
   const words = (s: string) => s.split(' ').filter(w => w.length >= 3 && !GENERIC_AUTHOR_WORDS.has(w));
   const wa = words(na);
   const wb = new Set(words(nb));
+  // D'abord la précision : sans mot distinctif d'un côté, même une égalité ne prouve rien.
+  if (wa.length === 0 || wb.size === 0) return false;
+  if (na === nb) return true;
   return wa.some(w => wb.has(w));
 }
 

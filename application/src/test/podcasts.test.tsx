@@ -14,6 +14,7 @@ import { PodcastsPanel } from '@/components/PodcastsPanel';
 import { formatEpisodeDate, formatEpisodeLength } from '@/utils/podcastFormat';
 import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
 import {
+  authorsMatch,
   DEFAULT_PODCAST_SUGGESTIONS,
   resolvePodcastLink,
   searchPodcasts,
@@ -720,6 +721,26 @@ describe('Écouter — présentation sobre', () => {
         const noDirectoryAuthor = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id3333333');
         expect(noDirectoryAuthor.resolved).toBe(false);
         expect(noDirectoryAuthor.candidates).toHaveLength(1);
+      });
+
+      it('producteur trop vague, même identique des deux côtés : pas de confirmation', () => {
+        expect(authorsMatch('Radio France', 'Radio France')).toBe(false);
+        expect(authorsMatch('Podcasts', 'podcasts')).toBe(false);
+        expect(authorsMatch('Radio France', 'France Inter')).toBe(false);
+        expect(authorsMatch('France Inter', 'France Inter')).toBe(true);
+        expect(authorsMatch('Slate.fr', 'Slate.fr Podcasts')).toBe(true);
+        expect(authorsMatch('France Inter', 'France Culture')).toBe(false);
+      });
+
+      it('lien Apple : « Radio France » des deux côtés → choix proposé, pas d’abonnement', async () => {
+        const dir = directory([{ title: 'La Terre au carré', author: 'Radio France', url: 'https://example.test/terre.xml' }]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('lookup') ? Promise.resolve(lookup('La Terre au carré', 'Radio France')) : dir(url) ?? Promise.reject(new Error(url))
+        );
+        const r = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id4444444');
+        expect(r.resolved).toBe(false);
+        expect(r.feedUrl).toBeUndefined();
+        expect(r.candidates?.map(c => c.feedUrl)).toEqual(['https://example.test/terre.xml']);
       });
 
       it('Spotify : titre seul → choix proposé ; auteur lisible et concordant → abonnement direct', async () => {
