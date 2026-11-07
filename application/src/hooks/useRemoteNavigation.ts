@@ -55,6 +55,26 @@ export function useRemoteNavigation() {
       // La saisie garde gauche/droite ; haut/bas permet de quitter un champ simple.
       if (editing && (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || active?.matches('textarea, select, input[type="range"], input[type="number"], [contenteditable="true"], [role="slider"]'))) return;
       if (active?.closest('[role="menu"], [role="listbox"]')) return;
+      // Sortie explicite des rubriques : une télécommande doit pouvoir descendre même
+      // quand la géométrie (barre fixe, défilement ou écran étroit) n'offre aucun voisin.
+      const navigation = active?.closest('[data-main-navigation]');
+      if (navigation && event.key === 'ArrowDown') {
+        const selected = navigation.querySelector('[role="tab"][aria-selected="true"]');
+        const panel = document.getElementById(selected?.getAttribute('aria-controls') ?? '');
+        const next = panel?.querySelector<HTMLElement>('[data-remote-entry]') ?? (panel ? remoteTargets(panel)[0] : undefined);
+        if (next) {
+          event.preventDefault(); event.stopPropagation(); focusRemote(next); return;
+        }
+      }
+      // La première action de l'écran rend Haut à sa rubrique, sans chercher une
+      // cible au-dessus d'une barre qui peut elle-même être fixe.
+      if (event.key === 'ArrowUp' && active?.hasAttribute('data-remote-entry')) {
+        const panel = active.closest('[role="tabpanel"]');
+        const tab = document.getElementById(panel?.getAttribute('aria-labelledby') ?? '');
+        if (tab?.closest('[data-main-navigation]')) {
+          event.preventDefault(); event.stopPropagation(); focusRemote(tab); return;
+        }
+      }
       const targets = remoteTargets(scope());
       const vertical = event.key === 'ArrowUp' || event.key === 'ArrowDown';
       // Arriver par Haut/Bas ne choisit pas un autre pays ou Favoris à la place de l'onglet actif.

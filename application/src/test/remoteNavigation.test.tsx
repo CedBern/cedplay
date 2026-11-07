@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import userEvent from '@testing-library/user-event';
+import 'fake-indexeddb/auto';
+import { MainNavigation } from '@/components/MainNavigation';
+import { TvLiveScreen } from '@/components/TvLiveScreen';
 
 function Navigation({ modal = false, remove = false }: { modal?: boolean; remove?: boolean }) {
   useRemoteNavigation();
@@ -124,4 +127,51 @@ it('les panneaux Radix ne constituent plus un arrêt de navigation clavier ou TV
   expect(screen.getByRole('tab')).toHaveFocus();
   await userEvent.tab();
   expect(screen.getByRole('button', { name: 'Lire' })).toHaveFocus();
+});
+
+it('Bas depuis Direct rejoint Rechercher, puis Guide TV et Organiser sans lancer de chaîne', () => {
+  geometry();
+  const channel = { id: 'test', name: 'Chaîne test', url: 'https://example.test/live' };
+  const onPlay = vi.fn(), onSearch = vi.fn(), onGuide = vi.fn(), onOrganize = vi.fn();
+  function Direct() {
+    useRemoteNavigation();
+    return <Tabs value="channels" activationMode="manual">
+      <MainNavigation onNavigate={() => {}} />
+      <TabsContent value="channels"><TvLiveScreen playlistId="remote-entry-test"
+        groups={[{ name: 'Test', channels: [channel] }]} favoriteIds={[]} onPlay={onPlay}
+        onSearch={onSearch} onGuide={onGuide} onOrganize={onOrganize} /></TabsContent>
+    </Tabs>;
+  }
+  render(<Direct />);
+  screen.getByRole('tab', { name: 'Direct' }).focus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: 'Rechercher' })).toHaveFocus();
+  fireEvent.click(document.activeElement!);
+  expect(onSearch).toHaveBeenCalledOnce();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: 'Guide TV' })).toHaveFocus();
+  fireEvent.click(document.activeElement!);
+  expect(onGuide).toHaveBeenCalledOnce();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: 'Organiser' })).toHaveFocus();
+  fireEvent.click(document.activeElement!);
+  expect(onOrganize).toHaveBeenCalledOnce();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  expect(screen.getByRole('tab', { name: 'Direct' })).toHaveFocus();
+  expect(onPlay).not.toHaveBeenCalled();
+});
+
+it.each(['continue', 'vod', 'more'])('Bas entre dans le contenu de %s même sans voisin géométrique', section => {
+  geometry();
+  function Page() {
+    useRemoteNavigation();
+    return <Tabs value={section} activationMode="manual"><MainNavigation onNavigate={() => {}} />
+      <TabsContent value={section}><button>Première action</button></TabsContent></Tabs>;
+  }
+  render(<Page />);
+  screen.getByRole('tab', { selected: true }).focus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: 'Première action' })).toHaveFocus();
 });

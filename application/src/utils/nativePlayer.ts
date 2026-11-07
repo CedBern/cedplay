@@ -5,6 +5,7 @@ import { readVodProgress, saveVodProgress } from './xtreamCatalog';
 import { updateVodHistoryProgress, pushPlayHistory } from './idb';
 import type { Channel } from '@/types/channel';
 import type { EPGData } from '@/types/epg';
+import { getActiveUserAgent } from './userAgent';
 
 interface NativeStream { url: string; title: string }
 /** Bilan d'une session du lecteur natif : interruptions, images perdues, erreurs (aucune URL). */
@@ -37,7 +38,7 @@ export interface ScheduledRecording {
 }
 
 interface NativePlayerPluginType {
-  open(options: { url: string; title?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
+  open(options: { url: string; title?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
   openWeb(options: { url: string; title?: string | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
@@ -51,15 +52,27 @@ interface NativePlayerPluginType {
   getRecordingsFolder(): Promise<{ uri: string; name: string } | null>;
   listRecordings(): Promise<{ files: LocalMedia[] }>;
   deleteRecording(options: { uri: string }): Promise<void>;
-  scheduleRecording(options: { url: string; title: string; startTimeMs: number; durationMs: number }): Promise<{ id: string }>;
+  scheduleRecording(options: { url: string; title: string; startTimeMs: number; durationMs: number; userAgent: string }): Promise<{ id: string }>;
   listScheduledRecordings(): Promise<{ schedules: ScheduledRecording[] }>;
   cancelScheduledRecording(options: { id: string }): Promise<void>;
   setChannelShortcuts(options: { items: { id: string; name: string }[] }): Promise<void>;
   isTelevision(): Promise<{ tv: boolean }>;
+  setPlayerOptions(options: NativePlayerOptions): Promise<void>;
+  setZapList(options: { key: string; data: string; count: number }): Promise<void>;
+  setHomeFavorites(options: { items: { id: string; name: string; logo?: string | undefined }[] }): Promise<void>;
+  addWatchNext(options: { id: string; name: string; logo?: string | undefined }): Promise<void>;
   showPreview(options: PreviewRequest): Promise<void>;
   stopPreview(): Promise<void>;
   hidePreview(): Promise<void>;
   addListener(event: 'previewState', listener: (data: { state: PreviewState }) => void): Promise<PluginListenerHandle>;
+}
+
+/** Réglages du lecteur Android, gardés par Android pour le lecteur, l'aperçu, la mosaïque et les enregistrements. */
+export interface NativePlayerOptions {
+  userAgent: string;
+  buffer: 'small' | 'normal' | 'large' | 'max';
+  decoder: 'hardware' | 'software';
+  afr: boolean;
 }
 
 /** Cadre de l'aperçu, en pixels CSS de la page. */
@@ -74,7 +87,37 @@ function isAvailable(): boolean {
 
 /** Programme transmis au lecteur Android : [début ms, fin ms, titre]. */
 export type NativeProgram = [number, number, string];
-export interface NativeZapContext { urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][]; numbers?: string[]; total?: number }
+export interface NativeZapContext {
+  urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][]; numbers?: string[]; total?: number;
+  /** Début de la fenêtre dans la liste complète. */
+  start?: number;
+  /** Liste complète déjà transmise au lecteur Android (zapping sur toutes les chaînes). */
+  listKey?: string;
+  listIndex?: number;
+}
+
+/** Liste complète transmise au lecteur Android : une fois par changement de liste, pas à chaque ouverture. */
+let syncedZapList: { channels: Channel[]; key: string } | null = null;
+let zapListSync: Promise<void> | null = null;
+const tsvField = (value: string | undefined) => (value ?? '').replace(/[\t\r\n]+/g, ' ');
+
+/** Contenu de zaplist.tsv : « url, nom, groupe, numéro » par ligne. */
+export function zapListData(channels: Channel[]): string {
+  const numbers = channelNumbering(channels).numbers;
+  return channels.map((c, i) => `${tsvField(c.url)}\t${tsvField(c.name)}\t${tsvField(c.group)}\t${numbers[i] ?? ''}`).join('\n');
+}
+
+export function syncNativeZapList(channels: Channel[]): Promise<void> {
+  if (!isAvailable() || !channels.length) return Promise.resolve();
+  if (syncedZapList?.channels === channels) return zapListSync ?? Promise.resolve();
+  const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  syncedZapList = null;
+  const run = NativePlayer.setZapList({ key, data: zapListData(channels), count: channels.length })
+    .then(() => { syncedZapList = { channels, key }; })
+    .catch(() => { /* le lecteur garde la fenêtre de 300 chaînes */ });
+  zapListSync = run;
+  return run;
+}
 
 /** « 007 » et « 7 » désignent la même chaîne ; tout ce qui n'est pas un nombre est ignoré. */
 function normalizeNumber(value: string | undefined): string {
@@ -143,6 +186,8 @@ function recordNativeStats(stats: PlaybackStats | undefined | null): void {
 /** Guide en mémoire, tenu à jour par l'écran principal, pour le bandeau du lecteur Android. */
 let nativeEpg: EPGData | null = null;
 export function setNativeEpg(data: EPGData | null | undefined): void { nativeEpg = data ?? null; }
+/** Guide chargé (diagnostic mémoire). */
+export function getLoadedEpg(): EPGData | null { return nativeEpg; }
 
 function upcomingPrograms(channel: Channel, epg: EPGData, now: number): NativeProgram[] {
   const programs = epg[channel.id];
@@ -178,11 +223,14 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
     urls: windowSlice.map(c => c.url),
     titles: windowSlice.map(c => c.name),
     index: index - start,
+    start,
     // Chaîne choisie absente de la liste (ajoutée en fin) : pas de numéro, la page ne la retrouverait pas.
     numbers: windowSlice.map((_, i) => allNumbers[start + i] ?? ''),
     total: ordered.length,
   };
   if (windowSlice.some(c => c.group)) zap.groups = windowSlice.map(c => c.group || '');
+  // Chaîne trouvée dans une liste déjà transmise : le lecteur peut zapper sur toute la liste.
+  if (syncedZapList?.channels === channels && index < channels.length) { zap.listKey = syncedZapList.key; zap.listIndex = index; }
   if (epg) {
     const now = Date.now();
     // La chaîne choisie peut être une variante : son guide est rangé sous l'id de la chaîne de base.
@@ -215,15 +263,17 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
           ...(zap.groups?.length === zap.urls.length ? { channelGroups: zap.groups } : {}),
           ...(zap.epg?.length === zap.urls.length ? { channelEpg: zap.epg } : {}),
           ...(zap.numbers?.length === zap.urls.length ? { channelNumbers: zap.numbers, channelTotal: zap.total ?? zap.urls.length } : {}),
+          ...(zap.listKey && zap.listIndex !== undefined && zap.start !== undefined ? { listKey: zap.listKey, listIndex: zap.listIndex, windowStart: zap.start } : {}),
         }
         : {}),
     });
     if (result && 'stats' in result && result.stats) recordNativeStats(result.stats);
-    if (result && 'channelUrl' in result && typeof result.channelUrl === 'string' && zap?.urls.includes(result.channelUrl)) onReturned?.(result.channelUrl);
+    // Avec la liste complète, la dernière chaîne regardée peut être hors de la fenêtre transmise.
+    if (result && 'channelUrl' in result && typeof result.channelUrl === 'string' && (zap?.urls.includes(result.channelUrl) || zap?.listKey)) onReturned?.(result.channelUrl);
     // Numéro tapé hors du contexte transmis : la page relance le lecteur sur cette chaîne,
     // une fois celui-ci refermé (le verrou de lecture déléguée est levé dans finally).
     const jump = result && 'jumpNumber' in result ? result.jumpNumber : undefined;
-    if (onJump && typeof jump === 'string' && /^\d{1,5}$/.test(jump)) window.setTimeout(() => onJump(jump), 0);
+    if (onJump && typeof jump === 'string' && /^\d{1,9}$/.test(jump)) window.setTimeout(() => onJump(jump), 0);
     return true;
   } catch {
     toast.error(method === 'open'
@@ -266,6 +316,21 @@ export const NativePlayerBridge = {
       if (removed) void h.remove(); else handle = h;
     }).catch(() => {});
     return () => { removed = true; void handle?.remove(); };
+  },
+  /** Transmet les réglages du lecteur (User-Agent de la liste, mémoire tampon, décodage, AFR). */
+  async setPlayerOptions(options: NativePlayerOptions): Promise<void> {
+    if (!isAvailable()) return;
+    try { await NativePlayer.setPlayerOptions(options); } catch { /* ancienne version native : réglages par défaut */ }
+  },
+  /** Android TV : rangée Favoris de l'écran d'accueil (30 au plus). */
+  async setHomeFavorites(items: { id: string; name: string; logo?: string | undefined }[]): Promise<void> {
+    if (!isAvailable()) return;
+    try { await NativePlayer.setHomeFavorites({ items: items.slice(0, 30) }); } catch { /* lanceur sans rangées */ }
+  },
+  /** Android TV : dernière chaîne regardée dans « À suivre ». */
+  async addWatchNext(channel: { id: string; name: string; logo?: string | undefined }): Promise<void> {
+    if (!isAvailable()) return;
+    try { await NativePlayer.addWatchNext({ id: channel.id, name: channel.name, ...(channel.logo ? { logo: channel.logo } : {}) }); } catch { /* lanceur sans rangée À suivre */ }
   },
   /** Raccourcis de l'icône Android (appui long) : 4 favoris au plus. */
   async setChannelShortcuts(items: { id: string; name: string }[]): Promise<void> {
@@ -424,7 +489,9 @@ export const RecordingsBridge = {
   /** silent : pas de message d'erreur (programmation automatique des séries). */
   async schedule(url: string, title: string, startTimeMs: number, durationMs: number, options: { silent?: boolean } = {}): Promise<boolean> {
     if (!isAvailable()) { if (!options.silent) toast.error('Programmation disponible uniquement sur Android.'); return false; }
-    try { await NativePlayer.scheduleRecording({ url, title, startTimeMs, durationMs }); return true; }
+    // Figer la liste au moment de la programmation, avant toute attente ou changement de liste.
+    const userAgent = getActiveUserAgent();
+    try { await NativePlayer.scheduleRecording({ url, title, startTimeMs, durationMs, userAgent }); return true; }
     catch (e) {
       if (!options.silent) toast.error(e instanceof Error && e.message ? e.message : 'Programmation impossible.');
       return false;

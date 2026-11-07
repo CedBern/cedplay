@@ -164,8 +164,8 @@ public class MosaicPlayerActivity extends AppCompatActivity {
         tile.retry.setVisibility(View.GONE); tile.loading.setVisibility(View.VISIBLE);
         try {
             DefaultLoadControl load = new DefaultLoadControl.Builder().setBufferDurationsMs(5000, 15000, 1500, 3000).setTargetBufferBytes(8 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build();
-            DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory().setUserAgent("IPTVSmartersPro").setConnectTimeoutMs(15000).setReadTimeoutMs(15000).setAllowCrossProtocolRedirects(true);
-            ExoPlayer player = new ExoPlayer.Builder(this).setMediaSourceFactory(new DefaultMediaSourceFactory(http)).setLoadControl(load).setHandleAudioBecomingNoisy(true).build();
+            DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory().setUserAgent(PlayerOptions.userAgent(this)).setConnectTimeoutMs(15000).setReadTimeoutMs(15000).setAllowCrossProtocolRedirects(true);
+            ExoPlayer player = new ExoPlayer.Builder(this, PlayerOptions.renderers(this)).setMediaSourceFactory(new DefaultMediaSourceFactory(http)).setLoadControl(load).setHandleAudioBecomingNoisy(true).build();
             tile.player = player; tile.view.setPlayer(player); audio(tile, index == selected);
             player.addListener(new Player.Listener() {
                 @Override public void onPlaybackStateChanged(int state) {
@@ -186,7 +186,17 @@ public class MosaicPlayerActivity extends AppCompatActivity {
                     release(tile); tile.loading.setVisibility(View.GONE); tile.retry.setVisibility(View.VISIBLE);
                 }
             });
-            player.setMediaItem(MediaItem.fromUri(urls.get(index))); player.prepare(); player.play();
+            String source = urls.get(index);
+            if (Stalker.is(source)) {
+                // Portail Stalker : lien demandé au portail avant de lancer la tuile.
+                Stalker.resolveAsync(this, source, resolved -> {
+                    if (tile.player != player) return;
+                    if (resolved == null) { release(tile); tile.loading.setVisibility(View.GONE); tile.retry.setVisibility(View.VISIBLE); return; }
+                    player.setMediaItem(MediaItem.fromUri(resolved)); player.prepare(); player.play();
+                });
+            } else {
+                player.setMediaItem(MediaItem.fromUri(source)); player.prepare(); player.play();
+            }
         } catch (RuntimeException error) {
             release(tile); tile.loading.setVisibility(View.GONE); tile.retry.setVisibility(View.VISIBLE);
         }

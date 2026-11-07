@@ -32,6 +32,7 @@ public class RecordService extends Service {
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_TITLE = "title";
     public static final String EXTRA_DURATION_MS = "durationMs";
+    public static final String EXTRA_USER_AGENT = "userAgent";
 
     private static final int NOTIF_ID = 4001;
     /** Notifications de fin : une par enregistrement terminé, sans écraser l'indicateur en cours. */
@@ -93,7 +94,8 @@ public class RecordService extends Service {
         titles.put(token, title);
         urls.put(token, url);
         refreshOngoing();
-        started.start(url, title, dir, new Recorder.Listener() {
+        String userAgent = intent == null ? null : intent.getStringExtra(EXTRA_USER_AGENT);
+        started.start(url, title, dir, userAgent, new Recorder.Listener() {
             @Override public void onRecordStarted(String fileName) {
                 if (recorders.get(token) != started) return;
                 refreshOngoing();

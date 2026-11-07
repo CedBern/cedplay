@@ -20,7 +20,7 @@ vi.mock('@/utils/idb', () => ({
 }));
 vi.mock('@/components/VideoPlayer', () => ({ VideoPlayer: ({ onNativePlay }: { onNativePlay: (c: Channel) => void }) => <div>Lecteur de Canal test<button onClick={() => onNativePlay(fixture.channel)}>Ouvrir natif depuis lecteur</button></div> }));
 vi.mock('@/components/ChannelList', () => ({ ChannelList: ({ onNativeChannelSelect }: { onNativeChannelSelect: (c: Channel) => void }) => <div>Liste des chaînes test<button onClick={() => onNativeChannelSelect(fixture.channel)}>Ouvrir natif depuis carte</button></div> }));
-vi.mock('@/utils/nativePlayer', async () => ({ ...await vi.importActual<typeof import('@/utils/nativePlayer')>('@/utils/nativePlayer'), NativePlayerBridge: { open: vi.fn(), isAvailable: () => false, setChannelShortcuts: vi.fn(), isTelevision: async () => null } }));
+vi.mock('@/utils/nativePlayer', async () => ({ ...await vi.importActual<typeof import('@/utils/nativePlayer')>('@/utils/nativePlayer'), NativePlayerBridge: { open: vi.fn(), isAvailable: () => false, setChannelShortcuts: vi.fn(), setPlayerOptions: vi.fn(), setHomeFavorites: vi.fn(), addWatchNext: vi.fn(), isTelevision: async () => null } }));
 vi.mock('@/components/VodLibrary', () => ({ VodLibrary: ({ kind }: { kind: string }) => <div>Catalogue {kind}</div> }));
 vi.mock('@/components/ContinuePanel', () => ({ ContinuePanel: () => <div>Reprise test</div> }));
 vi.mock('@/components/MosaicPicker', () => ({ MosaicPicker: () => <div>Mosaïque test</div> }));

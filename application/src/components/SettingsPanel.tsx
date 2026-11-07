@@ -6,6 +6,8 @@ import { getSettingsChangeLog, getSettingsMigrationStats } from '@/utils/idb';
 import { isValidPin } from '@/utils/parentalControl';
 import { toast } from 'sonner';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
+import { getLoadedEpg } from '@/utils/nativePlayer';
+import { epgMemoryStats, jsHeap, megabytes } from '@/utils/epgStats';
 
 interface SettingsPanelProps {
   open: boolean;
@@ -113,9 +115,9 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
         </>)}
 
         {section('Films et séries', <label className="block py-3">
-          <span className="text-sm text-foreground">Clé API TMDB (fiches films enrichies)</span>
-          <input className={field} type="text" placeholder="Clé gratuite sur themoviedb.org (facultatif)" value={draft.tmdbApiKey ?? ''} onChange={e => setDraft({ ...draft, tmdbApiKey: e.target.value })} />
-          <span className="mt-1 block text-xs text-muted-foreground">Compte gratuit sur themoviedb.org › Paramètres › API. Synopsis en français, casting, notes, avis et films similaires.</span>
+          <span className="text-sm text-foreground">Clé ou jeton TMDB (fiches films enrichies)</span>
+          <input className={field} type="text" placeholder="Clé API v3 ou API Read Access Token (facultatif)" value={draft.tmdbApiKey ?? ''} onChange={e => setDraft({ ...draft, tmdbApiKey: e.target.value })} />
+          <span className="mt-1 block text-xs text-muted-foreground">Compte gratuit sur themoviedb.org › Paramètres › API. Clé courte ou long jeton de lecture acceptés. Synopsis, casting, notes et films similaires ; les sous-titres utilisent OpenSubtitles.</span>
         </label>)}
 
         {section('Sous-titres', <>
@@ -177,6 +179,31 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
         </div>
         </>)}
 
+        {section('Lecteur Android', <>
+          <div className="py-3">
+            <span className="block text-sm text-foreground">Mémoire tampon du direct</span>
+            <span className="block text-xs text-muted-foreground">Plus grande : moins de coupures sur une connexion instable, mais un démarrage et un zapping un peu plus lents.</span>
+            <div role="group" aria-label="Mémoire tampon" className="mt-2 flex flex-wrap gap-2">
+              {([['small', 'Petite'], ['normal', 'Normale'], ['large', 'Grande'], ['max', 'Très grande']] as const).map(([value, label]) => {
+                const active = (draft.playerBuffer ?? 'normal') === value;
+                return <Button key={value} type="button" size="sm" variant={active ? 'default' : 'outline'} aria-pressed={active} className="min-h-10 px-4" onClick={() => setDraft({ ...draft, playerBuffer: value })}>{label}</Button>;
+              })}
+            </div>
+          </div>
+          <div className="py-3">
+            <span className="block text-sm text-foreground">Décodage vidéo</span>
+            <span className="block text-xs text-muted-foreground">Matériel : le plus fluide sur une box. Logiciel : à essayer si l’image saccade, reste noire ou montre des artefacts sur certaines chaînes ; le processeur travaille davantage.</span>
+            <div role="group" aria-label="Décodage vidéo" className="mt-2 flex flex-wrap gap-2">
+              {([['hardware', 'Matériel'], ['software', 'Logiciel']] as const).map(([value, label]) => {
+                const active = (draft.playerDecoder ?? 'hardware') === value;
+                return <Button key={value} type="button" size="sm" variant={active ? 'default' : 'outline'} aria-pressed={active} className="min-h-10 px-4" onClick={() => setDraft({ ...draft, playerDecoder: value })}>{label}</Button>;
+              })}
+            </div>
+          </div>
+          {check(draft.playerAfr === true, value => setDraft({ ...draft, playerAfr: value }), 'Fréquence d’affichage automatique (AFR)', 'Le téléviseur passe à 50 Hz pour une chaîne en 25 ou 50 images/s, à 60 Hz pour 30 ou 60 : mouvements sans saccades. L’écran peut devenir noir une seconde au changement.')}
+          <p className="py-2 text-xs text-muted-foreground">Désentrelacement : sur Android, il est fait par le décodeur de la box quand celui-ci le prend en charge ; le lecteur n’a pas de réglage séparé.</p>
+        </>)}
+
         {section('Avancé', <>
           {toggle('keyboardNavigation', 'Navigation au clavier', 'Flèches, Entrée et chiffres dans la liste et le lecteur.')}
           {toggle('telemetryPersistence', 'Conserver les diagnostics sur cet appareil')}
@@ -188,7 +215,13 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           <div className="py-3">
             <Button variant="outline" size="sm" onClick={() => setDiagnostics(!diagnostics)}>Diagnostics</Button>
             {diagnostics && <div data-testid="settings-diagnostics" className="mt-3 text-xs text-muted-foreground">
-              <p>Version: {currentSettings.__version ?? 1}</p><p>Changements récents</p>
+              <p>Version: {currentSettings.__version ?? 1}</p>
+              {(() => {
+                const epg = epgMemoryStats(getLoadedEpg());
+                const heap = jsHeap();
+                return <p data-testid="epg-memory">Guide en mémoire : {epg.channels.toLocaleString('fr-FR')} chaînes, {epg.programmes.toLocaleString('fr-FR')} programmes, environ {megabytes(epg.estimatedBytes)}{heap ? ` · mémoire de la page : ${megabytes(heap.used)}${heap.limit ? ` sur ${megabytes(heap.limit)}` : ''}` : ''}</p>;
+              })()}
+              <p>Changements récents</p>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap">{details}</pre>
             </div>}
           </div>

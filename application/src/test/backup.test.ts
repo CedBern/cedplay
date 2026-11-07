@@ -92,6 +92,18 @@ describe('Sauvegarde complète et restauration additive', () => {
     expect(await getPlaylistsFromDB()).toEqual([]);
     expect(await getMeta('cannotClone')).toBeUndefined();
   });
+  it('garde replay M3U, guides, User-Agent et portail Stalker d’une liste', () => {
+    const source = M3UParser.parseM3U([
+      '#EXTM3U url-tvg="https://example.test/guide.xml"',
+      '#EXTINF:-1 tvg-shift="1" catchup="append" catchup-days="3" catchup-source="?utc={utc}",Alpha',
+      'https://example.test/a',
+    ].join(String.fromCharCode(10)));
+    const full = { ...source, userAgent: 'VLC/3.0.20', stalker: { portal: 'http://portal.test/portal.php', mac: '00:1A:79:00:00:01' } };
+    const restored = parseBackup(JSON.stringify(createBackup([full], [])));
+    expect(restored.playlists[0]).toMatchObject({ userAgent: 'VLC/3.0.20', stalker: full.stalker, epgUrls: ['https://example.test/guide.xml'] });
+    expect(restored.playlists[0]!.channels[0]).toMatchObject({ tvgShift: 1, catchup: 'append', catchupDays: 3 });
+  });
+
   it('refuse un fichier altéré ou une version inconnue avant restauration', () => {
     const backup = createBackup([playlist()], []);
     for (const bad of ['broken json', JSON.stringify({ ...backup, version: 99 }),

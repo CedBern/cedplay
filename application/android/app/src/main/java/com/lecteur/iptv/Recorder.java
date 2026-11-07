@@ -61,7 +61,6 @@ public class Recorder {
         HlsException(String message) { super(message); }
     }
 
-    private static final String USER_AGENT = "IPTVSmartersPro";
     /** Échecs réseau consécutifs tolérés avant d'abandonner (≈ 1 min sur un direct). */
     private static final int MAX_FAILURES = 12;
 
@@ -76,6 +75,8 @@ public class Recorder {
     private volatile DefaultHttpDataSource activeSource;
     private HandlerThread workerThread;
     private Handler workerHandler;
+    /** Fige la liste d'origine pour toutes les requêtes, y compris les segments HLS suivants. */
+    private String userAgent = PlayerOptions.DEFAULT_USER_AGENT;
 
     public Recorder(Context context) {
         this.context = context.getApplicationContext();
@@ -86,9 +87,13 @@ public class Recorder {
     }
 
     public void start(String url, String title, DocumentFile dir, Listener listener) {
+        start(url, title, dir, PlayerOptions.userAgent(context), listener);
+    }
+
+    public void start(String url, String title, DocumentFile dir, String userAgent, Listener listener) {
         if (!running.compareAndSet(false, true)) return;
+        this.userAgent = PlayerOptions.cleanUserAgent(userAgent);
         this.listener = listener;
-        final boolean hls = isHls(url);
         final String base = sanitize(title) + "_" + System.currentTimeMillis();
         outputName = base + ".ts";
 
@@ -98,8 +103,16 @@ public class Recorder {
 
         workerHandler.post(() -> {
             try {
-                if (hls) recordHls(url, dir, base);
-                else recordTs(url, dir);
+                // Portail Stalker : lien de lecture demandé au portail au début de l'enregistrement.
+                String source;
+                try { source = Stalker.resolve(context, url); }
+                catch (IOException e) {
+                    running.set(false);
+                    main.post(() -> { if (this.listener != null) this.listener.onRecordError("le portail n'a pas donné de lien de lecture"); });
+                    return;
+                }
+                if (isHls(source)) recordHls(source, dir, base);
+                else recordTs(source, dir);
             } catch (Exception e) {
                 running.set(false);
                 main.post(() -> { if (this.listener != null) this.listener.onRecordError("dossier d'enregistrement inaccessible"); });
@@ -140,7 +153,7 @@ public class Recorder {
 
     private DefaultHttpDataSource newSource() {
         return new DefaultHttpDataSource.Factory()
-            .setUserAgent(USER_AGENT)
+            .setUserAgent(userAgent)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true)

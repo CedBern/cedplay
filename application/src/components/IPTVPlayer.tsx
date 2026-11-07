@@ -1,4 +1,4 @@
-import { NativePlayerBridge, buildNativeZap, setNativeEpg, findChannelByNumber } from '@/utils/nativePlayer';
+import { NativePlayerBridge, buildNativeZap, setNativeEpg, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
 import { findExistingPlaylist, reconcilePlaylist } from '@/utils/playlistIdentity';
 import { getXtreamAccount, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { canRefreshPlaylist, downloadXtreamLive, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
@@ -13,12 +13,18 @@ import { MorePanel, type MoreDestination } from '@/components/MorePanel';
 import { GroupManagerDialog, FavoritesOrganizerDialog, loadHiddenGroups, saveHiddenGroups } from '@/components/ListOrganizers';
 import { BrandMark } from '@/components/BrandMark';
 import { loadHiddenChannels, saveHiddenChannels } from '@/utils/streamCheck';
+import { applyCustomization, loadCustomization, saveCustomization, EMPTY_CUSTOMIZATION, type ChannelEdit, type ListCustomization } from '@/utils/channelCustomization';
+import { loadFavoriteLists, FAVORITE_LISTS_EVENT, type FavoriteList } from '@/utils/favoriteLists';
+import { ChannelEditorDialog } from '@/components/ChannelEditor';
+import { fetchTextWithUserAgent, playlistUserAgent, setActiveUserAgent } from '@/utils/userAgent';
+import { Capacitor } from '@capacitor/core';
 import { useTvMode } from '@/hooks/useTvMode';
 import { MosaicPicker } from '@/components/MosaicPicker';
 import type { VodResumeRequest } from '@/components/VodLibrary';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, PanelFallback } from '@/components/lazyScreens';
+import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
+import { downloadStalkerPlaylist, stalkerAvailable } from '@/utils/stalker';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2 } from 'lucide-react';
 import { Channel, PlaylistInfo } from '@/types/channel';
@@ -60,6 +66,7 @@ export function IPTVPlayer() {
   const [loadingInitial, setLoadingInitial] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xtreamOpen, setXtreamOpen] = useState(false);
+  const [stalkerOpen, setStalkerOpen] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(StorageManager.getSettings());
   /** Téléviseur / box : écran Direct en colonnes pour la télécommande. */
   const tvMode = useTvMode(appSettings.interfaceMode);
@@ -244,16 +251,53 @@ export function IPTVPlayer() {
     setHiddenChannels(next);
     if (currentPlaylist) void saveHiddenChannels(currentPlaylist.id, next).catch(() => toast.error('Impossible d’enregistrer les chaînes masquées.'));
   };
+  // Personnalisation (nom, logo, numéro, ordre des groupes et des chaînes), par liste.
+  const [customization, setCustomization] = useState<ListCustomization>(EMPTY_CUSTOMIZATION);
+  useEffect(() => {
+    let cancelled = false;
+    setCustomization(EMPTY_CUSTOMIZATION);
+    if (currentPlaylist) void loadCustomization(currentPlaylist.id).then(c => { if (!cancelled) setCustomization(c); });
+    return () => { cancelled = true; };
+  }, [currentPlaylist?.id]);
+  const updateCustomization = useCallback((next: ListCustomization) => {
+    setCustomization(next);
+    const id = currentPlaylistRef.current?.id;
+    if (id) void saveCustomization(id, next).catch(() => toast.error('Impossible d’enregistrer l’organisation de la liste.'));
+  }, []);
+  const customizedGroups = useMemo(
+    () => (currentPlaylist ? applyCustomization(currentPlaylist.groups, customization) : []),
+    [currentPlaylist, customization],
+  );
+  const customGroupOrder = !!customization.groupOrder?.length;
   const visibleGroups = useMemo(() => {
     if (!currentPlaylist) return [];
-    if (!hiddenGroups.length && !hiddenChannels.length) return currentPlaylist.groups;
+    if (!hiddenGroups.length && !hiddenChannels.length) return customizedGroups;
     const hidden = new Set(hiddenGroups);
     const hiddenIds = new Set(hiddenChannels);
-    return currentPlaylist.groups
+    return customizedGroups
       .filter(g => !hidden.has(g.name))
       .map(g => (hiddenIds.size ? { ...g, channels: g.channels.filter(c => !hiddenIds.has(c.id)) } : g))
       .filter(g => g.channels.length > 0);
-  }, [currentPlaylist, hiddenGroups, hiddenChannels]);
+  }, [currentPlaylist, customizedGroups, hiddenGroups, hiddenChannels]);
+  // Modifier une chaîne : le formulaire part de la chaîne d'origine.
+  const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
+  const openChannelEditor = useCallback((channel: Channel) => {
+    const original = currentPlaylistRef.current?.channels.find(c => c.id === channel.id || c.variants?.some(v => v.id === channel.id));
+    setEditingChannel(original ?? channel);
+  }, []);
+  const saveChannelEdit = (channel: Channel, edit: ChannelEdit | null) => {
+    const edits = { ...customization.edits };
+    if (edit) edits[channel.id] = edit; else delete edits[channel.id];
+    updateCustomization({ ...customization, edits });
+  };
+  // Listes de favoris supplémentaires (Sport, Enfants…).
+  const [favoriteLists, setFavoriteLists] = useState<FavoriteList[]>([]);
+  useEffect(() => {
+    const reload = () => { void loadFavoriteLists().then(setFavoriteLists); };
+    reload();
+    window.addEventListener(FAVORITE_LISTS_EVENT, reload);
+    return () => window.removeEventListener(FAVORITE_LISTS_EVENT, reload);
+  }, []);
 
   // Favoris (ordre choisi) : les numéros 1, 2, 3… lancent les favoris correspondants.
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
@@ -264,13 +308,31 @@ export function IPTVPlayer() {
     return () => window.removeEventListener('favorites-updated', reload);
   }, [currentPlaylist?.id]);
 
+  // Réglages du lecteur Android : User-Agent de la liste ouverte, mémoire tampon, décodage, AFR.
+  const activeUserAgent = playlistUserAgent(currentPlaylist);
+  useEffect(() => {
+    setActiveUserAgent(activeUserAgent);
+    void NativePlayerBridge.setPlayerOptions({
+      userAgent: activeUserAgent,
+      buffer: appSettings.playerBuffer ?? 'normal',
+      decoder: appSettings.playerDecoder ?? 'hardware',
+      afr: appSettings.playerAfr === true,
+    });
+  }, [activeUserAgent, appSettings.playerBuffer, appSettings.playerDecoder, appSettings.playerAfr]);
+
   // Raccourcis Android (appui long sur l'icône) : les 4 premiers favoris de la liste.
   useEffect(() => {
     if (!currentPlaylist || !NativePlayerBridge.isAvailable()) return;
-    const byId = new Map(currentPlaylist.channels.map(c => [c.id, c]));
-    const items = favoriteIds.map(id => byId.get(id)).filter((c): c is Channel => Boolean(c)).slice(0, 4).map(c => ({ id: c.id, name: c.name }));
-    void NativePlayerBridge.setChannelShortcuts(items);
-  }, [currentPlaylist, favoriteIds]);
+    // Chaînes personnalisées : le nom et le logo choisis apparaissent aussi hors de l'application.
+    const byId = new Map(customizedGroups.flatMap(g => g.channels).map(c => [c.id, c]));
+    const favorites = favoriteIds.map(id => byId.get(id)).filter((c): c is Channel => Boolean(c));
+    void NativePlayerBridge.setChannelShortcuts(favorites.slice(0, 4).map(c => ({ id: c.id, name: c.name })));
+    // Android TV : rangée Favoris de l'écran d'accueil, au calme (écriture dans le lanceur).
+    const t = window.setTimeout(() => {
+      void NativePlayerBridge.setHomeFavorites(favorites.slice(0, 30).map(c => ({ id: c.id, name: c.name, ...(c.logo ? { logo: c.logo } : {}) })));
+    }, 3000);
+    return () => window.clearTimeout(t);
+  }, [currentPlaylist, customizedGroups, favoriteIds]);
 
   // Liste ordonnée des chaînes (zapping) et guide des programmes.
   const orderedChannels = useMemo(() => visibleGroups.flatMap(g => g.channels), [visibleGroups]);
@@ -298,6 +360,13 @@ export function IPTVPlayer() {
       : orderedChannels),
     [orderedChannels, parentalLockedGroups, parentalUnlocked],
   );
+
+  // Liste complète pour le zapping Android : transmise au calme, une fois par changement de liste.
+  useEffect(() => {
+    if (!NativePlayerBridge.isAvailable() || !playableChannels.length) return;
+    const t = window.setTimeout(() => { void syncNativeZapList(playableChannels); }, 1500);
+    return () => window.clearTimeout(t);
+  }, [playableChannels]);
 
   const handleWebChannelSelect = useCallback((channel: Channel) => {
     setWebSession(true);
@@ -334,6 +403,7 @@ export function IPTVPlayer() {
       await new Promise<void>(resolve => window.setTimeout(resolve, 0));
       const remember = (selected: Channel) => {
         setCurrentChannel(selected);
+        void NativePlayerBridge.addWatchNext(selected);
         void setLastChannelForPlaylist(playlist.id, selected.id).catch(() => {});
         void pushPlayHistory({ channelId: selected.id, ts: Date.now(), kind: 'live' }).catch(() => {});
       };
@@ -396,10 +466,12 @@ export function IPTVPlayer() {
   }, []);
   useEffect(() => {
     if (!launchChannelId || !currentPlaylist) return;
-    const channel = currentPlaylist.channels.find(c => c.id === launchChannelId || c.variants?.some(v => v.id === launchChannelId));
+    // Chaîne personnalisée (nom, logo, numéro) : celle que montrent la liste et le lecteur.
+    let channel: Channel | undefined;
+    for (const g of customizedGroups) { channel = g.channels.find(c => c.id === launchChannelId || c.variants?.some(v => v.id === launchChannelId)); if (channel) break; }
     setLaunchChannelId(null);
     if (channel) handleChannelSelect(channel.variants?.find(v => v.id === launchChannelId) || channel);
-  }, [launchChannelId, currentPlaylist, handleChannelSelect]);
+  }, [launchChannelId, currentPlaylist, customizedGroups, handleChannelSelect]);
 
   // Bouton retour Android : sous-écran → rubrique parente → Accueil, puis sortie.
   useEffect(() => {
@@ -532,18 +604,23 @@ export function IPTVPlayer() {
   const refreshPlaylist = async (pl: PlaylistInfo, options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
     const account = pl.url ? null : isXtreamLiveImport(pl) ? getXtreamAccount(pl) : null;
-    if (!pl.url && !account) { if (!silent) toast.error('Cette liste ne peut pas être rafraîchie automatiquement. Réimporte-la depuis Mes listes.'); return; }
+    if (!pl.url && !account && !pl.stalker) { if (!silent) toast.error('Cette liste ne peut pas être rafraîchie automatiquement. Réimporte-la depuis Mes listes.'); return; }
     const toastId = silent ? undefined : toast.loading('Mise à jour de la liste…');
     const toastOptions = toastId !== undefined ? { id: toastId } : {};
     try {
       let fresh: PlaylistInfo;
       if (pl.url) {
-        const content = await CORSProxy.fetchWithProxy(pl.url);
+        // User-Agent propre à la liste : requête native (la page ne peut pas le changer).
+        const content = pl.userAgent && Capacitor.isNativePlatform()
+          ? await fetchTextWithUserAgent(pl.url, playlistUserAgent(pl))
+          : await CORSProxy.fetchWithProxy(pl.url);
         if (!content.includes('#EXTINF:') || content.trim().startsWith('<')) {
           throw new Error('Le serveur ne renvoie plus une liste M3U.');
         }
         const host = (() => { try { return new URL(pl.url!).hostname; } catch { return 'liste'; } })();
         fresh = { ...(await parseM3UInWorker(content, `Liste — ${host}`, () => {})), url: pl.url };
+      } else if (pl.stalker) {
+        fresh = await downloadStalkerPlaylist(pl.stalker, pl.name);
       } else {
         fresh = await downloadXtreamLive(pl, account!);
       }
@@ -743,6 +820,7 @@ export function IPTVPlayer() {
                 </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
+                {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
                 <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -817,6 +895,10 @@ export function IPTVPlayer() {
                 onRecord={channel => { setRecordingsChannel(channel); setRecordingsOpen(true); }}
                 preview={previewEnabled}
                 previewMode={previewMode}
+                onEdit={openChannelEditor}
+                onOrganize={() => setGroupManagerOpen(true)}
+                favoriteLists={favoriteLists}
+                customGroupOrder={customGroupOrder}
               />
               </Suspense>
             </ErrorBoundary>}
@@ -847,6 +929,9 @@ export function IPTVPlayer() {
                       onRecord={channel => { setRecordingsChannel(channel); setRecordingsOpen(true); }}
                       onManageGroups={() => setGroupManagerOpen(true)}
                       onOrganizeFavorites={() => setFavoritesOrganizerOpen(true)}
+                      onEditChannel={openChannelEditor}
+                      favoriteLists={favoriteLists}
+                      customGroupOrder={customGroupOrder}
                     /></Suspense>
                   ) : (
                     <Suspense fallback={<PanelFallback className="h-72" />}><LazyEPGGrid
@@ -989,6 +1074,8 @@ export function IPTVPlayer() {
                         onLockedGroupSelect={() => setPinOpen(true)}
                         onMosaic={openMosaicPicker}
                         onRecord={channel => { setRecordingsChannel(channel); setRecordingsOpen(true); }}
+                        favoriteLists={favoriteLists}
+                        customGroupOrder={customGroupOrder}
                       />
                       </Suspense>
                     </ErrorBoundary>
@@ -1035,8 +1122,26 @@ export function IPTVPlayer() {
       </Dialog>
 
       {xtreamOpen && <Suspense fallback={null}><LazyXtreamLoginDialog open onOpenChange={setXtreamOpen} hideTrigger onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
+      {stalkerOpen && <Suspense fallback={null}><LazyStalkerLoginDialog open onOpenChange={setStalkerOpen} hideTrigger onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {/* Recherche globale unifiée */}
-      {currentPlaylist && <GroupManagerDialog open={groupManagerOpen} onOpenChange={setGroupManagerOpen} groups={currentPlaylist.groups} hidden={hiddenGroups} onChange={updateHiddenGroups} />}
+      {currentPlaylist && <GroupManagerDialog
+        open={groupManagerOpen}
+        onOpenChange={setGroupManagerOpen}
+        groups={customizedGroups}
+        hidden={hiddenGroups}
+        onChange={updateHiddenGroups}
+        custom={customization}
+        onCustomChange={updateCustomization}
+        hiddenChannelIds={hiddenChannels}
+        onUnhideChannels={ids => { const drop = new Set(ids); updateHiddenChannels(hiddenChannels.filter(id => !drop.has(id))); }}
+      />}
+      <ChannelEditorDialog
+        channel={editingChannel}
+        edit={editingChannel ? customization.edits[editingChannel.id] : undefined}
+        onOpenChange={open => { if (!open) setEditingChannel(null); }}
+        onSave={edit => { if (editingChannel) saveChannelEdit(editingChannel, edit); }}
+        onHide={channel => { updateHiddenChannels([...new Set([...hiddenChannels, channel.id])]); toast.success(`« ${channel.name} » masquée. Réaffiche-la depuis « Organiser la liste ».`); }}
+      />
       {currentPlaylist && healthOpen && <Suspense fallback={null}><LazyChannelHealthDialog
         key={currentPlaylist.id}
         open
@@ -1047,7 +1152,7 @@ export function IPTVPlayer() {
         onHide={ids => { updateHiddenChannels([...new Set([...hiddenChannels, ...ids])]); toast.success(`${ids.length} chaîne${ids.length > 1 ? 's' : ''} masquée${ids.length > 1 ? 's' : ''}.`); }}
         onShowAll={() => { updateHiddenChannels([]); toast.success('Toutes les chaînes sont à nouveau affichées.'); }}
       /></Suspense>}
-      {currentPlaylist && <FavoritesOrganizerDialog open={favoritesOrganizerOpen} onOpenChange={setFavoritesOrganizerOpen} channels={currentPlaylist.channels} />}
+      {currentPlaylist && <FavoritesOrganizerDialog open={favoritesOrganizerOpen} onOpenChange={setFavoritesOrganizerOpen} channels={customizedGroups.flatMap(g => g.channels)} />}
       {searchOpen && <Suspense fallback={null}><LazyGlobalSearchDialog
         open
         onOpenChange={setSearchOpen}

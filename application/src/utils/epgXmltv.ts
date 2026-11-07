@@ -7,6 +7,9 @@ export interface EPGBuildOptions {
   overrides?: Record<string, EpgChannelOverride> | undefined;
   /** Décalage global de la liste, en heures, ajouté à celui de chaque chaîne. */
   offsetHours?: number | undefined;
+  /** Programmes gardés : ceux qui finissent après keepFromMs et commencent avant keepUntilMs (mémoire des grosses listes). */
+  keepFromMs?: number | undefined;
+  keepUntilMs?: number | undefined;
 }
 
 export interface XmltvChannel {
@@ -179,7 +182,10 @@ export function buildEPGData(parsed: XmltvParsed, channels: Channel[], options: 
     }
     if (!xmlId) continue;
     const shiftMs = ((override?.shift ?? channel.tvgShift ?? 0) + (options.offsetHours ?? 0)) * 3_600_000;
+    const keepFrom = options.keepFromMs ?? -Infinity;
+    const keepUntil = options.keepUntilMs ?? Infinity;
     const programmes = (programmesByXml.get(xmlId) || [])
+      .filter(p => p.stop.getTime() + shiftMs > keepFrom && p.start.getTime() + shiftMs < keepUntil)
       .sort((a, b) => a.start.getTime() - b.start.getTime())
       .map<EPGProgram>(p => {
         const startTime = shiftMs ? new Date(p.start.getTime() + shiftMs) : p.start;

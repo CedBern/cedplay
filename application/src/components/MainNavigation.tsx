@@ -27,6 +27,7 @@ export function navSectionFor(screen: string): NavSection | '' {
 export function MainNavigation({ onNavigate }: { onNavigate: (section: NavSection) => void }) {
   return <TabsList
     aria-label="Rubriques"
+    data-main-navigation
     className="glass fixed inset-x-0 bottom-0 z-40 !mt-0 grid h-auto grid-cols-4 gap-0 rounded-none border-t border-white/5 px-1.5 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)] text-muted-foreground sm:static sm:!mt-0 sm:flex sm:w-max sm:max-w-full sm:justify-start sm:gap-1 sm:overflow-x-auto sm:rounded-full sm:border sm:border-white/5 sm:p-1"
   >
     {sections.map(({ value, label, Icon }) => <TabsTrigger

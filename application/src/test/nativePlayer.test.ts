@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NativePlayerBridge, RecordingsBridge, buildNativeZap, findChannelByNumber } from '@/utils/nativePlayer';
 import { isPlaybackDelegated, onPlaybackDelegated, setPlaybackDelegated } from '@/utils/playbackOwnership';
 import type { Channel } from '@/types/channel';
+import { DEFAULT_USER_AGENT, setActiveUserAgent } from '@/utils/userAgent';
 
 const mocks = vi.hoisted(() => ({
   platform: 'android', available: true,
@@ -21,6 +22,7 @@ vi.mock('@/utils/telemetry/logger', () => ({ globalTelemetryLogger: { log: telem
 beforeEach(() => {
   mocks.platform = 'android'; mocks.available = true;
   vi.clearAllMocks(); setPlaybackDelegated(false);
+  setActiveUserAgent(DEFAULT_USER_AGENT);
 });
 afterEach(() => setPlaybackDelegated(false));
 
@@ -144,7 +146,7 @@ it('joint groupes et programmes à venir au contexte de zapping', () => {
 it('garde les voisins quand la chaîne sélectionnée est une variante', () => {
   const variant = { id: 'a-hd', name: 'A HD', url: 'https://example.test/a-hd' };
   const base = { id: 'a', name: 'A', url: 'https://example.test/a', variants: [variant] };
-  expect(buildNativeZap([base, { id: 'b', name: 'B', url: 'https://example.test/b' }], variant)).toEqual({ urls: [variant.url, 'https://example.test/b'], titles: ['A HD', 'B'], index: 0, numbers: ['1', '2'], total: 2 });
+  expect(buildNativeZap([base, { id: 'b', name: 'B', url: 'https://example.test/b' }], variant)).toEqual({ urls: [variant.url, 'https://example.test/b'], titles: ['A HD', 'B'], index: 0, start: 0, numbers: ['1', '2'], total: 2 });
 });
 
 describe('Numéros de chaîne', () => {
@@ -245,8 +247,27 @@ it('transmet la programmation d’un direct HLS à Android (capture des segments
   mocks.scheduleRecording.mockResolvedValueOnce({ id: 'r1' });
   const start = Date.now() + 60000;
   expect(await RecordingsBridge.schedule('https://example.test/live.m3u8', 'HLS', start, 60000)).toBe(true);
-  expect(mocks.scheduleRecording).toHaveBeenCalledWith({ url: 'https://example.test/live.m3u8', title: 'HLS', startTimeMs: start, durationMs: 60000 });
+  expect(mocks.scheduleRecording).toHaveBeenCalledWith({ url: 'https://example.test/live.m3u8', title: 'HLS', startTimeMs: start, durationMs: 60000, userAgent: DEFAULT_USER_AGENT });
   expect(mocks.error).not.toHaveBeenCalled();
+});
+
+it('fige le User-Agent de A dans la programmation avant le passage à B', async () => {
+  let finish!: (value: { id: string }) => void;
+  mocks.scheduleRecording.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  setActiveUserAgent('Lecteur-A');
+  const operation = RecordingsBridge.schedule('https://example.test/a.ts', 'A', Date.now() + 60000, 60000);
+  setActiveUserAgent('Lecteur-B');
+  finish({ id: 'a' });
+  expect(await operation).toBe(true);
+  expect(mocks.scheduleRecording).toHaveBeenLastCalledWith(expect.objectContaining({ userAgent: 'Lecteur-A' }));
+});
+
+it('renvoie à la page un numéro lointain de neuf chiffres', async () => {
+  const onJump = vi.fn();
+  mocks.open.mockResolvedValueOnce({ jumpNumber: '123456789' });
+  await NativePlayerBridge.open('https://example.test/a.ts', 'A', undefined, undefined, onJump);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(onJump).toHaveBeenCalledWith('123456789');
 });
 
 it('programme une série sans message quand Android refuse (mode silencieux)', async () => {

@@ -34,6 +34,8 @@ public class ScheduledRecordReceiver extends BroadcastReceiver {
         service.putExtra(RecordService.EXTRA_URL, url);
         service.putExtra(RecordService.EXTRA_TITLE, title);
         service.putExtra(RecordService.EXTRA_DURATION_MS, durationMs);
+        service.putExtra(RecordService.EXTRA_USER_AGENT,
+            PlayerOptions.cleanUserAgent(intent.getStringExtra("userAgent")));
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(service);
@@ -51,7 +53,7 @@ public class ScheduledRecordReceiver extends BroadcastReceiver {
     }
 
     /** Pose l'alarme de l'enregistrement programmé (exacte si autorisée). */
-    public static void setAlarm(Context context, String id, long startTimeMs, String url, String title, long durationMs) {
+    public static void setAlarm(Context context, String id, long startTimeMs, String url, String title, long durationMs, String userAgent) {
         AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (am == null) return;
         Intent intent = new Intent(context, ScheduledRecordReceiver.class);
@@ -61,6 +63,7 @@ public class ScheduledRecordReceiver extends BroadcastReceiver {
         intent.putExtra("url", url);
         intent.putExtra("title", title);
         intent.putExtra("durationMs", durationMs);
+        intent.putExtra("userAgent", PlayerOptions.cleanUserAgent(userAgent));
         PendingIntent pi = PendingIntent.getBroadcast(context, id.hashCode(),
             intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 

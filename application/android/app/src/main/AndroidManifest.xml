@@ -85,4 +85,6 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Android TV : rangée Favoris et « À suivre » sur l'écran d'accueil. -->
+    <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />
 </manifest>

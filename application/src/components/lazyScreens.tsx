@@ -18,6 +18,7 @@ export const LazyRecordings = lazy(() => import('@/components/Recordings').then(
 export const LazySettingsPanel = lazy(() => import('@/components/SettingsPanel').then(m => ({ default: m.SettingsPanel })));
 export const LazyGlobalSearchDialog = lazy(() => import('@/components/GlobalSearchDialog').then(m => ({ default: m.GlobalSearchDialog })));
 export const LazyXtreamLoginDialog = lazy(() => import('@/components/XtreamLoginDialog').then(m => ({ default: m.XtreamLoginDialog })));
+export const LazyStalkerLoginDialog = lazy(() => import('@/components/StalkerLoginDialog').then(m => ({ default: m.StalkerLoginDialog })));
 export const LazyChannelHealthDialog = lazy(() => import('@/components/ChannelHealthDialog').then(m => ({ default: m.ChannelHealthDialog })));
 export const LazyPlaylistManager = lazy(() => import('@/components/PlaylistManager').then(m => ({ default: m.PlaylistManager })));
 export const LazyPlaylistLoader = lazy(() => import('@/components/PlaylistLoader').then(m => ({ default: m.PlaylistLoader })));

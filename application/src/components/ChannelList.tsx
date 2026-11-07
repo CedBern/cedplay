@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
-import { Search, Heart, Play, Tv, Zap, Lock, Grid2X2, CircleDot, PlayCircle, SlidersHorizontal, ListOrdered } from 'lucide-react';
+import { Search, Heart, Play, Tv, Zap, Lock, Grid2X2, CircleDot, PlayCircle, SlidersHorizontal, ListOrdered, Pencil } from 'lucide-react';
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from '@/components/ui/context-menu';
 import { toast } from 'sonner';
 import { ChannelLogo } from '@/components/ChannelLogo';
@@ -25,6 +25,7 @@ import { getCurrentProgram, getUpcomingProgram, getProgramProgress, formatTime }
 import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { createSearchIndex, searchChannels } from '@/utils/channelSearch';
 import { focusRemote } from '@/utils/remoteNavigation';
+import type { FavoriteList } from '@/utils/favoriteLists';
 
   interface ChannelListProps {
       playlistId?: string;
@@ -48,6 +49,12 @@ import { focusRemote } from '@/utils/remoteNavigation';
       onManageGroups?: () => void;
       /** Ouvre l'organisation (ordre, numéros) des favoris. */
       onOrganizeFavorites?: () => void;
+      /** Modifier une chaîne (nom, logo, numéro, listes, masquage). */
+      onEditChannel?: ((channel: Channel) => void) | undefined;
+      /** Listes de favoris supplémentaires, affichées comme des groupes. */
+      favoriteLists?: FavoriteList[] | undefined;
+      /** Les groupes arrivent dans l'ordre choisi par l'utilisateur : ne pas les trier. */
+      customGroupOrder?: boolean | undefined;
     }
 
   export function ChannelList({ 
@@ -64,7 +71,10 @@ import { focusRemote } from '@/utils/remoteNavigation';
       onMosaic,
       onRecord,
       onManageGroups,
-      onOrganizeFavorites
+      onOrganizeFavorites,
+      onEditChannel,
+      favoriteLists,
+      customGroupOrder = false
     }: ChannelListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
@@ -115,7 +125,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
         setShowVariants(values[2] === true);
         const group = playlistId ? scopedFilters?.group : values[3];
         const savedGroup = typeof group === 'string' ? group : 'all';
-        setSelectedGroup(['all', 'favorites', 'recent', ...groups.map(g => g.name)].includes(savedGroup) ? savedGroup : 'all');
+        setSelectedGroup(['all', 'favorites', 'recent', ...groups.map(g => g.name)].includes(savedGroup) || savedGroup.startsWith('fav:') ? savedGroup : 'all');
         setCompactMode(typeof values[4] === 'boolean' ? values[4] : settings?.compactModeDefault === true);
         setVirtualizationEnabled(typeof values[5] === 'boolean' ? values[5] : settings?.virtualizationEnabledDefault !== false);
         const byId = new Map(groups.flatMap(g => g.channels).map(c => [c.id, c]));
@@ -217,6 +227,11 @@ import { focusRemote } from '@/utils/remoteNavigation';
           const favoriteOrder = new Map(favorites.map((id, i) => [id, i]));
           base = base.filter(ch => favoriteOrder.has(ch.id));
           base.sort((a, b) => favoriteOrder.get(a.id)! - favoriteOrder.get(b.id)!);
+        } else if (selectedGroup.startsWith('fav:')) {
+          const ids = favoriteLists?.find(l => `fav:${l.id}` === selectedGroup)?.channelIds ?? [];
+          const order = new Map(ids.map((id, i) => [id, i]));
+          base = base.filter(ch => order.has(ch.id));
+          base.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
         } else if (selectedGroup === 'recent') {
           const recentIds = new Set(recentChannels.map(ch => ch.id));
           base = base.filter(ch => recentIds.has(ch.id));
@@ -226,7 +241,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
         if (qualityFilter !== 'all') base = base.filter(ch => ch.quality === qualityFilter);
         if (parentalLocked) base = base.filter(ch => !lockedGroupSet.has(ch.group || ''));
         return { channels: base };
-      }, [searchIndex, selectedGroup, favorites, recentChannels, qualityFilter, debouncedSearch, searchMode, parentalLocked, lockedGroupSet]);
+      }, [searchIndex, selectedGroup, favorites, favoriteLists, recentChannels, qualityFilter, debouncedSearch, searchMode, parentalLocked, lockedGroupSet]);
 
       // Keyboard shortcuts (now that filteredChannels exists)
       // La valeur courante de qualityFilter est lue via une ref : le listener n'est
@@ -275,7 +290,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
   }, [allChannels, favorites, buildPlaylistFrom]);
 
   const exportCurrentGroup = React.useCallback(() => {
-    if (["all","favorites","recent"].includes(selectedGroup)) return;
+    if (["all","favorites","recent"].includes(selectedGroup) || selectedGroup.startsWith('fav:')) return;
     const grpChans = allChannels.filter(c => c.group === selectedGroup);
     const subset = buildPlaylistFrom(grpChans, `Group_${selectedGroup}`);
     if (!subset) return;
@@ -378,6 +393,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
                   <CardContent className={`channel-row-content ${compactMode ? 'p-2' : 'px-3 py-3'}`}>
                     <div className={`flex items-center ${compactMode ? 'space-x-2' : 'space-x-4'}`}>
                   {selectedGroup === 'favorites' && favoriteNumbers.has(channel.id) && <span className="w-5 shrink-0 text-right font-mono text-[13px] text-primary" aria-label={`Favori numéro ${favoriteNumbers.get(channel.id)}`}>{favoriteNumbers.get(channel.id)}</span>}
+                  {selectedGroup !== 'favorites' && channel.chno && <span className="w-8 shrink-0 text-right font-mono text-[12px] text-muted-foreground" aria-label={`Chaîne numéro ${channel.chno}`}>{channel.chno}</span>}
                   {/* Channel Logo */}
                   <ChannelLogo src={channel.logo ?? null} name={channel.name} compact={compactMode} />
 
@@ -524,6 +540,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
                   const synthetic = { stopPropagation: () => {/* noop */} } as unknown as React.MouseEvent; 
                   toggleFavorite(channel, synthetic);
                 }}>{favorites.includes(channel.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}</ContextMenuItem>
+                {onEditChannel && <ContextMenuItem onSelect={() => onEditChannel(channel)}><Pencil className="h-4 w-4 mr-2 inline" aria-hidden="true" />Modifier la chaîne…</ContextMenuItem>}
                 <ContextMenuItem onSelect={copyUrl}>Copier l’URL</ContextMenuItem>
                 {channel.variants?.length ? (
                   <>
@@ -611,10 +628,16 @@ import { focusRemote } from '@/utils/remoteNavigation';
       };
 
       const groupNames = useMemo(() => {
-        if (!groups) return ['all', 'favorites', 'recent'];
-        const names = groups.map(g => g.name).sort();
-        return ['all', 'favorites', 'recent', ...names];
-      }, [groups]);
+        const lists = (favoriteLists ?? []).map(l => `fav:${l.id}`);
+        if (!groups) return ['all', 'favorites', ...lists, 'recent'];
+        const names = groups.map(g => g.name);
+        return ['all', 'favorites', ...lists, 'recent', ...(customGroupOrder ? names : names.sort((a, b) => a.localeCompare(b, 'fr')))];
+      }, [groups, favoriteLists, customGroupOrder]);
+      // Liste de favoris supprimée pendant qu'elle était affichée : revenir à « Toutes ».
+      useEffect(() => {
+        if (preferencesLoaded && selectedGroup.startsWith('fav:') && favoriteLists && !favoriteLists.some(l => `fav:${l.id}` === selectedGroup)) setSelectedGroup('all');
+      }, [preferencesLoaded, selectedGroup, favoriteLists]);
+      const favoriteListLabel = (group: string) => favoriteLists?.find(l => `fav:${l.id}` === group)?.name;
 
       return (
         <div ref={rootRef} className="channel-browser h-full min-h-0 flex flex-col gap-4">
@@ -692,7 +715,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
                   <span>Export :</span>
                   <button onClick={exportFilteredSubset} disabled={!channelsToRender.length} className={`px-2.5 py-1 rounded-full border transition text-[11px] ${channelsToRender.length ? 'border-neutral-800 hover:bg-neutral-900 text-white' : 'border-neutral-900 text-white/40 cursor-not-allowed'}`} title="Exporter les chaînes visibles">Filtrées</button>
                   <button onClick={exportFavoritesSubset} disabled={!currentFavoriteCount} className={`px-2.5 py-1 rounded-full border transition text-[11px] ${currentFavoriteCount ? 'border-neutral-800 hover:bg-neutral-900 text-white' : 'border-neutral-900 text-white/40 cursor-not-allowed'}`} title="Exporter les favoris">Favoris</button>
-                  <button onClick={exportCurrentGroup} disabled={['all','favorites','recent'].includes(selectedGroup)} className={`px-2.5 py-1 rounded-full border transition text-[11px] ${['all','favorites','recent'].includes(selectedGroup) ? 'border-neutral-900 text-white/40 cursor-not-allowed' : 'border-neutral-800 hover:bg-neutral-900 text-white'}`} title="Exporter le groupe actuel">Groupe</button>
+                  <button onClick={exportCurrentGroup} disabled={(['all','favorites','recent'].includes(selectedGroup) || selectedGroup.startsWith('fav:'))} className={`px-2.5 py-1 rounded-full border transition text-[11px] ${(['all','favorites','recent'].includes(selectedGroup) || selectedGroup.startsWith('fav:')) ? 'border-neutral-900 text-white/40 cursor-not-allowed' : 'border-neutral-800 hover:bg-neutral-900 text-white'}`} title="Exporter le groupe actuel">Groupe</button>
                 </div>
               </div>
             )}
@@ -707,7 +730,7 @@ import { focusRemote } from '@/utils/remoteNavigation';
               <TabsList className="h-auto w-max gap-1.5 bg-transparent p-0">
                 {groupNames.map(group => (
                   <TabsTrigger key={group} value={group} className="min-h-9 rounded-full border border-neutral-800 px-3.5 text-[13px] capitalize text-muted-foreground hover:bg-accent hover:text-foreground data-[state=active]:border-foreground data-[state=active]:bg-foreground data-[state=active]:text-background data-[state=active]:shadow-none">
-                    {group === 'all' ? 'Toutes' : group === 'favorites' ? 'Favoris' : group === 'recent' ? 'Récentes' : group}
+                    {group === 'all' ? 'Toutes' : group === 'favorites' ? 'Favoris' : group === 'recent' ? 'Récentes' : favoriteListLabel(group) ?? group}
                     {parentalLocked && lockedGroupSet.has(group) && <Lock className="h-3 w-3 ml-1" aria-label={`${group} verrouillé`} />}
                     {group === 'all' && (
                       <Badge variant="secondary" className="ml-2">

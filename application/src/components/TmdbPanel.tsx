@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
-import { fetchTmdbDetails, pickBestMatch, searchTmdb, tmdbImageUrl, tmdbPageUrl, type TmdbDetails, type TmdbKind } from '@/utils/tmdb';
+import { fetchTmdbDetails, pickBestMatch, searchTmdb, tmdbImageUrl, tmdbPageUrl, TmdbAuthenticationError, type TmdbDetails, type TmdbKind } from '@/utils/tmdb';
 import { normalizeForCompare, normalizeTitle } from '@/utils/titleNormalize';
 import type { CatalogItem } from '@/utils/xtreamCatalog';
 
@@ -44,10 +44,12 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
   const tmdbKind: TmdbKind = kind === 'movie' ? 'movie' : 'tv';
   const [details, setDetails] = useState<TmdbDetails | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'notfound' | 'nokey' | 'error'>('loading');
+  const [authError, setAuthError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setDetails(null);
+    setAuthError(false);
     if (!apiKey?.trim()) { setState('nokey'); return; }
     setState('loading');
     void (async () => {
@@ -61,8 +63,8 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
         if (!match) { setState('notfound'); return; }
         const detail = await fetchTmdbDetails(match.id, tmdbKind, apiKey);
         if (!cancelled) { setDetails(detail); setState('ready'); }
-      } catch {
-        if (!cancelled) setState('error');
+      } catch (error) {
+        if (!cancelled) { setAuthError(error instanceof TmdbAuthenticationError); setState('error'); }
       }
     })();
     return () => { cancelled = true; };
@@ -83,13 +85,13 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
       <p className="text-xs uppercase tracking-wide text-neutral-500">Fiche TMDB</p>
       {state === 'nokey' && (
         <p className="text-xs text-neutral-400">
-          Ajoute ta clé TMDB gratuite dans les paramètres pour enrichir la fiche : synopsis français, casting, notes,
+          Ajoute ta clé ou ton jeton TMDB gratuit dans les paramètres pour enrichir la fiche : synopsis français, casting, notes,
           avis spectateurs et films similaires.
         </p>
       )}
       {state === 'loading' && <p role="status" className="text-xs text-neutral-400">Enrichissement de la fiche…</p>}
       {state === 'notfound' && <p className="text-xs text-neutral-400">Titre introuvable sur TMDB.</p>}
-      {state === 'error' && <p className="text-xs text-neutral-400">Fiche TMDB indisponible (réseau ou clé invalide).</p>}
+      {state === 'error' && <p role="status" className="text-xs text-neutral-400">{authError ? 'Clé ou jeton TMDB refusé. Vérifie la valeur dans Réglages › Films et séries.' : 'Fiche TMDB indisponible (réseau ou clé invalide).'}</p>}
 
       {state === 'ready' && details && (
         <>

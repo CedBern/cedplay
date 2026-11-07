@@ -95,6 +95,24 @@ describe('StorageManager settings validation & migration', () => {
     expect((stored as AppSettings).volume).toBeCloseTo(0.55, 5);
     });
 
+  it('sauvegarde puis recharge un long jeton TMDB sans le tronquer', async () => {
+    const token = `eyJhbGciOiJIUzI1NiJ9.${'a'.repeat(320)}.signature`;
+    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+    expect((await StorageManager.saveSettings({ tmdbApiKey: token })).tmdbApiKey).toBe(token);
+    StorageManager.__resetCacheForTests();
+    getSettingsFromDBMock.mockResolvedValue(stored);
+    expect((await StorageManager.loadSettingsAsync()).tmdbApiKey).toBe(token);
+  });
+
+  it('préserve le long jeton TMDB quand un autre réglage doit être réparé', async () => {
+    const token = `eyJhbGciOiJIUzI1NiJ9.${'b'.repeat(320)}.signature`;
+    getSettingsFromDBMock.mockResolvedValue({ ...StorageManager.defaultSettings(), volume: 5, tmdbApiKey: token });
+    const loaded = await StorageManager.loadSettingsAsync();
+    expect(loaded.volume).toBe(1);
+    expect(loaded.tmdbApiKey).toBe(token);
+  });
+
   it('migrates legacy v1 settings without version to v2', async () => {
     const legacyNoVersion: AppSettings = {
       volume: 0.8,

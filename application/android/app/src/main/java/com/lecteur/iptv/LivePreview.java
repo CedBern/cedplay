@@ -38,6 +38,7 @@ final class LivePreview {
     private FrameLayout box;
     private TextureView texture;
     private ExoPlayer player;
+    private final PreviewRequestTracker requests = new PreviewRequestTracker();
     /** Flux en cours de lecture dans le lecteur. */
     private String playingUrl;
     private int videoWidth;
@@ -62,6 +63,7 @@ final class LivePreview {
 
     /** Arrête le flux (la connexion au fournisseur se ferme) sans détruire le lecteur. */
     void stop() {
+        requests.cancel();
         requestUrl = null;
         playingUrl = null;
         if (player != null) { player.stop(); player.clearMediaItems(); }
@@ -121,10 +123,24 @@ final class LivePreview {
         videoHeight = 0;
         if (player == null) createPlayer();
         playingUrl = requestUrl;
+        final long request = requests.begin();
+        final ExoPlayer requestedPlayer = player;
+        listener.onState("loading");
+        if (Stalker.is(requestUrl)) {
+            // Portail Stalker : lien de lecture demandé au portail, ignoré si l'aperçu a changé de chaîne.
+            Stalker.resolveAsync(activity, requestUrl, resolved -> {
+                // Une ancienne réponse reste périmée même après un retour sur la même chaîne.
+                if (!requests.isCurrent(request) || player != requestedPlayer) return;
+                if (resolved == null) { listener.onState("error"); return; }
+                player.setMediaItem(MediaItem.fromUri(resolved));
+                player.prepare();
+                player.play();
+            });
+            return;
+        }
         player.setMediaItem(MediaItem.fromUri(playingUrl));
         player.prepare();
         player.play();
-        listener.onState("loading");
     }
 
     private void createPlayer() {
@@ -132,11 +148,11 @@ final class LivePreview {
             .setBufferDurationsMs(3_000, 10_000, 1_000, 2_000)
             .build();
         DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-            .setUserAgent("IPTVSmartersPro")
+            .setUserAgent(PlayerOptions.userAgent(activity))
             .setConnectTimeoutMs(10_000)
             .setReadTimeoutMs(10_000)
             .setAllowCrossProtocolRedirects(true);
-        final ExoPlayer created = new ExoPlayer.Builder(activity)
+        final ExoPlayer created = new ExoPlayer.Builder(activity, PlayerOptions.renderers(activity))
             .setMediaSourceFactory(new DefaultMediaSourceFactory(http))
             .setLoadControl(load)
             .setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -189,6 +205,7 @@ final class LivePreview {
     }
 
     private void release() {
+        requests.cancel();
         ExoPlayer old = player;
         player = null;
         playingUrl = null;

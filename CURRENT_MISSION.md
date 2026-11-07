@@ -1,5 +1,33 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Jeton TMDB accepte - 7 novembre 2026
+
+- Retour utilisateur : long API Read Access Token. Deux defauts reproduits par 10 nouveaux tests : envoi comme cle v3 et troncature a 200 caracteres dans les reglages.
+- Jeton envoye dans Authorization, cle courte preservee, stockage jusqu'a 4096 caracteres, aide clarifiee et message pour refus 401. Recoller le jeton complet apres installation : une ancienne troncature est irreversible.
+- 493 tests web / 81 fichiers, types/lint/build web, copie Capacitor et APK release OK ; signature et 78 fichiers embarques verifies. Sans appareil ni jeton personnel : acces reel a confirmer.
+- APK distincte : CedPlay-TMDB-test.apk (1.10.0/code 27, 8 478 088 octets, SHA-256 ae8de7a7238f0418913df61a10c3ebf3670a89a2c26948949473a6b72ca3ccb5). Correctifs precedents inclus, sans commit ni fusion. Details : preuves/jeton-tmdb-2026-11-07/RAPPORT.md.
+
+## Focus conserve pendant le zapping - 7 novembre 2026
+
+- Retour utilisateur : navigation nettement meilleure ; la fleche suivante perdait sa selection au profit d'Audio. showControls() ne force plus Audio si une commande du bandeau a deja le focus ; meme garde dans l'ecouteur VOD.
+- Compilation debug/release et 12 tests Java OK ; signature verifiee, fichiers web identiques a la livraison precedente. Pas d'appareil connecte, maintien du focus a confirmer sur la box.
+- APK distincte : CedPlay-focus-zapping-test.apk (1.10.0/code 27, 8 477 778 octets, SHA-256 fb9ed3f9cfbf93153cce1c65ea327d04fac445738e6f410adf652bc52407330a). Sans commit ni fusion. Details : preuves/focus-zapping-2026-11-07/RAPPORT.md.
+
+## Navigation sous les rubriques et vitesse - APK d'essai, 7 novembre 2026
+
+- Bas depuis les rubriques rejoint le contenu. Dans Direct : Rechercher, puis Guide TV et Organiser ; Haut depuis Rechercher retourne a Direct. Quatre nouveaux cas de regression.
+- Lecteur VOD Android : toucher l'image pilote aussi le controleur Media3 et synchronise la barre superieure, pour pouvoir rouvrir les reglages de vitesse apres leur masquage.
+- Verifie : 483 tests web, 12 tests Java, types/lint/build et APK release. Trois commandes ouvertes aux touches dans le navigateur. Aucun appareil connecte : vitesse et telecommande reelles restent a confirmer.
+- APK distincte : CedPlay-navigation-vitesse-test.apk (1.10.0/code 27, 8 477 735 octets, SHA-256 ae00a035dc9b04a7be851d3b0df4cfdc8a6849deea74fb7e13d0d67e22ce975e). Meme signature, anciennes APK conservees. Sans commit ni fusion.
+- Details et capture : preuves/navigation-vitesse-2026-11-06/RAPPORT.md.
+
+## Correctifs niveau 3 - APK d'essai, 6 novembre 2026
+
+- Copie Claude, sans commit ni fusion vers main : reponses tardives de l'apercu Stalker invalidees, User-Agent conserve avec chaque programmation DVR et apres redemarrage, saisie Android etendue a neuf chiffres.
+- Verifie : 479 tests web, 12 tests Java, TypeScript, lint, build web et APK release. Signature habituelle et 78 fichiers web embarques verifies.
+- APK distincte a la racine canonique : CedPlay-niveau3-correctifs-test.apk (1.10.0/code 27, 8 477 542 octets, SHA-256 242f8277c80f6fac99a81c9f844f9eca4318b894b017050eee023ba7f6b97083). Alias precedents conserves.
+- Aucun appareil ADB connecte : pas d'installation ni de validation physique. Fluidite et annulation d'un enregistrement actif restent ouvertes. Details : preuves/correctifs-niveau3-2026-11-06/RAPPORT.md.
+
 ## Nouveau logo C + E + D et nom CedPlay — 1.8.9 prête, 6 novembre 2026
 
 - Icône choisie sur le canevas de propositions : écran blanc ouvert (C), vide noir avec encoche (E), triangle orange (D) ; fond `#0B0B0C`, accent `#FF5A36`. Source `identite/cedplay/mark.json`, scripts d'export réécrits pour les traits arrondis ; notification blanche sans encoche.

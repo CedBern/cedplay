@@ -145,7 +145,7 @@ export function isXtreamLiveImport(playlist: PlaylistInfo): boolean {
 
 /** Liste que l'application sait retélécharger : M3U par adresse ou connexion Xtream. */
 export function canRefreshPlaylist(playlist: PlaylistInfo): boolean {
-  return !!playlist.url || isXtreamLiveImport(playlist);
+  return !!playlist.url || !!playlist.stalker || isXtreamLiveImport(playlist);
 }
 
 function inferFormat(playlist: PlaylistInfo): XtreamStreamFormat {

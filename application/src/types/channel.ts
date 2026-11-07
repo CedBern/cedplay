@@ -34,5 +34,9 @@ export interface PlaylistInfo {
   groups: ChannelGroup[];
   /** Guides XMLTV annoncés par l'en-tête de la liste (url-tvg / x-tvg-url). */
   epgUrls?: string[];
+  /** User-Agent envoyé au fournisseur pour cette liste (vide = IPTVSmartersPro). */
+  userAgent?: string;
+  /** Portail Stalker / Ministra (connexion par adresse MAC) : adresse de l'API et MAC. */
+  stalker?: { portal: string; mac: string };
   totalChannelsBeforeDedup?: number;
 }

@@ -1,6 +1,7 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import type { PlaylistInfo } from '@/types/channel';
 import { getProxyBase } from '@/utils/proxy';
+import { getActiveUserAgent } from '@/utils/userAgent';
 
 export interface XtreamAccount { server: string; username: string; password: string }
 export interface CatalogCategory { id: string; name: string }
@@ -104,7 +105,7 @@ export async function catalogRequest(account: XtreamAccount, action: string, par
   let data: unknown;
   try {
     if (Capacitor.isNativePlatform()) {
-      const response = await CapacitorHttp.get({ url: `${account.server}/player_api.php?${query}`, headers: { 'User-Agent': 'IPTVSmartersPro' }, responseType: 'json', connectTimeout: 15000, readTimeout: 30000 });
+      const response = await CapacitorHttp.get({ url: `${account.server}/player_api.php?${query}`, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json', connectTimeout: 15000, readTimeout: 30000 });
       if (response.status < 200 || response.status >= 300) throw new Error();
       data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
     } else {

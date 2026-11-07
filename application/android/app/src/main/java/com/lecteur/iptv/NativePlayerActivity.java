@@ -106,12 +106,8 @@ public class NativePlayerActivity extends AppCompatActivity {
     /** Réglages de mémoire tampon : démarrage rapide en direct, confort conservé en VOD.
      *  Valeurs candidates à mesurer sur la box (protocole : 20 zappings, 30 min de lecture)
      *  avant de les figer ; un démarrage trop court augmente les coupures. */
-    private static final int BUFFER_MIN_MS = 15_000;
-    private static final int BUFFER_MAX_MS = 50_000;
-    private static final int LIVE_BUFFER_FOR_PLAYBACK_MS = 1_200;
-    private static final int LIVE_BUFFER_FOR_REBUFFER_MS = 3_000;
-    private static final int VOD_BUFFER_FOR_PLAYBACK_MS = 2_500;
-    private static final int VOD_BUFFER_FOR_REBUFFER_MS = 5_000;
+    /** Fréquence d'affichage adaptée à la vidéo (réglage AFR), lue à l'ouverture. */
+    private boolean afrEnabled;
     /** Reprises automatiques après une erreur transitoire (coupure réseau, serveur surchargé). */
     private static final int AUTO_RETRY_MAX = 2;
 
@@ -138,7 +134,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     /** Taille de la liste complète côté page : au-delà du contexte, la page relance sur le numéro saisi. */
     private int channelTotal = 0;
     /** Saisie du numéro de chaîne aux touches 0-9 de la télécommande. */
-    private final StringBuilder numberBuffer = new StringBuilder();
+    private final ChannelNumberInput numberBuffer = new ChannelNumberInput();
     private final Handler numberHandler = new Handler(Looper.getMainLooper());
     private TextView numberOverlay;
     /** Numéro demandé hors du contexte chargé : rendu à la page à la fermeture. */
@@ -284,6 +280,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
         );
 
+        afrEnabled = PlayerOptions.afr(this);
         streamUrl = getIntent().getStringExtra(EXTRA_URL);
         streamTitle = getIntent().getStringExtra(EXTRA_TITLE);
         vod = getIntent().getBooleanExtra("vod", false);
@@ -315,6 +312,11 @@ public class NativePlayerActivity extends AppCompatActivity {
                 }
             } catch (Exception ignored) { channelUrls = null; channelTitles = null; programLineCache.clear(); }
         }
+        // Après une rotation, l'index sauvegardé désigne déjà la liste complète.
+        boolean savedFull = savedInstanceState != null && savedInstanceState.getBoolean("fullList", false);
+        adoptFullList(savedFull);
+        // Index sauvegardé sur la liste complète devenue illisible : pas de zapping plutôt qu'une mauvaise chaîne.
+        if (savedFull && !fullListAdopted) channelUrls = null;
         if (channelUrls == null || channelTitles == null
                 || channelUrls.size() != channelTitles.size()
                 || channelIndex < 0 || channelIndex >= channelUrls.size()) {
@@ -795,9 +797,14 @@ public class NativePlayerActivity extends AppCompatActivity {
 
         if (vod) {
             playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
+                // Le contrôleur Media3 se masque aussi tout seul (et après ses menus).
+                // La prochaine pression doit rouvrir ses réglages, dont la vitesse.
+                isControlsVisible = visibility == View.VISIBLE;
+                topBar.animate().cancel();
+                topBar.setAlpha(1.0f);
                 topBar.setVisibility(visibility);
                 // Sélection télécommande posée à l'affichage, comme pour le direct.
-                if (visibility == View.VISIBLE) { if (btnAudio != null) btnAudio.requestFocus(); }
+                if (visibility == View.VISIBLE) { if (btnAudio != null && topBar.findFocus() == null) btnAudio.requestFocus(); }
                 else hideSystemUI();
             });
         }
@@ -836,6 +843,56 @@ public class NativePlayerActivity extends AppCompatActivity {
         setContentView(root);
         updateInfoBar();
         scheduleHideControls();
+    }
+
+    /** Guide inconnu (chaîne hors de la fenêtre transmise avec la liste complète). */
+    private static final JSONArray UNKNOWN_EPG = new JSONArray();
+    private boolean fullListAdopted = false;
+
+    /**
+     * Remplace la fenêtre de 300 chaînes par la liste complète écrite par la page
+     * (zaplist.tsv : clé puis « url, titre, groupe, numéro » par ligne, séparés par des
+     * tabulations). Le guide reste celui de la fenêtre, recopié à sa place. En cas de
+     * doute (clé, taille, chaîne en cours), la fenêtre reste en place.
+     */
+    private void adoptFullList(boolean savedIndexIsFull) {
+        String path = getIntent().getStringExtra("channelList");
+        String key = getIntent().getStringExtra("listKey");
+        int windowStart = getIntent().getIntExtra("windowStart", -1);
+        if (path == null || key == null || channelUrls == null || channelIndex < 0 || windowStart < 0) return;
+        long started = SystemClock.elapsedRealtime();
+        try {
+            File file = new File(path);
+            if (!file.getCanonicalFile().getParentFile().equals(getCacheDir().getCanonicalFile()) || !file.getName().equals(NativePlayerPlugin.ZAP_LIST_NAME)) return;
+            ArrayList<String> urls = new ArrayList<>(), titles = new ArrayList<>(), groups = new ArrayList<>(), numbers = new ArrayList<>();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8), 1 << 16)) {
+                if (!key.equals(reader.readLine())) return;
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    int a = line.indexOf('\t');
+                    int b = a < 0 ? -1 : line.indexOf('\t', a + 1);
+                    int c = b < 0 ? -1 : line.indexOf('\t', b + 1);
+                    if (c < 0) return;
+                    urls.add(line.substring(0, a)); titles.add(line.substring(a + 1, b));
+                    groups.add(line.substring(b + 1, c)); numbers.add(line.substring(c + 1));
+                }
+            }
+            // Indices de la fenêtre → indices de la liste complète.
+            int current = savedIndexIsFull ? channelIndex : windowStart + channelIndex;
+            int previous = previousIndex < 0 ? -1 : (savedIndexIsFull ? previousIndex : windowStart + previousIndex);
+            if (current < 0 || current >= urls.size() || windowStart + channelUrls.size() > urls.size()) return;
+            ArrayList<JSONArray> programs = new ArrayList<>(urls.size());
+            for (int i = 0; i < urls.size(); i++) programs.add(UNKNOWN_EPG);
+            if (channelPrograms != null) for (int i = 0; i < channelPrograms.size(); i++) programs.set(windowStart + i, channelPrograms.get(i));
+            // La chaîne lancée peut être une variante (autre qualité) de la ligne de la liste.
+            if (!savedIndexIsFull && streamUrl != null) { urls.set(current, streamUrl); if (streamTitle != null) titles.set(current, streamTitle); }
+            if (savedIndexIsFull) { streamUrl = urls.get(current); streamTitle = titles.get(current); }
+            channelUrls = urls; channelTitles = titles; channelGroups = groups; channelNumbers = numbers; channelPrograms = programs;
+            channelIndex = current; previousIndex = previous; channelTotal = urls.size();
+            programLineCache.clear();
+            fullListAdopted = true;
+            android.util.Log.i("IPTV-Playback", "zap_full_list channels=" + urls.size() + " load_ms=" + (SystemClock.elapsedRealtime() - started));
+        } catch (Exception ignored) { /* la fenêtre reste en place */ }
     }
 
     private void switchChannel(int delta) {
@@ -962,6 +1019,10 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void showControls() {
         if (pipActive) return;
+        if (vod && playerView != null) {
+            playerView.showController();
+            return;
+        }
         topBar.animate().cancel();
         isControlsVisible = true;
         topBar.setVisibility(View.VISIBLE);
@@ -973,12 +1034,16 @@ public class NativePlayerActivity extends AppCompatActivity {
             infoBar.animate().alpha(1.0f).setDuration(200).start();
         }
         scheduleHideControls();
-        // La télécommande a une sélection visible dès l'ouverture : bouton sans effet de bord
-        // sur la lecture ; les flèches atteignent ensuite toutes les options de la barre.
-        if (btnAudio != null) btnAudio.requestFocus();
+        // Initialiser la sélection à l'ouverture, sans déplacer celle déjà présente :
+        // après un zapping par ‹ ou ›, OK doit pouvoir changer de nouveau la chaîne.
+        if (btnAudio != null && topBar.findFocus() == null) btnAudio.requestFocus();
     }
 
     private void hideControls() {
+        if (vod && playerView != null) {
+            playerView.hideController();
+            return;
+        }
         topBar.animate().cancel();
         isControlsVisible = false;
         if (infoBar != null) {
@@ -1208,7 +1273,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (next != null) {
             infoNext.setText("Ensuite  " + hour(next.optLong(0)) + "  ·  " + next.optString(2, ""));
             infoNext.setVisibility(View.VISIBLE);
-        } else if (p == null && channelPrograms != null) {
+        } else if (p == null && channelPrograms != null && channelIndex >= 0 && channelIndex < channelPrograms.size() && channelPrograms.get(channelIndex) != UNKNOWN_EPG) {
             infoNext.setText("Pas de guide pour cette chaîne");
             infoNext.setVisibility(View.VISIBLE);
         } else {
@@ -1259,7 +1324,12 @@ public class NativePlayerActivity extends AppCompatActivity {
 
         // Filtres par groupe, dans l'ordre de la liste.
         ArrayList<String> groups = new ArrayList<>();
-        if (channelGroups != null) for (String g : channelGroups) if (!g.isEmpty() && !groups.contains(g)) groups.add(g);
+        if (channelGroups != null) {
+            // Ensemble ordonné : sur une liste complète de 20 000 chaînes, contains() sur la liste coûterait trop.
+            java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+            for (String g : channelGroups) if (!g.isEmpty()) seen.add(g);
+            groups.addAll(seen);
+        }
         if (groups.size() > 1) {
             HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
             chipsScroll.setHorizontalScrollBarEnabled(false);
@@ -1590,18 +1660,11 @@ public class NativePlayerActivity extends AppCompatActivity {
         zapStartedAtMs = 0;
         // Le lecteur ne sert qu'un type de contenu (direct ou VOD) : le réglage de
         // démarrage est choisi une fois pour toutes à la création.
-        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                BUFFER_MIN_MS,
-                BUFFER_MAX_MS,
-                vod ? VOD_BUFFER_FOR_PLAYBACK_MS : LIVE_BUFFER_FOR_PLAYBACK_MS,  // avant la première image
-                vod ? VOD_BUFFER_FOR_REBUFFER_MS : LIVE_BUFFER_FOR_REBUFFER_MS   // avant la reprise après coupure
-            )
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build();
+        // Mémoire tampon choisie dans les réglages (Normale = valeurs historiques).
+        DefaultLoadControl loadControl = PlayerOptions.loadControl(this, vod);
 
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory()
-            .setUserAgent("IPTVSmartersPro")
+            .setUserAgent(PlayerOptions.userAgent(this))
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
             .setAllowCrossProtocolRedirects(true);
@@ -1611,7 +1674,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         DefaultDataSource.Factory dataSourceFactory = new DefaultDataSource.Factory(this, httpDataSourceFactory);
         DefaultMediaSourceFactory mediaSourceFactory = new DefaultMediaSourceFactory(dataSourceFactory);
 
-        player = new ExoPlayer.Builder(this)
+        player = new ExoPlayer.Builder(this, PlayerOptions.renderers(this))
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(loadControl)
             .setAudioAttributes(AudioAttributes.DEFAULT, true)
@@ -1711,12 +1774,15 @@ public class NativePlayerActivity extends AppCompatActivity {
             @Override public void onDroppedVideoFrames(EventTime eventTime, int count, long elapsedCpuTimeMs) {
                 droppedFrames += count;
             }
+            // AFR : chaque nouvelle vidéo (zapping compris) peut changer de cadence.
+            @Override public void onVideoInputFormatChanged(EventTime eventTime, Format format, androidx.media3.exoplayer.DecoderReuseEvaluation evaluation) {
+                if (!afrEnabled) return;
+                int mode = PlayerOptions.chooseDisplayMode(getWindowManager().getDefaultDisplay(), format.frameRate);
+                if (mode != 0) PlayerOptions.applyDisplayMode(NativePlayerActivity.this, mode);
+            }
         });
 
-        player.setMediaItem(buildMediaItem(url));
-        if (vod && positionMs > 0) player.seekTo(positionMs);
-        player.prepare();
-        player.setPlayWhenReady(playWhenReady);
+        loadMedia(url);
         if (mediaSession != null) { mediaSession.setActive(true); updateMediaSessionState(); }
         if (vod) { progressHandler.removeCallbacksAndMessages(null); progressHandler.postDelayed(checkpoint, 5000); }
     }
@@ -1731,11 +1797,36 @@ public class NativePlayerActivity extends AppCompatActivity {
         firstFrameLogged = false;
         hideError();
         loadingBar.setVisibility(View.VISIBLE);
+        loadMedia(url);
+        if (vod) { progressHandler.removeCallbacksAndMessages(null); progressHandler.postDelayed(checkpoint, 5000); }
+    }
+
+    /** Numéro du dernier média demandé : une résolution de portail arrivée trop tard est ignorée. */
+    private int mediaRequest = 0;
+
+    /**
+     * Charge le média. Une chaîne de portail Stalker demande d'abord son lien de lecture
+     * au portail (hors du fil principal) ; un zapping entre-temps rend ce lien caduc.
+     */
+    private void loadMedia(String url) {
+        final int request = ++mediaRequest;
+        if (!Stalker.is(url)) { applyMedia(url); return; }
+        Stalker.resolveAsync(this, url, resolved -> {
+            if (request != mediaRequest || player == null || isFinishing()) return;
+            if (resolved == null) {
+                loadingBar.setVisibility(View.GONE);
+                showError("Le portail n’a pas donné de lien de lecture pour cette chaîne.");
+                return;
+            }
+            applyMedia(resolved);
+        });
+    }
+
+    private void applyMedia(String url) {
         player.setMediaItem(buildMediaItem(url));
         if (vod && positionMs > 0) player.seekTo(positionMs);
         player.prepare();
         player.setPlayWhenReady(playWhenReady);
-        if (vod) { progressHandler.removeCallbacksAndMessages(null); progressHandler.postDelayed(checkpoint, 5000); }
     }
 
     /** Média complet : flux + sous-titres externes propres à l'épisode VOD. */
@@ -1924,6 +2015,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     protected void onSaveInstanceState(Bundle state) {
         saveProgress();
         state.putInt("channelIndex", channelIndex);
+        state.putBoolean("fullList", fullListAdopted);
         state.putInt("previousIndex", previousIndex);
         state.putLong("positionMs", positionMs);
         state.putBoolean("playWhenReady", playWhenReady);
@@ -2245,7 +2337,6 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void typeDigit(int digit) {
         if (numberOverlay == null) return;
-        if (numberBuffer.length() >= 5) numberBuffer.setLength(0);
         numberBuffer.append(digit);
         String typed = normalizeNumber(numberBuffer.toString());
         int match = indexOfNumber(typed);
@@ -2266,7 +2357,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void commitNumber() {
         numberHandler.removeCallbacksAndMessages(null);
         String typed = normalizeNumber(numberBuffer.toString());
-        numberBuffer.setLength(0);
+        numberBuffer.clear();
         if (typed.isEmpty() || channelUrls == null) { hideNumberOverlay(); return; }
         int found = indexOfNumber(typed);
         if (found >= 0) {
@@ -2293,7 +2384,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     /** Abandonne la saisie en cours : sans ça, le délai de validation survit à Home et
      *  change de chaîne (ou recrée le lecteur) alors que l'activité n'est plus visible. */
     private void cancelNumberEntry() {
-        numberBuffer.setLength(0);
+        numberBuffer.clear();
         numberHandler.removeCallbacksAndMessages(null);
         hideNumberOverlay();
     }

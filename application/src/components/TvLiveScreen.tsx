@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - type resolution sometimes lags in certain editors
 import { useVirtualizer, defaultRangeExtractor } from '@tanstack/react-virtual';
-import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, Lock, Play, Search, Star } from 'lucide-react';
+import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, ListChecks, Lock, Pencil, Play, Search, SlidersHorizontal, Star } from 'lucide-react';
+import type { FavoriteList } from '@/utils/favoriteLists';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData } from '@/types/epg';
@@ -12,7 +13,7 @@ import { NativePlayerBridge, type PreviewState } from '@/utils/nativePlayer';
 
 type Column = 'cat' | 'list' | 'info';
 type CategoryItem =
-  | { kind: 'action'; id: 'search' | 'guide'; label: string }
+  | { kind: 'action'; id: 'search' | 'guide' | 'organize'; label: string }
   | { kind: 'category'; id: string; label: string; count: number; locked: boolean };
 
 const ROW_HEIGHT = 56;
@@ -38,6 +39,13 @@ export interface TvLiveScreenProps {
   preview?: boolean | undefined;
   /** Mode de l'aperçu : automatique après le survol, ou manuel via le bouton « Aperçu » (petites box, abonnements limités en connexions). « off » n'arrive jamais avec preview actif. */
   previewMode?: 'auto' | 'manual' | 'off' | undefined;
+  /** Modifier la chaîne surlignée (nom, logo, numéro, listes, masquage). */
+  onEdit?: ((channel: Channel) => void) | undefined;
+  /** Organiser la liste (groupes, ordre, numéros). */
+  onOrganize?: (() => void) | undefined;
+  favoriteLists?: FavoriteList[] | undefined;
+  /** Groupes déjà dans l'ordre choisi : ne pas les trier. */
+  customGroupOrder?: boolean | undefined;
 }
 
 function storedCategory(playlistId: string): string | null {
@@ -64,6 +72,7 @@ function useClock(): Date {
 export function TvLiveScreen({
   playlistId, groups, favoriteIds, epgData, currentChannel, lockedGroups, unlocked = false,
   onPlay, onLockedGroupSelect, onSearch, onGuide, onMosaic, onRecord, preview = false, previewMode = 'auto',
+  onEdit, onOrganize, favoriteLists, customGroupOrder = false,
 }: TvLiveScreenProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const catRef = useRef<HTMLDivElement>(null);
@@ -101,15 +110,19 @@ export function TvLiveScreen({
     const list: CategoryItem[] = [];
     if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
     if (onGuide) list.push({ kind: 'action', id: 'guide', label: 'Guide TV' });
+    if (onOrganize) list.push({ kind: 'action', id: 'organize', label: 'Organiser' });
     list.push({ kind: 'category', id: 'favorites', label: 'Favoris', count: favorites.length, locked: false });
+    for (const l of favoriteLists ?? []) {
+      list.push({ kind: 'category', id: `favlist:${l.id}`, label: l.name, count: l.channelIds.filter(id => { const c = byId.get(id); return !!c && allowed(c); }).length, locked: false });
+    }
     list.push({ kind: 'category', id: 'recent', label: 'Récentes', count: recents.length, locked: false });
     list.push({ kind: 'category', id: 'all', label: 'Toutes', count: allChannels.filter(allowed).length, locked: false });
-    for (const g of [...groups].sort((a, b) => a.name.localeCompare(b.name, 'fr'))) {
+    for (const g of customGroupOrder ? groups : [...groups].sort((a, b) => a.name.localeCompare(b.name, 'fr'))) {
       const locked = parentalLocked && lockedSet.has(g.name);
       list.push({ kind: 'category', id: `group:${g.name}`, label: g.name, count: g.channels.length, locked });
     }
     return list;
-  }, [onSearch, onGuide, favorites.length, recents.length, allChannels, allowed, groups, parentalLocked, lockedSet]);
+  }, [onSearch, onGuide, onOrganize, favorites.length, favoriteLists, byId, recents.length, allChannels, allowed, groups, customGroupOrder, parentalLocked, lockedSet]);
 
   const [category, setCategory] = useState<string>(() => storedCategory(playlistId) ?? (favoriteIds.length ? 'favorites' : 'all'));
   useEffect(() => {
@@ -121,11 +134,15 @@ export function TvLiveScreen({
   const channels = useMemo<Channel[]>(() => {
     if (category === 'favorites') return favorites;
     if (category === 'recent') return recents;
+    if (category.startsWith('favlist:')) {
+      const list = favoriteLists?.find(l => `favlist:${l.id}` === category);
+      return (list?.channelIds ?? []).map(id => byId.get(id)).filter((c): c is Channel => !!c && allowed(c));
+    }
     if (category === 'all') return allChannels.filter(allowed);
     const name = category.slice('group:'.length);
     if (parentalLocked && lockedSet.has(name)) return [];
     return groups.find(g => g.name === name)?.channels ?? [];
-  }, [category, favorites, recents, allChannels, allowed, groups, parentalLocked, lockedSet]);
+  }, [category, favorites, favoriteLists, byId, recents, allChannels, allowed, groups, parentalLocked, lockedSet]);
 
   const [column, setColumn] = useState<Column>('list');
   const [catIndex, setCatIndex] = useState(() => Math.max(0, items.findIndex(i => i.id === category)));
@@ -195,8 +212,9 @@ export function TvLiveScreen({
       } },
       ...(onMosaic ? [{ id: 'mosaic', label: 'Mosaïque', short: 'Mosaïque', icon: <Grid2X2 className="h-5 w-5" aria-hidden="true" />, run: () => onMosaic(highlighted) }] : []),
       ...(onRecord ? [{ id: 'record', label: 'Enregistrer', short: 'Enregistrer', icon: <CircleDot className="h-5 w-5" aria-hidden="true" />, run: () => onRecord(highlighted) }] : []),
+      ...(onEdit ? [{ id: 'edit', label: 'Modifier la chaîne', short: 'Modifier', icon: <Pencil className="h-5 w-5" aria-hidden="true" />, run: () => onEdit(highlighted) }] : []),
     ];
-  }, [highlighted, favoriteSet, favoriteIds, onPlay, onMosaic, onRecord, preview, previewMode, manualPreview]);
+  }, [highlighted, favoriteSet, favoriteIds, onPlay, onMosaic, onRecord, onEdit, preview, previewMode, manualPreview]);
   useEffect(() => { setInfoIndex(i => Math.min(i, Math.max(0, infoActions.length - 1))); }, [infoActions.length]);
 
   // Retour sur l'écran (lecteur fermé, rubrique rouverte) à la télécommande : focus sur la liste.
@@ -340,6 +358,9 @@ export function TvLiveScreen({
     if (from instanceof Node && rootRef.current?.contains(from)) return;
     if (!document.documentElement.classList.contains('remote-navigation')) return;
     const target = e.target as HTMLElement;
+    // Bas depuis les rubriques vise la première commande de gauche. Ne pas la
+    // détourner vers la dernière chaîne : Rechercher/Guide/Organiser doivent rester accessibles.
+    if (target.hasAttribute('data-remote-entry')) return;
     const col: Column | null = target.closest('[data-tv-col="cat"]') ? 'cat' : target.closest('[data-tv-col="list"]') ? 'list' : target.closest('[data-tv-col="info"]') ? 'info' : null;
     const wanted: Column = channels.length ? 'list' : 'cat';
     const index = wanted === 'list' ? String(row) : String(catIndex);
@@ -421,8 +442,9 @@ export function TvLiveScreen({
           {items.map((item, index) => {
             const selected = item.kind === 'category' && item.id === category;
             const icon = item.kind === 'action'
-              ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" /> : <CalendarDays className="h-4 w-4" aria-hidden="true" />)
+              ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" /> : item.id === 'organize' ? <SlidersHorizontal className="h-4 w-4" aria-hidden="true" /> : <CalendarDays className="h-4 w-4" aria-hidden="true" />)
               : item.id === 'favorites' ? <Star className="h-4 w-4" aria-hidden="true" />
+              : item.id.startsWith('favlist:') ? <ListChecks className="h-4 w-4" aria-hidden="true" />
               : item.id === 'recent' ? <Clock className="h-4 w-4" aria-hidden="true" />
               : item.id === 'all' ? <List className="h-4 w-4" aria-hidden="true" />
               : item.locked ? <Lock className="h-4 w-4" aria-hidden="true" /> : null;
@@ -433,10 +455,11 @@ export function TvLiveScreen({
                 aria-current={selected ? 'true' : undefined}
                 data-tv-item
                 data-tv-cat={index}
+                data-remote-entry={index === 0 ? '' : undefined}
                 tabIndex={column === 'cat' && index === catIndex ? 0 : -1}
                 onFocus={() => syncColumn('cat', index)}
                 onClick={() => {
-                  if (item.kind === 'action') { (item.id === 'search' ? onSearch : onGuide)?.(); return; }
+                  if (item.kind === 'action') { (item.id === 'search' ? onSearch : item.id === 'organize' ? onOrganize : onGuide)?.(); return; }
                   if (item.locked) { onLockedGroupSelect?.(); return; }
                   setCatIndex(index);
                   if (item.id !== category) { setCategory(item.id); setRow(0); }

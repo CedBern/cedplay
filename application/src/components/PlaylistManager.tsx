@@ -9,6 +9,7 @@ import { deletePlaylistFromDB, savePlaylistToDB } from '@/utils/idb';
 import { StorageManager } from '@/utils/storage';
 import { toast } from 'sonner';
 import { canRefreshPlaylist } from '@/utils/xtreamLive';
+import { cleanUserAgent, DEFAULT_USER_AGENT } from '@/utils/userAgent';
 
 interface PlaylistManagerProps {
   playlists: PlaylistInfo[];
@@ -23,28 +24,33 @@ export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onS
   const [renameTarget, setRenameTarget] = useState<PlaylistInfo | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
+  const [userAgentValue, setUserAgentValue] = useState('');
+  const userAgentInvalid = userAgentValue.trim() !== '' && !cleanUserAgent(userAgentValue);
 
   const submitRename = async () => {
     const pl = renameTarget;
     const newName = renameValue.trim();
-    if (!pl || !newName || newName === pl.name) { setRenameTarget(null); return; }
+    const userAgent = cleanUserAgent(userAgentValue);
+    if (userAgentInvalid) return;
+    if (!pl || !newName || (newName === pl.name && userAgent === (pl.userAgent ?? ''))) { setRenameTarget(null); return; }
     if (playlists.some(p => p.name.toLowerCase() === newName.toLowerCase() && p.id !== pl.id)) {
       toast.error('Une liste porte déjà ce nom');
       return;
     }
     setRenameBusy(true);
     try {
-      const updated: PlaylistInfo = { ...pl, name: newName };
+      const { userAgent: _previous, ...rest } = pl;
+      const updated: PlaylistInfo = { ...rest, name: newName, ...(userAgent ? { userAgent } : {}) };
       await savePlaylistToDB(updated);
       if (StorageManager.getLastPlaylist() === pl.name) {
         StorageManager.setLastPlaylist(newName);
       }
-      toast.success('Liste renommée');
+      toast.success(newName !== pl.name ? 'Liste renommée' : 'Liste modifiée');
       onMutate?.(updated, pl.name);
       setRenameTarget(null);
     } catch (e) {
       console.error(e);
-      toast.error('Impossible de renommer la liste');
+      toast.error('Impossible de modifier la liste');
     } finally {
       setRenameBusy(false);
     }
@@ -93,7 +99,7 @@ export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onS
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               )}
-              <Button size="icon" variant="ghost" className="h-9 w-9 text-blue-400 hover:text-blue-300" onClick={() => { setRenameTarget(pl); setRenameValue(pl.name); }} title="Renommer la liste" aria-label={`Renommer ${pl.name}`}>
+              <Button size="icon" variant="ghost" className="h-9 w-9 text-blue-400 hover:text-blue-300" onClick={() => { setRenameTarget(pl); setRenameValue(pl.name); setUserAgentValue(pl.userAgent ?? ''); }} title="Modifier la liste (nom, User-Agent)" aria-label={`Modifier ${pl.name}`}>
                 <Pencil className="h-4 w-4" />
               </Button>
               <Button size="icon" variant="ghost" className="h-9 w-9 text-red-400 hover:text-red-300" onClick={() => handleDelete(pl)} title="Supprimer la liste" aria-label={`Supprimer ${pl.name}`} disabled={pl.id === currentId}>
@@ -106,8 +112,8 @@ export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onS
       <Dialog open={renameTarget !== null} onOpenChange={open => { if (!open) setRenameTarget(null); }}>
         <DialogContent className="max-w-sm bg-neutral-950 text-white border-neutral-800">
           <DialogHeader>
-            <DialogTitle>Renommer la liste</DialogTitle>
-            <DialogDescription className="text-neutral-400">Choisis un nouveau nom pour « {renameTarget?.name} ».</DialogDescription>
+            <DialogTitle>Modifier la liste</DialogTitle>
+            <DialogDescription className="text-neutral-400">Nom et identification auprès du fournisseur pour « {renameTarget?.name} ».</DialogDescription>
           </DialogHeader>
           <Input
             aria-label="Nouveau nom de la liste"
@@ -117,9 +123,22 @@ export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onS
             className="bg-neutral-900 border-neutral-800 text-white"
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void submitRename(); } }}
           />
+          <label htmlFor="playlist-user-agent" className="text-sm text-neutral-300">User-Agent</label>
+          <Input
+            id="playlist-user-agent"
+            value={userAgentValue}
+            onChange={e => setUserAgentValue(e.target.value)}
+            placeholder={DEFAULT_USER_AGENT}
+            aria-invalid={userAgentInvalid}
+            aria-describedby="playlist-user-agent-hint"
+            className="bg-neutral-900 border-neutral-800 text-white"
+          />
+          <p id="playlist-user-agent-hint" className={`text-xs ${userAgentInvalid ? 'text-red-400' : 'text-neutral-400'}`}>{userAgentInvalid
+            ? 'Caractères ASCII seulement, 200 au plus.'
+            : `Envoyé au fournisseur pour les flux, le guide, l’API Xtream et l’actualisation. Vide : ${DEFAULT_USER_AGENT}. À changer seulement si le fournisseur exige un lecteur précis (ex. VLC/3.0.20).`}</p>
           <div className="flex justify-end gap-2">
             <Button variant="outline" className="border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setRenameTarget(null)}>Annuler</Button>
-            <Button onClick={() => void submitRename()} disabled={renameBusy || !renameValue.trim()}>Renommer</Button>
+            <Button onClick={() => void submitRename()} disabled={renameBusy || !renameValue.trim() || userAgentInvalid}>Enregistrer</Button>
           </div>
         </DialogContent>
       </Dialog>

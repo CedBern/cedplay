@@ -61,7 +61,8 @@ public final class ScheduleStore {
             if (start <= now) { changed = true; continue; }
             kept.put(o);
             ScheduledRecordReceiver.setAlarm(context, o.optString("id"), start,
-                o.optString("url"), o.optString("title"), o.optLong("durationMs"));
+                o.optString("url"), o.optString("title"), o.optLong("durationMs"),
+                o.optString("userAgent", PlayerOptions.DEFAULT_USER_AGENT));
         }
         if (changed) save(context, kept);
     }

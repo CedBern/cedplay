@@ -8,6 +8,9 @@ const STORAGE_KEYS = {
   LAST_PLAYLIST: 'iptv_last_playlist'
 };
 
+// Les jetons de lecture TMDB sont plus longs que les anciennes clés API v3.
+const MAX_TMDB_CREDENTIAL_LENGTH = 4096;
+
 export interface AppSettings {
   volume: number;
   autoplay: boolean;
@@ -21,7 +24,7 @@ export interface AppSettings {
   autoLoadLastPlaylist?: boolean; // auto-load last used playlist on startup
   autoReconnect?: boolean; // resume the stream automatically after a network outage
   epgUrl?: string; // custom XMLTV URL for lists without a linked Xtream account
-  tmdbApiKey?: string; // free TMDB API key (enriched VOD info, reviews, recommendations)
+  tmdbApiKey?: string; // TMDB API key or read access token (enriched VOD info)
   subtitlesEnabled?: boolean; // active la recherche et l'affichage des sous-titres
   subtitleAutoTranslate?: boolean; // traduit automatiquement les sous-titres vers le français si absent
   subtitlePreferredLang?: 'fr' | 'en' | 'es'; // langue préférée des sous-titres
@@ -36,6 +39,9 @@ export interface AppSettings {
   proxyUrl?: string; // adresse du relais CORS pour les builds web hébergés (vide = relais local de développement)
   startOnLastChannel?: boolean; // relance la dernière chaîne regardée à l'ouverture de l'application
   playlistRefreshHours?: number; // actualisation automatique de la liste par URL (heures ; 0 = jamais)
+  playerBuffer?: 'small' | 'normal' | 'large' | 'max'; // mémoire tampon du lecteur Android (direct)
+  playerDecoder?: 'hardware' | 'software'; // décodeurs vidéo essayés en premier par le lecteur Android
+  playerAfr?: boolean; // fréquence d'affichage adaptée à la vidéo (Android TV)
   __version?: number; // internal version for migrations
 }
 
@@ -53,7 +59,7 @@ const appSettingsSchema = z.object({
   autoLoadLastPlaylist: z.boolean().optional(),
   autoReconnect: z.boolean().optional(),
   epgUrl: z.string().max(500).optional(),
-  tmdbApiKey: z.string().max(200).optional(),
+  tmdbApiKey: z.string().max(MAX_TMDB_CREDENTIAL_LENGTH).optional(),
   subtitlesEnabled: z.boolean().optional(),
   subtitleAutoTranslate: z.boolean().optional(),
   subtitlePreferredLang: z.enum(['fr', 'en', 'es']).optional(),
@@ -68,6 +74,9 @@ const appSettingsSchema = z.object({
   proxyUrl: z.string().max(300).optional(),
   startOnLastChannel: z.boolean().optional(),
   playlistRefreshHours: z.number().int().min(0).max(168).optional(),
+  playerBuffer: z.enum(['small', 'normal', 'large', 'max']).optional(),
+  playerDecoder: z.enum(['hardware', 'software']).optional(),
+  playerAfr: z.boolean().optional(),
   __version: z.number().optional()
 });
 
@@ -330,7 +339,7 @@ export class StorageManager {
       autoLoadLastPlaylist: coerceBool(s.autoLoadLastPlaylist, base.autoLoadLastPlaylist as boolean),
       autoReconnect: coerceBool(s.autoReconnect, base.autoReconnect as boolean),
       epgUrl: typeof s.epgUrl === 'string' ? String(s.epgUrl).slice(0, 500) : (base.epgUrl as string),
-      tmdbApiKey: typeof s.tmdbApiKey === 'string' ? String(s.tmdbApiKey).slice(0, 200) : (base.tmdbApiKey as string),
+      tmdbApiKey: typeof s.tmdbApiKey === 'string' ? String(s.tmdbApiKey).slice(0, MAX_TMDB_CREDENTIAL_LENGTH) : (base.tmdbApiKey as string),
       subtitlesEnabled: coerceBool(s.subtitlesEnabled, base.subtitlesEnabled as boolean),
       subtitleAutoTranslate: coerceBool(s.subtitleAutoTranslate, base.subtitleAutoTranslate as boolean),
       subtitlePreferredLang: s.subtitlePreferredLang === 'en' || s.subtitlePreferredLang === 'es' ? s.subtitlePreferredLang : 'fr',

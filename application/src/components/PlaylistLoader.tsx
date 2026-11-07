@@ -7,6 +7,8 @@ import { CORSProxy } from '@/utils/corsProxy';
 import { parseM3UInWorker } from '@/utils/parseWorker';
 import { PlaylistInfo } from '@/types/channel';
 import { XtreamLoginDialog } from '@/components/XtreamLoginDialog';
+import { StalkerLoginDialog } from '@/components/StalkerLoginDialog';
+import { stalkerAvailable } from '@/utils/stalker';
 
 interface PlaylistLoaderProps { onPlaylistLoaded: (playlist: PlaylistInfo) => void | Promise<void>; }
 
@@ -80,6 +82,16 @@ export function PlaylistLoader({ onPlaylistLoaded }: PlaylistLoaderProps) {
           <XtreamLoginDialog onPlaylistLoaded={onPlaylistLoaded} />
         </div>
       </div>
+
+      {stalkerAvailable() && <div className="p-4 bg-neutral-900/80 rounded-lg border border-neutral-800/80 space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="font-semibold text-sm text-neutral-100">Portail Stalker (adresse MAC)</h4>
+            <p className="text-xs text-neutral-400">Abonnements prévus pour les boîtiers MAG : adresse du portail et adresse MAC.</p>
+          </div>
+          <StalkerLoginDialog onPlaylistLoaded={onPlaylistLoaded} />
+        </div>
+      </div>}
 
       <div className="relative my-2">
         <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-neutral-900" /></div>

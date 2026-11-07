@@ -5,6 +5,8 @@ const channelSchema: z.ZodType<Channel, z.ZodTypeDef, unknown> = z.lazy(() => z.
   id: z.string().min(1), name: z.string(), url: z.string(),
   logo: z.string().optional(), group: z.string().optional(), tvgId: z.string().optional(),
   tvgName: z.string().optional(), chno: z.string().optional(), duration: z.number().finite().optional(),
+  tvgShift: z.number().finite().optional(), catchup: z.string().optional(), catchupSource: z.string().optional(),
+  catchupDays: z.number().finite().optional(),
   isFavorite: z.boolean().optional(), quality: z.enum(['4K', 'UHD', 'FHD', 'HD', 'SD']).optional(),
   variants: z.array(channelSchema).optional(),
 }).strict().transform(value => Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as unknown as Channel));
@@ -12,6 +14,8 @@ const channelSchema: z.ZodType<Channel, z.ZodTypeDef, unknown> = z.lazy(() => z.
 const playlistSchema = z.object({
   id: z.string().min(1), name: z.string(), url: z.string().optional(),
   channels: z.array(channelSchema), totalChannelsBeforeDedup: z.number().int().nonnegative().optional(),
+  epgUrls: z.array(z.string()).optional(), userAgent: z.string().max(200).optional(),
+  stalker: z.object({ portal: z.string(), mac: z.string() }).strict().optional(),
 }).strict();
 
 const localSchema = z.object({
@@ -89,8 +93,11 @@ export function rebuildPlaylist(playlist: Backup['playlists'][number]): Playlist
     if (!groups.has(name)) groups.set(name, []);
     groups.get(name)!.push(channel);
   }
-  const { url, totalChannelsBeforeDedup, ...base } = playlist;
+  const { url, totalChannelsBeforeDedup, epgUrls, userAgent, stalker, ...base } = playlist;
   return { ...base, ...(url !== undefined ? { url } : {}),
     ...(totalChannelsBeforeDedup !== undefined ? { totalChannelsBeforeDedup } : {}),
+    ...(epgUrls !== undefined ? { epgUrls } : {}),
+    ...(userAgent !== undefined ? { userAgent } : {}),
+    ...(stalker !== undefined ? { stalker } : {}),
     groups: [...groups].map(([name, channels]) => ({ name, channels })) };
 }

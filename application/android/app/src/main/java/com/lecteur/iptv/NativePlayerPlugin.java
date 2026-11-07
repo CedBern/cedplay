@@ -41,6 +41,34 @@ public class NativePlayerPlugin extends Plugin {
         "mpg", "mpeg", "flv", "wmv", "3gp", "3g2", "vob", "divx", "ogv", "f4v"
     };
 
+    /** Liste complète de zapping (url, titre, groupe, numéro par ligne), écrite une fois par changement de liste. */
+    static final String ZAP_LIST_NAME = "zaplist.tsv";
+    private static String zapListKey = null;
+    private static int zapListSize = 0;
+
+    @PluginMethod
+    public void setZapList(PluginCall call) {
+        String key = call.getString("key");
+        String data = call.getString("data");
+        int count = call.getInt("count", 0);
+        if (key == null || key.isEmpty() || key.indexOf('\n') >= 0 || data == null || count <= 0) { call.reject("Liste vide"); return; }
+        File target = new File(getContext().getCacheDir(), ZAP_LIST_NAME);
+        File temp = new File(getContext().getCacheDir(), ZAP_LIST_NAME + ".tmp");
+        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(temp), StandardCharsets.UTF_8)) {
+            writer.write(key);
+            writer.write('\n');
+            writer.write(data);
+        } catch (Exception e) {
+            temp.delete();
+            call.reject("Écriture impossible");
+            return;
+        }
+        if (!temp.renameTo(target)) { temp.delete(); zapListKey = null; call.reject("Écriture impossible"); return; }
+        zapListKey = key;
+        zapListSize = count;
+        call.resolve();
+    }
+
     @PluginMethod
     public void open(PluginCall call) {
         // Mesures sans URL, titre ou identifiant de compte.
@@ -103,6 +131,18 @@ public class NativePlayerPlugin extends Plugin {
                     intent.putExtra("channelFile", channelFile.getAbsolutePath());
                     intent.putExtra("channelIndex", index);
                     intent.putExtra("channelTotal", Math.max(urlList.size(), call.getInt("channelTotal", urlList.size())));
+                    // Liste complète déjà transmise : le lecteur zappe sur toutes les chaînes ; la
+                    // fenêtre ci-dessus reste le repli (et porte le guide des chaînes voisines).
+                    String listKey = call.getString("listKey");
+                    int listIndex = call.getInt("listIndex", -1);
+                    int windowStart = call.getInt("windowStart", -1);
+                    if (listKey != null && listKey.equals(zapListKey) && listIndex >= 0 && listIndex < zapListSize
+                            && windowStart >= 0 && windowStart + index == listIndex) {
+                        intent.putExtra("channelList", new File(getContext().getCacheDir(), ZAP_LIST_NAME).getAbsolutePath());
+                        intent.putExtra("listKey", listKey);
+                        intent.putExtra("listIndex", listIndex);
+                        intent.putExtra("windowStart", windowStart);
+                    }
                 }
             }
             if (call.getData() != null) {
@@ -218,7 +258,18 @@ public class NativePlayerPlugin extends Plugin {
             call.reject("URL HTTP ou HTTPS requise");
             return;
         }
+        // Portail Stalker : le lecteur externe reçoit le lien de lecture demandé au portail.
+        if (Stalker.is(url)) {
+            Stalker.resolveAsync(getContext(), url, resolved -> {
+                if (resolved == null) call.reject("Le portail n'a pas donné de lien de lecture");
+                else launchExternal(call, resolved, title);
+            });
+            return;
+        }
+        launchExternal(call, url, title);
+    }
 
+    private void launchExternal(PluginCall call, String url, String title) {
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW);
             Uri uri = Uri.parse(url);
@@ -534,6 +585,7 @@ public class NativePlayerPlugin extends Plugin {
     @PluginMethod
     public void scheduleRecording(PluginCall call) {
         String url = call.getString("url");
+        String userAgent = PlayerOptions.cleanUserAgent(call.getString("userAgent", PlayerOptions.userAgent(getContext())));
         String title = call.getString("title", "Enregistrement");
         long startTimeMs = call.getLong("startTimeMs", 0L);
         long durationMs = call.getLong("durationMs", 0L);
@@ -556,13 +608,14 @@ public class NativePlayerPlugin extends Plugin {
             entry.put("title", title);
             entry.put("startTimeMs", startTimeMs);
             entry.put("durationMs", durationMs);
+            entry.put("userAgent", userAgent);
             ScheduleStore.add(getContext(), entry);
         } catch (Exception e) {
             call.reject("Impossible d'enregistrer la programmation");
             return;
         }
         try {
-            setAlarm(id, startTimeMs, url, title, durationMs);
+            ScheduledRecordReceiver.setAlarm(getContext(), id, startTimeMs, url, title, durationMs, userAgent);
         } catch (Exception e) {
             ScheduleStore.remove(getContext(), id);
             call.reject("Impossible de programmer l'alarme");
@@ -625,10 +678,6 @@ public class NativePlayerPlugin extends Plugin {
         try { cancelAlarm(id); } catch (Exception ignored) {}
         ScheduleStore.remove(getContext(), id);
         call.resolve();
-    }
-
-    private void setAlarm(String id, long startTimeMs, String url, String title, long durationMs) {
-        ScheduledRecordReceiver.setAlarm(getContext(), id, startTimeMs, url, title, durationMs);
     }
 
     private void cancelAlarm(String id) {
@@ -753,6 +802,11 @@ public class NativePlayerPlugin extends Plugin {
     private int[] probeOne(String raw) {
         if (!isHttpUrl(raw)) return new int[] { 0, 0 };
         String current = raw;
+        // Portail Stalker : on vérifie le lien que donne le portail (refus = chaîne en échec).
+        if (Stalker.is(raw)) {
+            try { current = Stalker.resolve(getContext(), raw); }
+            catch (java.io.IOException e) { return new int[] { 0, 0 }; }
+        }
         for (int hop = 0; hop < 5; hop++) {
             java.net.HttpURLConnection conn = null;
             try {
@@ -760,7 +814,7 @@ public class NativePlayerPlugin extends Plugin {
                 conn.setInstanceFollowRedirects(false);
                 conn.setConnectTimeout(6000);
                 conn.setReadTimeout(6000);
-                conn.setRequestProperty("User-Agent", "IPTVSmartersPro");
+                conn.setRequestProperty("User-Agent", PlayerOptions.userAgent(getContext()));
                 conn.setRequestProperty("Range", "bytes=0-4095");
                 int code = conn.getResponseCode();
                 if (code >= 300 && code < 400) {
@@ -870,6 +924,31 @@ public class NativePlayerPlugin extends Plugin {
     }
 
     // ── Raccourcis de l'icône (appui long) : chaînes favorites ────────
+
+    /** Réglages du lecteur choisis dans l'application (User-Agent de la liste ouverte, tampon, décodage, AFR). */
+    @PluginMethod
+    public void setPlayerOptions(PluginCall call) {
+        String buffer = call.getString("buffer", "normal");
+        String decoder = call.getString("decoder", "hardware");
+        if (!java.util.Arrays.asList("small", "normal", "large", "max").contains(buffer)) buffer = "normal";
+        if (!"software".equals(decoder)) decoder = "hardware";
+        PlayerOptions.save(getContext(), call.getString("userAgent", PlayerOptions.DEFAULT_USER_AGENT), buffer, decoder, Boolean.TRUE.equals(call.getBoolean("afr", false)));
+        call.resolve();
+    }
+
+    /** Android TV : rangée « CedPlay · Favoris » sur l'écran d'accueil. */
+    @PluginMethod
+    public void setHomeFavorites(PluginCall call) {
+        HomeScreen.publishFavorites(getContext(), call.getArray("items", new JSArray()));
+        call.resolve();
+    }
+
+    /** Android TV : dernière chaîne regardée dans « À suivre ». */
+    @PluginMethod
+    public void addWatchNext(PluginCall call) {
+        HomeScreen.addWatchNext(getContext(), call.getString("id"), call.getString("name"), call.getString("logo"));
+        call.resolve();
+    }
 
     /** Téléviseur ou box Android TV : mode d'interface TV ou fonction leanback/sans écran tactile. */
     @PluginMethod

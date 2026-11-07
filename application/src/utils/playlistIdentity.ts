@@ -32,5 +32,6 @@ export function reconcilePlaylist(previous: PlaylistInfo, incoming: PlaylistInfo
   };
   const channels = incoming.channels.map(reconcile);
   return { ...incoming, id: previous.id, name: previous.name, channels,
+    ...(previous.userAgent ? { userAgent: previous.userAgent } : {}),
     groups: incoming.groups.map(g => ({ ...g, channels: g.channels.map(c => remapped.get(c.id) || c) })) };
 }

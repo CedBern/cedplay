@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { getActiveUserAgent } from '@/utils/userAgent';
 import type { PlaylistInfo } from '@/types/channel';
 import type { EPGData } from '@/types/epg';
 import { getXtreamAccount } from '@/utils/xtreamCatalog';
@@ -47,7 +48,7 @@ async function downloadXmltv(rawUrl: string): Promise<string> {
   if (Capacitor.isNativePlatform()) {
     const response = await CapacitorHttp.get({
       url: rawUrl,
-      headers: { 'User-Agent': 'IPTVSmartersPro', 'Accept-Encoding': 'gzip' },
+      headers: { 'User-Agent': getActiveUserAgent(), 'Accept-Encoding': 'gzip' },
       responseType: 'arraybuffer',
       connectTimeout: 15000,
       readTimeout: MAX_FETCH_MS,

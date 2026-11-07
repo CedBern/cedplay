@@ -74,7 +74,12 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
           return;
         }
         // Parse hors du thread principal (worker, repli transparent).
-        const data = await parseEPGInWorker(sources.map(s => s.xml), playlist.channels, { overrides: config.channels, offsetHours: config.offsetHours });
+        // Fenêtre gardée en mémoire : 8 jours passés (replay) et 10 à venir (séries, rappels).
+        const now = Date.now();
+        const data = await parseEPGInWorker(sources.map(s => s.xml), playlist.channels, {
+          overrides: config.channels, offsetHours: config.offsetHours,
+          keepFromMs: now - 8 * 86_400_000, keepUntilMs: now + 10 * 86_400_000,
+        });
         if (cancelled) return;
         setState({ data, status, fetchedAt, sourceCount: sources.length });
         void saveParsedEPGCache(playlist.id, cacheUrl, fetchedAt, data);

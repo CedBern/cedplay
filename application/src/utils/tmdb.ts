@@ -63,24 +63,41 @@ export function tmdbPageUrl(kind: TmdbKind, id: number): string {
   return `https://www.themoviedb.org/${kind}/${id}`;
 }
 
+export class TmdbAuthenticationError extends Error {
+  constructor() {
+    super('Clé ou jeton TMDB refusé. Vérifie la valeur dans Réglages › Films et séries.');
+    this.name = 'TmdbAuthenticationError';
+  }
+}
+
 async function tmdbGet(path: string, apiKey: string, signal?: AbortSignal): Promise<unknown> {
+  const credential = apiKey.trim();
+  // TMDB accepte la clé v3 en paramètre et le jeton de lecture (JWT) en en-tête.
+  // Accepter aussi le préfixe « Bearer » s'il a été copié avec le jeton.
+  const isToken = /^Bearer\s+/i.test(credential) || credential.includes('.');
+  const headers: Record<string, string> = { 'User-Agent': 'LecteurIPTV/1.4' };
+  if (isToken) headers.Authorization = `Bearer ${credential.replace(/^Bearer\s+/i, '')}`;
+  const params = new URLSearchParams({ language: 'fr-FR' });
+  if (!isToken) params.set('api_key', credential);
   const separator = path.includes('?') ? '&' : '?';
-  const url = `${API}${path}${separator}api_key=${encodeURIComponent(apiKey)}&language=fr-FR`;
+  const url = `${API}${path}${separator}${params}`;
   if (Capacitor.isNativePlatform()) {
     const response = await CapacitorHttp.get({
       url,
-      headers: { 'User-Agent': 'LecteurIPTV/1.4' },
+      headers,
       responseType: 'json',
       connectTimeout: 10_000,
       readTimeout: MAX_FETCH_MS,
     });
+    if (response.status === 401) throw new TmdbAuthenticationError();
     if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
     return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAX_FETCH_MS);
   try {
-    const response = await fetch(url, { signal: signal ?? controller.signal });
+    const response = await fetch(url, { headers, signal: signal ?? controller.signal });
+    if (response.status === 401) throw new TmdbAuthenticationError();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.json();
   } finally {
