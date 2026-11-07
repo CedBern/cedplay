@@ -251,7 +251,9 @@ html:not(.dark) .border-white\/20 { border-color: hsl(40 12% 75%) !important; }
 html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .text-amber-400):not(.dark-surface, .dark-surface *) { color: hsl(32 80% 30%) !important; }
 
 /* ── Écrans télécommande (Direct TV, catalogue VOD) : catégories | liste/grille | aperçu/fiche ── */
-.tv-live, .tv-vod { grid-template-columns: minmax(180px, 22%) minmax(0, 1fr) minmax(240px, 30%); }
+.tv-live { grid-template-columns: minmax(180px, 22%) minmax(0, 1fr) minmax(240px, 30%); }
+/* Catalogue VOD : colonnes latérales réduites, la grille d'affiches (5 colonnes) gagne la place. */
+.tv-vod { grid-template-columns: minmax(170px, 19%) minmax(0, 1fr) minmax(220px, 25%); }
 .tv-live .tv-scroll, .tv-vod .tv-scroll { scrollbar-width: none; overscroll-behavior: contain; }
 .tv-live .tv-scroll::-webkit-scrollbar, .tv-vod .tv-scroll::-webkit-scrollbar { display: none; }
 .tv-live .tv-col, .tv-vod .tv-col { transition: border-color 200ms; }

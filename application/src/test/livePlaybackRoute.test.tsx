@@ -39,7 +39,7 @@ it('Lecture ouvre Android sans monter le lecteur web et bloque les doubles appui
   expect(screen.getByRole('status')).toHaveTextContent('Ouverture du lecteur');
   fireEvent.click(screen.getByRole('button', { name: 'Éclair test' }));
   await waitFor(() => expect(native.open).toHaveBeenCalledOnce());
-  expect(native.open).toHaveBeenCalledWith(channel.url, channel.name, expect.objectContaining({ index: 0, urls: [channel.url] }), expect.any(Function));
+  expect(native.open).toHaveBeenCalledWith(channel.url, channel.name, expect.objectContaining({ index: 0, urls: [channel.url] }), expect.any(Function), expect.any(Function));
   expect(screen.queryByText('Vidéo web de contrôle')).toBeNull();
   await act(async () => close({ channelUrl: channel.url }));
   expect(screen.queryByRole('status')).toBeNull();

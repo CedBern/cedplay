@@ -17,6 +17,11 @@ export function useRemoteNavigation() {
       lastFocused = target;
       // Un moteur TV peut encore viser un conteneur : rejoindre son action sans appui supplémentaire.
       if (!remote || !target.matches('[tabindex], [role="tabpanel"]')) return;
+      // Écrans qui gèrent eux-mêmes leurs flèches (Direct TV, catalogue) : ils posent le focus
+      // sur des boutons, jamais besoin de les rediriger. Sortir avant le scan, qui fait
+      // getBoundingClientRect + getComputedStyle sur tout élément focalisable du document
+      // à chaque déplacement — le coût dominant d'un appui prolongé.
+      if (target.closest('[data-remote-self]')) return;
       const targets = remoteTargets(scope());
       if (targets.includes(target)) return;
       const next = targets.find(el => target.contains(el) && el.matches('[data-channel-play]'))

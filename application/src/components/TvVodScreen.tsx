@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Bookmark, BookmarkCheck, ChevronDown, Info, Play, RefreshCw, Search } from 'lucide-react';
 import type { CatalogCategory, CatalogItem } from '@/utils/xtreamCatalog';
 
@@ -7,8 +7,9 @@ type CatItem =
   | { kind: 'action'; id: 'search' | 'watchlist' | 'refresh'; label: string }
   | { kind: 'category'; id: string; label: string };
 type Cell = { kind: 'poster'; item: CatalogItem } | { kind: 'more' };
+type InfoAction = { id: string; label: string; icon: React.ReactNode; run: () => void };
 
-const COLS = 6;
+const COLS = 5;
 const PAGE = 8;
 const PAGE_ROWS = 3;
 
@@ -57,11 +58,129 @@ export interface TvVodScreenProps {
   progressLabel: (id: string) => string;
 }
 
+/** Cellule d'affiche : mémoïsée, sans handler propre — focus et clic sont délégués au conteneur
+ * de la grille. Un déplacement ne re-rend ainsi que les deux cellules qui changent d'état. */
+const PosterCell = memo(function PosterCell({ item, index, selected, focusable, watchlisted, kind }: {
+  item: CatalogItem; index: number; selected: boolean; focusable: boolean; watchlisted: boolean; kind: 'movie' | 'series';
+}) {
+  return (
+    <button
+      type="button"
+      {...(index === 0 ? { 'data-remote-start': true } : {})}
+      data-tv-item
+      data-tv-row={index}
+      tabIndex={focusable ? 0 : -1}
+      className={`tv-row poster press text-left rounded-xl overflow-hidden bg-card border border-neutral-900 ${selected ? 'is-selected' : ''}`}
+    >
+      <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center">
+        {item.poster
+          ? <img src={item.poster} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+          : <span className="text-3xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}
+        {watchlisted && <div className="absolute top-1.5 right-1.5 bg-primary text-primary-foreground rounded-full p-1 z-10" title="Dans ma liste"><Bookmark className="h-3 w-3 fill-current" /></div>}
+      </div>
+      <div className="p-2"><p className="text-xs line-clamp-2">{item.name}</p>{item.rating && <p className="text-xs text-neutral-400">★ {item.rating}</p>}</div>
+    </button>
+  );
+});
+
+/** Cellule « Afficher davantage » : mémoïsée, clic délégué au conteneur. */
+const MoreCell = memo(function MoreCell({ index, focusable }: { index: number; focusable: boolean }) {
+  return (
+    <button
+      type="button"
+      data-tv-item
+      data-tv-row={index}
+      tabIndex={focusable ? 0 : -1}
+      className="tv-row flex aspect-[2/3] flex-col items-center justify-center gap-1.5 rounded-xl border border-neutral-900 bg-card text-center text-[13px] text-muted-foreground"
+    >
+      <ChevronDown className="h-6 w-6" aria-hidden="true" />
+      Afficher davantage
+    </button>
+  );
+});
+
+/** Bouton de catégorie/action : mémoïsé, focus et clic délégués au conteneur. */
+const CategoryButton = memo(function CategoryButton({ item, index, selected, watchlistActive, focused, watchlistCount }: {
+  item: CatItem; index: number; selected: boolean; watchlistActive: boolean; focused: boolean; watchlistCount: number;
+}) {
+  const icon = item.kind === 'action'
+    ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" />
+      : item.id === 'watchlist' ? (watchlistActive ? <BookmarkCheck className="h-4 w-4 text-primary" aria-hidden="true" /> : <Bookmark className="h-4 w-4" aria-hidden="true" />)
+      : <RefreshCw className="h-4 w-4" aria-hidden="true" />)
+    : null;
+  return (
+    <button
+      type="button"
+      aria-current={selected ? 'true' : undefined}
+      aria-pressed={item.kind === 'action' && item.id === 'watchlist' ? watchlistActive : undefined}
+      data-tv-item
+      data-tv-cat={index}
+      tabIndex={focused ? 0 : -1}
+      className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] ${selected || watchlistActive ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}
+    >
+      <span className="flex w-4 shrink-0 justify-center">{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      {item.kind === 'action' && item.id === 'watchlist' && <span className="shrink-0 font-mono text-xs tabular-nums opacity-70">{watchlistCount}</span>}
+    </button>
+  );
+});
+
+/** Fiche éclair : mémoïsée — un déplacement de catégories ne la re-rend plus. */
+const InfoPanel = memo(function InfoPanel({ highlighted, kind, hasCells, infoActions, infoIndex, focused, progressLabel, actionsRef, onFocusInfo, onRunInfo }: {
+  highlighted: CatalogItem | null;
+  kind: 'movie' | 'series';
+  hasCells: boolean;
+  infoActions: InfoAction[];
+  infoIndex: number;
+  focused: boolean;
+  progressLabel: (id: string) => string;
+  actionsRef: React.RefObject<HTMLDivElement>;
+  onFocusInfo: (index: number) => void;
+  onRunInfo: (index: number) => void;
+}) {
+  return (
+    <>
+      {highlighted ? <>
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="w-20 shrink-0 aspect-[2/3] overflow-hidden rounded-lg bg-neutral-900 flex items-center justify-center">
+            {highlighted.poster
+              ? <img src={highlighted.poster} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+              : <span className="text-2xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}
+          </div>
+          <div className="min-w-0">
+            <h3 className="line-clamp-3 text-lg font-semibold leading-6">{highlighted.name}</h3>
+            {highlighted.rating && <p className="mt-1 font-mono text-xs text-muted-foreground">★ {highlighted.rating}</p>}
+            <p className="mt-1 text-xs text-muted-foreground">{progressLabel(highlighted.id)}</p>
+          </div>
+        </div>
+        <div
+          ref={actionsRef}
+          className="mt-4 space-y-1.5"
+          onFocus={e => { const attr = (e.target as HTMLElement).getAttribute?.('data-tv-info'); if (attr != null) onFocusInfo(Number(attr)); }}
+          onClick={e => { const el = (e.target as HTMLElement).closest('[data-tv-info]'); if (el) onRunInfo(Number(el.getAttribute('data-tv-info'))); }}
+        >
+          {infoActions.map((action, index) => <button
+            key={action.id}
+            type="button"
+            data-tv-item
+            data-tv-info={index}
+            tabIndex={focused && index === infoIndex ? 0 : -1}
+            className={`tv-action flex min-h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] ${action.id === 'play' ? 'is-primary' : ''}`}
+          >{action.icon}<span className="truncate">{action.label}</span></button>)}
+        </div>
+      </> : <p className="mt-2 text-sm text-muted-foreground">{hasCells ? 'Choisis un titre.' : 'Aucun titre à afficher.'}</p>}
+      <p className="mt-auto border-t border-neutral-900 pt-2 text-[11px] text-muted-foreground">OK : fiche · ◀ ▶ : colonnes · Retour : catégories</p>
+    </>
+  );
+});
+
 /**
  * Écran catalogue (Films / Séries) pour la télécommande, sur le modèle de TvLiveScreen :
  * catégories | grille d'affiches | fiche éclair + actions.
  * Une seule cible focalisable par colonne (tabindex itinérant) ; les flèches sont gérées ici,
  * Haut depuis la première ligne rend la main à la navigation générale (rubriques).
+ * Cellules et colonnes sont mémoïsées (focus/clic délégués aux conteneurs) : un appui
+ * prolongé ne re-rend plus l'écran entier — c'est lui qui saccadait à la télécommande.
  * La dernière position (catégorie + affiche surlignée) est conservée dans le stockage local
  * pour retrouver la grille telle qu'elle était au retour.
  */
@@ -78,7 +197,7 @@ export function TvVodScreen({
   const redirecting = useRef(false);
   const [, setFocusTick] = useState(0);
   /** Demande de focus après le prochain rendu, même si l'état ne change pas. */
-  const requestFocus = () => { pendingFocus.current = true; setFocusTick(t => t + 1); };
+  const requestFocus = useCallback(() => { pendingFocus.current = true; setFocusTick(t => t + 1); }, []);
 
   const catItems = useMemo<CatItem[]>(() => {
     const list: CatItem[] = [];
@@ -131,7 +250,7 @@ export function TvVodScreen({
       setColumn('grid');
       requestFocus();
     }
-  }, [items]);
+  }, [items, requestFocus]);
   // Persistance : écrite seulement une fois des titres affichés (pas pendant les chargements).
   const readyRef = useRef(false);
   useEffect(() => { if (items.length) readyRef.current = true; }, [items]);
@@ -140,8 +259,8 @@ export function TvVodScreen({
     storeVodPosition(playlistId, kind, { category, itemId: highlighted?.id });
   }, [playlistId, kind, category, highlighted?.id]);
 
-  const infoActions = useMemo(() => {
-    if (!highlighted) return [] as { id: string; label: string; icon: React.ReactNode; run: () => void }[];
+  const infoActions = useMemo<InfoAction[]>(() => {
+    if (!highlighted) return [];
     const fav = watchlistIds.has(highlighted.id);
     return [
       ...(onPlay && highlighted.extension ? [{ id: 'play', label: progressLabel(highlighted.id), icon: <Play className="h-5 w-5" aria-hidden="true" />, run: () => onPlay(highlighted) }] : []),
@@ -299,14 +418,49 @@ export function TvVodScreen({
       setColumn(wanted);
     }
   };
-  // Le focus réel peut changer à la souris : garder la colonne cohérente.
-  const syncColumn = (col: Column, index: number) => {
+
+  // Focus et clic : délégués aux conteneurs (les cellules mémoïsées n'ont pas de handler).
+  const syncColumn = useCallback((col: Column, index: number) => {
     if (redirecting.current) return;
     setColumn(col);
     if (col === 'cat') setCatIndex(index);
     else if (col === 'grid') setRow(index);
     else setInfoIndex(index);
-  };
+  }, []);
+  const onFocusInfo = useCallback((index: number) => syncColumn('info', index), [syncColumn]);
+  const onRunInfo = useCallback((index: number) => { infoActions[index]?.run(); }, [infoActions]);
+  const onGridFocus = useCallback((e: React.FocusEvent) => {
+    const attr = (e.target as HTMLElement).getAttribute?.('data-tv-row');
+    if (attr != null) syncColumn('grid', Number(attr));
+  }, [syncColumn]);
+  const onGridClick = useCallback((e: React.MouseEvent) => {
+    const el = (e.target as HTMLElement).closest('[data-tv-row]');
+    if (!el) return;
+    const cell = cells[Number(el.getAttribute('data-tv-row'))];
+    if (!cell) return;
+    if (cell.kind === 'more') onLoadMore();
+    else onOpen(cell.item);
+  }, [cells, onLoadMore, onOpen]);
+  const onCatFocus = useCallback((e: React.FocusEvent) => {
+    const attr = (e.target as HTMLElement).getAttribute?.('data-tv-cat');
+    if (attr != null) syncColumn('cat', Number(attr));
+  }, [syncColumn]);
+  const onCatClick = useCallback((e: React.MouseEvent) => {
+    const el = (e.target as HTMLElement).closest('[data-tv-cat]');
+    if (!el) return;
+    const index = Number(el.getAttribute('data-tv-cat'));
+    const item = catItems[index];
+    if (!item) return;
+    if (item.kind === 'action') {
+      if (item.id === 'search') onSearch?.();
+      else if (item.id === 'watchlist') onToggleWatchlistOnly();
+      else onRefresh();
+      return;
+    }
+    setCatIndex(index);
+    if (item.id !== category) { movedRef.current = true; onSelectCategory(item.id); setRow(0); }
+    requestFocus(); setColumn('grid');
+  }, [catItems, category, onSearch, onToggleWatchlistOnly, onRefresh, onSelectCategory, requestFocus]);
 
   return (
     <div
@@ -321,44 +475,20 @@ export function TvVodScreen({
     >
       {/* Catégories et actions */}
       <nav aria-label="Catégories" data-tv-col="cat" className={`tv-col flex min-h-0 flex-col rounded-2xl border border-neutral-900 bg-neutral-950 ${column === 'cat' ? 'is-active' : ''}`}>
-        <div ref={catRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto p-2">
-          {catItems.map((item, index) => {
-            const selected = item.kind === 'category' && item.id === category;
-            const watchlistActive = item.kind === 'action' && item.id === 'watchlist' && showWatchlistOnly;
-            const icon = item.kind === 'action'
-              ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" />
-                : item.id === 'watchlist' ? (showWatchlistOnly ? <BookmarkCheck className="h-4 w-4 text-primary" aria-hidden="true" /> : <Bookmark className="h-4 w-4" aria-hidden="true" />)
-                : <RefreshCw className="h-4 w-4" aria-hidden="true" />)
-              : null;
-            return <React.Fragment key={`${item.kind}:${item.id}`}>
+        <div ref={catRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto p-2" onFocus={onCatFocus} onClick={onCatClick}>
+          {catItems.map((item, index) => (
+            <React.Fragment key={`${item.kind}:${item.id}`}>
               {item.kind === 'category' && index > 0 && catItems[index - 1]?.kind === 'action' && <div className="mx-2 my-1.5 border-t border-neutral-900" aria-hidden="true" />}
-              <button
-                type="button"
-                aria-current={selected ? 'true' : undefined}
-                aria-pressed={item.kind === 'action' && item.id === 'watchlist' ? showWatchlistOnly : undefined}
-                data-tv-item
-                data-tv-cat={index}
-                tabIndex={column === 'cat' && index === catIndex ? 0 : -1}
-                onFocus={() => syncColumn('cat', index)}
-                onClick={() => {
-                  if (item.kind === 'action') {
-                    if (item.id === 'search') onSearch?.();
-                    else if (item.id === 'watchlist') onToggleWatchlistOnly();
-                    else onRefresh();
-                    return;
-                  }
-                  setCatIndex(index);
-                  if (item.id !== category) { movedRef.current = true; onSelectCategory(item.id); setRow(0); }
-                  requestFocus(); setColumn('grid');
-                }}
-                className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] ${selected || watchlistActive ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}
-              >
-                <span className="flex w-4 shrink-0 justify-center">{icon}</span>
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                {item.kind === 'action' && item.id === 'watchlist' && <span className="shrink-0 font-mono text-xs tabular-nums opacity-70">{watchlistCount}</span>}
-              </button>
-            </React.Fragment>;
-          })}
+              <CategoryButton
+                item={item}
+                index={index}
+                selected={item.kind === 'category' && item.id === category}
+                watchlistActive={item.kind === 'action' && item.id === 'watchlist' && showWatchlistOnly}
+                focused={column === 'cat' && index === catIndex}
+                watchlistCount={watchlistCount}
+              />
+            </React.Fragment>
+          ))}
         </div>
       </nav>
 
@@ -368,45 +498,23 @@ export function TvVodScreen({
           <h2 className="truncate text-[15px] font-semibold">{listTitle}</h2>
           <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground" role="status">{items.length ? `${Math.min(row + 1, items.length)} / ${items.length}` : '0'}</span>
         </header>
-        <div ref={gridRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        <div ref={gridRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-3" onFocus={onGridFocus} onClick={onGridClick}>
           {loading ? <p className="px-3 py-6 text-sm text-muted-foreground" role="status">Chargement du catalogue…</p>
             : error ? <div className="space-y-2 px-3 py-6 text-amber-300" role="alert"><p>{error}</p><button type="button" onClick={onRetry} className="tv-action flex min-h-10 items-center gap-2 rounded-xl px-3 text-[15px]">Réessayer</button></div>
             : cells.length === 0 ? <p className="px-3 py-6 text-sm text-muted-foreground">{showWatchlistOnly ? 'Ma Liste est vide ici : ajoute des titres depuis leur fiche.' : 'Aucun titre dans cette sélection.'}</p>
-            : <div className="grid grid-cols-6 gap-3">
+            : <div className="grid grid-cols-5 gap-3">
               {cells.map((cell, index) => cell.kind === 'more' ? (
-                <button
-                  key="more"
-                  type="button"
-                  data-tv-item
-                  data-tv-row={index}
-                  tabIndex={column === 'grid' && index === row ? 0 : -1}
-                  onFocus={() => syncColumn('grid', index)}
-                  onClick={onLoadMore}
-                  className="tv-row flex aspect-[2/3] flex-col items-center justify-center gap-1.5 rounded-xl border border-neutral-900 bg-card text-center text-[13px] text-muted-foreground"
-                >
-                  <ChevronDown className="h-6 w-6" aria-hidden="true" />
-                  Afficher davantage
-                </button>
+                <MoreCell key="more" index={index} focusable={column === 'grid' && index === row} />
               ) : (
-                <button
+                <PosterCell
                   key={cell.item.id}
-                  type="button"
-                  {...(index === 0 ? { 'data-remote-start': true } : {})}
-                  data-tv-item
-                  data-tv-row={index}
-                  tabIndex={column === 'grid' && index === row ? 0 : -1}
-                  onFocus={() => syncColumn('grid', index)}
-                  onClick={() => onOpen(cell.item)}
-                  className={`tv-row poster press text-left rounded-xl overflow-hidden bg-card border border-neutral-900 ${index === row ? 'is-selected' : ''}`}
-                >
-                  <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center">
-                    {cell.item.poster
-                      ? <img src={cell.item.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
-                      : <span className="text-3xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}
-                    {watchlistIds.has(cell.item.id) && <div className="absolute top-1.5 right-1.5 bg-primary text-primary-foreground rounded-full p-1 z-10" title="Dans ma liste"><Bookmark className="h-3 w-3 fill-current" /></div>}
-                  </div>
-                  <div className="p-2"><p className="text-xs line-clamp-2">{cell.item.name}</p>{cell.item.rating && <p className="text-xs text-neutral-400">★ {cell.item.rating}</p>}</div>
-                </button>
+                  item={cell.item}
+                  index={index}
+                  selected={index === row}
+                  focusable={column === 'grid' && index === row}
+                  watchlisted={watchlistIds.has(cell.item.id)}
+                  kind={kind}
+                />
               ))}
             </div>}
         </div>
@@ -414,33 +522,18 @@ export function TvVodScreen({
 
       {/* Fiche éclair + actions */}
       <aside aria-label="Titre sélectionné" data-tv-col="info" className={`tv-col flex min-h-0 flex-col rounded-2xl border border-neutral-900 bg-neutral-950 p-4 ${column === 'info' ? 'is-active' : ''}`}>
-        {highlighted ? <>
-          <div className="flex min-w-0 items-start gap-3">
-            <div className="w-20 shrink-0 aspect-[2/3] overflow-hidden rounded-lg bg-neutral-900 flex items-center justify-center">
-              {highlighted.poster
-                ? <img src={highlighted.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
-                : <span className="text-2xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}
-            </div>
-            <div className="min-w-0">
-              <h3 className="line-clamp-3 text-lg font-semibold leading-6">{highlighted.name}</h3>
-              {highlighted.rating && <p className="mt-1 font-mono text-xs text-muted-foreground">★ {highlighted.rating}</p>}
-              <p className="mt-1 text-xs text-muted-foreground">{progressLabel(highlighted.id)}</p>
-            </div>
-          </div>
-          <div ref={infoRef} className="mt-4 space-y-1.5">
-            {infoActions.map((action, index) => <button
-              key={action.id}
-              type="button"
-              data-tv-item
-              data-tv-info={index}
-              tabIndex={column === 'info' && index === infoIndex ? 0 : -1}
-              onFocus={() => syncColumn('info', index)}
-              onClick={action.run}
-              className={`tv-action flex min-h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-[15px] ${action.id === 'play' ? 'is-primary' : ''}`}
-            >{action.icon}<span className="truncate">{action.label}</span></button>)}
-          </div>
-        </> : <p className="mt-2 text-sm text-muted-foreground">{cells.length ? 'Choisis un titre.' : 'Aucun titre à afficher.'}</p>}
-        <p className="mt-auto border-t border-neutral-900 pt-2 text-[11px] text-muted-foreground">OK : fiche · ◀ ▶ : colonnes · Retour : catégories</p>
+        <InfoPanel
+          highlighted={highlighted}
+          kind={kind}
+          hasCells={cells.length > 0}
+          infoActions={infoActions}
+          infoIndex={infoIndex}
+          focused={column === 'info'}
+          progressLabel={progressLabel}
+          actionsRef={infoRef}
+          onFocusInfo={onFocusInfo}
+          onRunInfo={onRunInfo}
+        />
       </aside>
     </div>
   );

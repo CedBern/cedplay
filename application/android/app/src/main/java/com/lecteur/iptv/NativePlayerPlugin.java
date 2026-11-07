@@ -75,8 +75,10 @@ public class NativePlayerPlugin extends Plugin {
                     // Groupes et programmes (facultatifs) : alimentent le bandeau et le panneau des chaînes.
                     JSArray groups = call.getArray("channelGroups", null);
                     JSArray epg = call.getArray("channelEpg", null);
+                    JSArray numbers = call.getArray("channelNumbers", null);
                     if (groups != null && groups.length() != urlList.size()) groups = null;
                     if (epg != null && epg.length() != urlList.size()) epg = null;
+                    if (numbers != null && numbers.length() != urlList.size()) numbers = null;
                     channelFile = File.createTempFile("zap-", ".json", getContext().getCacheDir());
                     try (JsonWriter writer = new JsonWriter(new OutputStreamWriter(new FileOutputStream(channelFile), StandardCharsets.UTF_8))) {
                         writer.beginArray();
@@ -93,12 +95,14 @@ public class NativePlayerPlugin extends Plugin {
                                 }
                             }
                             writer.endArray();
+                            writer.value(numbers != null ? numbers.optString(i, "") : "");
                             writer.endArray();
                         }
                         writer.endArray();
                     }
                     intent.putExtra("channelFile", channelFile.getAbsolutePath());
                     intent.putExtra("channelIndex", index);
+                    intent.putExtra("channelTotal", Math.max(urlList.size(), call.getInt("channelTotal", urlList.size())));
                 }
             }
             if (call.getData() != null) {
@@ -106,6 +110,7 @@ public class NativePlayerPlugin extends Plugin {
                 call.getData().remove("channelTitles");
                 call.getData().remove("channelGroups");
                 call.getData().remove("channelEpg");
+                call.getData().remove("channelNumbers");
             }
             launchPlayer(call, intent);
         } catch (Exception e) {
@@ -700,6 +705,7 @@ public class NativePlayerPlugin extends Plugin {
         } else if (data != null && data.hasExtra("channelUrl")) {
             JSObject value = new JSObject();
             value.put("channelUrl", data.getStringExtra("channelUrl"));
+            if (data.hasExtra("jumpNumber")) value.put("jumpNumber", data.getStringExtra("jumpNumber"));
             putStats(value, data);
             call.resolve(value);
         } else call.resolve();

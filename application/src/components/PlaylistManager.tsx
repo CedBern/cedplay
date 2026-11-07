@@ -8,6 +8,7 @@ import { Trash2, PlayCircle, Pencil, RefreshCw } from 'lucide-react';
 import { deletePlaylistFromDB, savePlaylistToDB } from '@/utils/idb';
 import { StorageManager } from '@/utils/storage';
 import { toast } from 'sonner';
+import { canRefreshPlaylist } from '@/utils/xtreamLive';
 
 interface PlaylistManagerProps {
   playlists: PlaylistInfo[];
@@ -87,8 +88,8 @@ export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onS
               <Button size="icon" variant="ghost" className="h-9 w-9 text-primary" onClick={() => onSelect(pl)} title="Ouvrir la liste" aria-label={`Ouvrir ${pl.name}`}>
                 <PlayCircle className="h-4 w-4" />
               </Button>
-              {pl.url && onRefresh && (
-                <Button size="icon" variant="ghost" className="h-9 w-9 text-emerald-400 hover:text-emerald-300" onClick={() => onRefresh(pl)} title="Mettre à jour la liste depuis son adresse" aria-label={`Mettre à jour ${pl.name}`}>
+              {canRefreshPlaylist(pl) && onRefresh && (
+                <Button size="icon" variant="ghost" className="h-9 w-9 text-emerald-400 hover:text-emerald-300" onClick={() => onRefresh(pl)} title={pl.url ? 'Mettre à jour la liste depuis son adresse' : 'Mettre à jour la liste depuis le compte Xtream'} aria-label={`Mettre à jour ${pl.name}`}>
                   <RefreshCw className="h-4 w-4" />
                 </Button>
               )}

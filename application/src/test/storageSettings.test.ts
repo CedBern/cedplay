@@ -52,7 +52,7 @@ describe('StorageManager settings validation & migration', () => {
     // Migration should have attempted to persist repaired version
     expect(saveSettingsToDBMock).toHaveBeenCalledTimes(1);
     expect((stored as AppSettings).volume).toBe(1);
-  expect(loaded.__version).toBe(9);
+  expect(loaded.__version).toBe(10);
     expect(loaded.proxyUrl).toBe('');
   expect(loaded.tmdbApiKey).toBe(''); // défaut appliqué par la migration v4 -> v5
   expect(loaded.subtitlesEnabled).toBe(true);
@@ -109,7 +109,7 @@ describe('StorageManager settings validation & migration', () => {
     saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
 
     const result = await StorageManager.loadSettingsAsync();
-    expect(result.__version).toBe(9);
+    expect(result.__version).toBe(10);
     expect(result.telemetryPersistence).toBe(true); // default applied during migration
     expect(saveSettingsToDBMock).toHaveBeenCalled();
   });
@@ -132,7 +132,27 @@ describe('StorageManager settings validation & migration', () => {
 
     const loaded = await StorageManager.loadSettingsAsync();
     expect(loaded.tvPreviewMode).toBe('off');
-    expect(loaded.__version).toBe(9);
+    expect(loaded.__version).toBe(10);
+  });
+
+  it('adds last-channel start (off) and 24 h playlist refresh during v9 -> v10', async () => {
+    const { startOnLastChannel: _a, playlistRefreshHours: _b, ...v9 } = StorageManager.defaultSettings();
+    getSettingsFromDBMock.mockResolvedValueOnce({ ...v9, __version: 9 });
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+
+    const loaded = await StorageManager.loadSettingsAsync();
+    expect(loaded.startOnLastChannel).toBe(false);
+    expect(loaded.playlistRefreshHours).toBe(24);
+    expect(loaded.__version).toBe(10);
+  });
+
+  it('keeps a chosen playlist refresh interval and rejects invalid ones', async () => {
+    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+    expect((await StorageManager.saveSettings({ playlistRefreshHours: 0, startOnLastChannel: true })).playlistRefreshHours).toBe(0);
+    StorageManager.__resetCacheForTests();
+    getSettingsFromDBMock.mockResolvedValue({ ...StorageManager.defaultSettings(), playlistRefreshHours: -5 });
+    expect((await StorageManager.loadSettingsAsync()).playlistRefreshHours).toBe(24);
   });
 
   it('defaults tvPreviewMode to auto when nothing was persisted', async () => {

@@ -31,7 +31,9 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.content.Context;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.media.AudioManager;
+import android.view.Choreographer;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.widget.HorizontalScrollView;
@@ -86,6 +88,7 @@ import com.google.android.gms.cast.framework.media.RemoteMediaClient;
 import java.util.ArrayList;
 import android.app.PictureInPictureParams;
 import android.util.Rational;
+import android.util.SparseArray;
 import android.view.KeyEvent;
 import android.widget.BaseAdapter;
 import android.widget.ListView;
@@ -130,6 +133,16 @@ public class NativePlayerActivity extends AppCompatActivity {
     /** Groupe et programmes à venir ([début, fin, titre]) de chaque chaîne du contexte de zapping. */
     private ArrayList<String> channelGroups;
     private ArrayList<JSONArray> channelPrograms;
+    /** Numéro affiché de chaque chaîne du contexte (tvg-chno, sinon position dans la liste complète). */
+    private ArrayList<String> channelNumbers;
+    /** Taille de la liste complète côté page : au-delà du contexte, la page relance sur le numéro saisi. */
+    private int channelTotal = 0;
+    /** Saisie du numéro de chaîne aux touches 0-9 de la télécommande. */
+    private final StringBuilder numberBuffer = new StringBuilder();
+    private final Handler numberHandler = new Handler(Looper.getMainLooper());
+    private TextView numberOverlay;
+    /** Numéro demandé hors du contexte chargé : rendu à la page à la fermeture. */
+    private String jumpNumber;
     private LinearLayout infoBar;
     private LinearLayout infoTimeRow;
     private TextView infoChannel, infoNow, infoTimes, infoNext;
@@ -143,6 +156,21 @@ public class NativePlayerActivity extends AppCompatActivity {
     private String panelGroup = null;
     private boolean pipActive = false;
     private final SimpleDateFormat hourFormat = new SimpleDateFormat("HH:mm", Locale.FRANCE);
+    /** Bouton recevant la sélection télécommande à l'ouverture des commandes (aucun effet de bord sur la lecture). */
+    private Button btnAudio;
+    /** Ligne de programme en cours par chaîne : le panneau relit chaque ligne à chaque défilement,
+     *  le cache évite de refaire le scan EPG et un format d'heure à chaque bind. */
+    private final SparseArray<ProgramLine> programLineCache = new SparseArray<>();
+    // ── Mesure de fluidité du panneau des chaînes (protocole box : appui prolongé Haut/Bas) ──
+    private int panelFrameCount, panelJank32, panelJank50;
+    private long panelWorstFrameMs, panelLastFrameNanos;
+
+    /** Programme en cours d'une chaîne, avec sa fenêtre de validité temporelle. */
+    private static class ProgramLine {
+        long start, end;
+        String text;
+        boolean hasProgram;
+    }
 
     // Palette « Salle obscure ».
     private static final int C_BG = Color.parseColor("#0B0B0D");
@@ -272,24 +300,27 @@ public class NativePlayerActivity extends AppCompatActivity {
                 }
                 JSONArray entries = new JSONArray(json.toString());
                 channelUrls = new java.util.ArrayList<>(); channelTitles = new java.util.ArrayList<>();
-                channelGroups = new ArrayList<>(); channelPrograms = new ArrayList<>();
+                channelGroups = new ArrayList<>(); channelPrograms = new ArrayList<>(); channelNumbers = new ArrayList<>();
                 for (int i = 0; i < entries.length(); i++) {
                     JSONArray entry = entries.getJSONArray(i);
                     channelUrls.add(entry.getString(0)); channelTitles.add(entry.getString(1));
                     channelGroups.add(entry.length() > 2 ? entry.optString(2, "") : "");
                     JSONArray programs = entry.length() > 3 ? entry.optJSONArray(3) : null;
                     channelPrograms.add(programs != null ? programs : new JSONArray());
+                    channelNumbers.add(entry.length() > 4 ? entry.optString(4, "") : "");
                 }
+                channelTotal = Math.max(channelUrls.size(), getIntent().getIntExtra("channelTotal", channelUrls.size()));
                 if (channelIndex >= 0 && channelIndex < channelUrls.size()) {
                     streamUrl = channelUrls.get(channelIndex); streamTitle = channelTitles.get(channelIndex);
                 }
-            } catch (Exception ignored) { channelUrls = null; channelTitles = null; }
+            } catch (Exception ignored) { channelUrls = null; channelTitles = null; programLineCache.clear(); }
         }
         if (channelUrls == null || channelTitles == null
                 || channelUrls.size() != channelTitles.size()
                 || channelIndex < 0 || channelIndex >= channelUrls.size()) {
             channelUrls = null; channelTitles = null; channelIndex = -1;
-            channelGroups = null; channelPrograms = null;
+            channelGroups = null; channelPrograms = null; channelNumbers = null; channelTotal = 0;
+            programLineCache.clear();
         }
         if (savedInstanceState != null) previousIndex = savedInstanceState.getInt("previousIndex", -1);
         if (vod) setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
@@ -444,7 +475,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         btnBack.setContentDescription("Retour à la liste des chaînes");
         btnBack.setTextSize(18);
         btnBack.setTextColor(Color.WHITE);
-        btnBack.setBackgroundColor(Color.TRANSPARENT);
+        styleFocusable(btnBack, Color.TRANSPARENT, C_ACCENT, Color.WHITE);
         btnBack.setPadding(dp(4), 0, dp(12), 0);
         btnBack.setOnClickListener(v -> finish());
         sizeToolbarButton(btnBack, 44);
@@ -487,7 +518,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             btnPrev.setContentDescription(vod ? "Épisode précédent" : "Chaîne précédente");
             btnPrev.setTextSize(16);
             btnPrev.setTextColor(Color.WHITE);
-            btnPrev.setBackground(rounded(Color.parseColor("#26262D"), 24));
+            styleFocusable(btnPrev, C_TRACK, C_ACCENT, Color.WHITE);
             btnPrev.setPadding(dp(8), dp(2), dp(8), dp(2));
             btnPrev.setOnClickListener(v -> switchChannel(-1));
             sizeToolbarButton(btnPrev, 44);
@@ -498,7 +529,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             btnNext.setContentDescription(vod ? "Épisode suivant" : "Chaîne suivante");
             btnNext.setTextSize(16);
             btnNext.setTextColor(Color.WHITE);
-            btnNext.setBackground(rounded(Color.parseColor("#26262D"), 24));
+            styleFocusable(btnNext, C_TRACK, C_ACCENT, Color.WHITE);
             LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -512,13 +543,12 @@ public class NativePlayerActivity extends AppCompatActivity {
             actionsLayout.addView(btnNext);
 
             if (!vod) {
-                btnPrevious = toolbarButton("↺", "Revenir à la chaîne précédente", 44, C_TRACK);
+                btnPrevious = toolbarButton("↺", "Revenir à la chaîne précédente", 44, C_TRACK, C_ACCENT, C_TEXT);
                 btnPrevious.setOnClickListener(v -> { if (previousIndex >= 0) switchTo(previousIndex); });
                 actionsLayout.addView(btnPrevious);
                 updatePreviousButton();
 
-                Button btnChannels = toolbarButton("Chaînes", "Ouvrir la liste des chaînes", 76, C_ACCENT);
-                btnChannels.setTextColor(C_ACCENT_FG);
+                Button btnChannels = toolbarButton("Chaînes", "Ouvrir la liste des chaînes", 76, C_ACCENT, Color.WHITE, C_ACCENT_FG);
                 btnChannels.setTypeface(Typeface.DEFAULT_BOLD);
                 btnChannels.setOnClickListener(v -> openChannelPanel());
                 actionsLayout.addView(btnChannels);
@@ -526,17 +556,17 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
 
         if (pipSupported()) {
-            Button btnPip = toolbarButton("PiP", "Réduire en petite fenêtre (image dans l'image)", 48, C_TRACK);
+            Button btnPip = toolbarButton("PiP", "Réduire en petite fenêtre (image dans l'image)", 48, C_TRACK, C_ACCENT, C_TEXT);
             btnPip.setOnClickListener(v -> enterPip());
             actionsLayout.addView(btnPip);
         }
 
         // Audio track button (Multi-audio VF/VO)
-        Button btnAudio = new Button(this);
+        btnAudio = new Button(this);
         btnAudio.setText("Audio");
         btnAudio.setTextSize(11);
         btnAudio.setTextColor(Color.WHITE);
-        btnAudio.setBackground(rounded(Color.parseColor("#26262D"), 24));
+        styleFocusable(btnAudio, C_TRACK, C_ACCENT, Color.WHITE);
         btnAudio.setPadding(dp(8), dp(4), dp(8), dp(4));
         btnAudio.setContentDescription("Sélectionner la piste audio");
         btnAudio.setOnClickListener(v -> showAudioTrackDialog());
@@ -551,7 +581,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         btnSleep.setText("Veille");
         btnSleep.setTextSize(11);
         btnSleep.setTextColor(Color.WHITE);
-        btnSleep.setBackground(rounded(Color.parseColor("#26262D"), 24));
+        styleFocusable(btnSleep, C_TRACK, C_ACCENT, Color.WHITE);
         btnSleep.setPadding(dp(8), dp(4), dp(8), dp(4));
         btnSleep.setContentDescription("Minuteur de mise en veille");
         btnSleep.setOnClickListener(v -> showSleepTimerDialog());
@@ -566,7 +596,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         btnRatio.setText("Format");
         btnRatio.setTextSize(11);
         btnRatio.setTextColor(Color.WHITE);
-        btnRatio.setBackground(rounded(Color.parseColor("#26262D"), 24));
+        styleFocusable(btnRatio, C_TRACK, C_ACCENT, Color.WHITE);
         btnRatio.setPadding(dp(8), dp(4), dp(8), dp(4));
         btnRatio.setContentDescription("Changer le format d'image");
         btnRatio.setOnClickListener(v -> toggleAspectRatio());
@@ -578,7 +608,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         btnRotate.setText("⛶");
         btnRotate.setTextSize(13);
         btnRotate.setTextColor(Color.WHITE);
-        btnRotate.setBackground(rounded(Color.parseColor("#26262D"), 24));
+        styleFocusable(btnRotate, C_TRACK, C_ACCENT, Color.WHITE);
         btnRotate.setContentDescription("Basculer entre plein écran paysage et portrait");
         btnRotate.setOnClickListener(v -> toggleOrientation());
         sizeToolbarButton(btnRotate, 44);
@@ -592,7 +622,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         btnVlc.setText("VLC");
         btnVlc.setTextSize(11);
         btnVlc.setTextColor(Color.WHITE);
-        btnVlc.setBackground(rounded(Color.parseColor("#26262D"), 24));
+        styleFocusable(btnVlc, C_TRACK, C_ACCENT, Color.WHITE);
         LinearLayout.LayoutParams vlcParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -611,7 +641,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             btnRec.setText(recording ? "■" : "REC");
             btnRec.setTextSize(11);
             btnRec.setTextColor(Color.WHITE);
-            btnRec.setBackground(rounded(Color.parseColor(recording ? "#FF5A4A" : "#26262D"), 24));
+            styleFocusable(btnRec, recording ? C_LIVE : C_TRACK, C_ACCENT, Color.WHITE);
             btnRec.setPadding(dp(8), dp(4), dp(8), dp(4));
             btnRec.setContentDescription("Enregistrer le direct (DVR)");
             btnRec.setOnClickListener(v -> toggleRecording());
@@ -766,7 +796,9 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (vod) {
             playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
                 topBar.setVisibility(visibility);
-                if (visibility != View.VISIBLE) hideSystemUI();
+                // Sélection télécommande posée à l'affichage, comme pour le direct.
+                if (visibility == View.VISIBLE) { if (btnAudio != null) btnAudio.requestFocus(); }
+                else hideSystemUI();
             });
         }
 
@@ -799,6 +831,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (!vod) {
             buildInfoBar(root);
             if (channelUrls != null) buildChannelPanel(root);
+            if (channelUrls != null) buildNumberOverlay(root);
         }
         setContentView(root);
         updateInfoBar();
@@ -940,6 +973,9 @@ public class NativePlayerActivity extends AppCompatActivity {
             infoBar.animate().alpha(1.0f).setDuration(200).start();
         }
         scheduleHideControls();
+        // La télécommande a une sélection visible dès l'ouverture : bouton sans effet de bord
+        // sur la lecture ; les flèches atteignent ensuite toutes les options de la barre.
+        if (btnAudio != null) btnAudio.requestFocus();
     }
 
     private void hideControls() {
@@ -959,8 +995,17 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (vod) return;
         hideHandler.removeCallbacksAndMessages(null);
         // Le bandeau du programme reste un peu plus longtemps : il se lit.
-        hideHandler.postDelayed(this::hideControls, 5000);
+        hideHandler.postDelayed(hideControlsRunnable, 5000);
     }
+
+    /** Masquage différé : tant que la télécommande sélectionne un bouton de la barre, les
+     *  commandes restent affichées (reprogrammation au lieu d'un masquage en pleine navigation). */
+    private final Runnable hideControlsRunnable = new Runnable() {
+        @Override public void run() {
+            if (topBar != null && topBar.findFocus() != null) { hideHandler.postDelayed(this, 5000); return; }
+            hideControls();
+        }
+    };
 
     private void sizeToolbarButton(Button button, int widthDp) {
         button.setMinimumWidth(0);
@@ -979,13 +1024,34 @@ public class NativePlayerActivity extends AppCompatActivity {
         return d;
     }
 
-    private Button toolbarButton(String label, String description, int widthDp, int color) {
+    /** Fond à états (sélection télécommande, appui) + texte inversé tant que le bouton a le
+     *  focus. Des fonds statiques ne montraient jamais le bouton sélectionné : la barre
+     *  s'affichait mais restait inutilisable à la télécommande. */
+    private void styleFocusable(Button button, int baseColor, int focusBg, int normalText) {
+        GradientDrawable focused = rounded(focusBg, 24);
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[] { android.R.attr.state_focused }, focused);
+        states.addState(new int[] { android.R.attr.state_pressed }, focused);
+        states.addState(new int[] {}, rounded(baseColor, 24));
+        button.setBackground(states);
+        button.setOnFocusChangeListener((v, hasFocus) -> {
+            button.setTextColor(hasFocus ? C_BG : normalText);
+            // VOD : le contrôleur Media3 s'efface après 3,5 s — pas pendant la navigation.
+            if (vod && playerView != null) playerView.setControllerShowTimeoutMs(hasFocus ? 0 : 3500);
+        });
+        // Réapplique l'état courant : REC restylé alors qu'il a le focus (lancement au OK)
+        // capturait sinon la couleur inversée sombre comme « normale » — texte sombre sur
+        // fond sombre dès que la sélection repart. Couleur normale explicite, jamais lue.
+        button.setTextColor(button.isFocused() ? C_BG : normalText);
+    }
+
+    private Button toolbarButton(String label, String description, int widthDp, int color, int focusBg, int normalText) {
         Button b = new Button(this);
         b.setText(label);
         b.setTextSize(label.length() > 2 ? 12 : 16);
-        b.setTextColor(C_TEXT);
-        b.setBackground(rounded(color, 24));
+        b.setTextColor(normalText);
         b.setContentDescription(description);
+        styleFocusable(b, color, focusBg, normalText);
         sizeToolbarButton(b, widthDp);
         ((LinearLayout.LayoutParams) b.getLayoutParams()).setMargins(dp(6), 0, 0, 0);
         return b;
@@ -1090,11 +1156,37 @@ public class NativePlayerActivity extends AppCompatActivity {
         return hourFormat.format(new Date(ms));
     }
 
+    /** Ligne de programme courante (cache par chaîne, validité temporelle) : le panneau
+     *  relit chaque ligne à chaque défilement — sans cache, chaque bind refaisait le
+     *  scan EPG complet et un format d'heure. */
+    private ProgramLine programLineOf(int channel, long now) {
+        ProgramLine line = programLineCache.get(channel);
+        if (line != null && now >= line.start && now < line.end) return line;
+        line = new ProgramLine();
+        int index = currentProgramIndex(channel, now);
+        JSONArray prog = index >= 0 ? programAt(channel, index) : null;
+        if (prog != null) {
+            line.start = prog.optLong(0);
+            line.end = prog.optLong(1);
+            line.hasProgram = true;
+            line.text = hour(line.start) + "  " + prog.optString(2, "");
+        } else {
+            line.start = 0;
+            JSONArray next = nextProgram(channel, now);
+            line.end = next != null ? next.optLong(0) : Long.MAX_VALUE;
+            line.hasProgram = false;
+            line.text = channelGroups != null && channel >= 0 && channel < channelGroups.size() ? channelGroups.get(channel) : "";
+        }
+        programLineCache.put(channel, line);
+        return line;
+    }
+
     private void updateInfoBar() {
         if (infoBar == null) return;
         long now = System.currentTimeMillis();
         String group = channelGroups != null && channelIndex >= 0 && channelIndex < channelGroups.size() ? channelGroups.get(channelIndex) : "";
-        String head = "●  DIRECT  ·  " + streamTitle + (group.isEmpty() ? "" : "  ·  " + group);
+        String number = numberAt(channelIndex);
+        String head = "●  DIRECT  ·  " + (number.isEmpty() ? "" : number + "  ") + streamTitle + (group.isEmpty() ? "" : "  ·  " + group);
         SpannableString label = new SpannableString(head);
         label.setSpan(new ForegroundColorSpan(C_LIVE), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         infoChannel.setText(label);
@@ -1160,7 +1252,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         close.setContentDescription("Fermer la liste des chaînes");
         close.setOnClickListener(v -> closeChannelPanel());
         sizeToolbarButton(close, 44);
-        close.setBackground(rounded(C_CARD, 22));
+        close.setTextColor(C_MUTED);
+        styleFocusable(close, C_CARD, C_ACCENT, C_MUTED);
         header.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
         channelSheet.addView(header);
 
@@ -1183,6 +1276,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         channelListView.setDivider(null);
         channelListView.setSelector(new android.graphics.drawable.ColorDrawable(C_TRACK));
         channelListView.setVerticalScrollBarEnabled(false);
+        // Lignes sans image : le cache de défilement (bitmaps mémoire) ne sert à rien.
+        channelListView.setScrollingCacheEnabled(false);
         channelAdapter = new ChannelPanelAdapter();
         channelListView.setAdapter(channelAdapter);
         channelListView.setOnItemClickListener((parent, view, position, id) -> {
@@ -1222,8 +1317,16 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void styleChip(Button chip, boolean active) {
         GradientDrawable bg = rounded(active ? C_TEXT : Color.TRANSPARENT, 18);
         if (!active) bg.setStroke(dp(1), Color.parseColor("#26F3F1ED"));
-        chip.setBackground(bg);
-        chip.setTextColor(active ? C_BG : Color.parseColor("#C9C5BE"));
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[] { android.R.attr.state_focused }, rounded(C_ACCENT, 18));
+        states.addState(new int[] { android.R.attr.state_pressed }, rounded(C_ACCENT, 18));
+        states.addState(new int[] {}, bg);
+        chip.setBackground(states);
+        final int normalText = active ? C_BG : Color.parseColor("#C9C5BE");
+        // Chip resstylé pendant qu'il a le focus (sélection au OK → refreshGroupChips) :
+        // garder l'inversion sombre tant que le fond ambré de sélection est affiché.
+        chip.setTextColor(chip.isFocused() ? C_BG : normalText);
+        chip.setOnFocusChangeListener((v, hasFocus) -> chip.setTextColor(hasFocus ? C_BG : normalText));
     }
 
     private void refreshGroupChips() {
@@ -1254,13 +1357,51 @@ public class NativePlayerActivity extends AppCompatActivity {
         int position = channelAdapter.positionOf(channelIndex);
         channelListView.setSelection(Math.max(0, position - 2));
         channelListView.requestFocus();
+        startPanelFrameSampling();
     }
 
     private void closeChannelPanel() {
         if (!isChannelPanelOpen()) return;
+        stopPanelFrameSampling();
         channelSheet.animate().translationX(-channelSheet.getWidth()).setDuration(150)
             .withEndAction(() -> { channelPanel.setVisibility(View.GONE); hideSystemUI(); }).start();
     }
+
+    // ── Mesure de fluidité du panneau (protocole box : appui prolongé Haut/Bas) ──
+    // Delta de chaque frame tant que le panneau est ouvert ; le bilan est loggué à la
+    // fermeture. Uniquement des compteurs : aucune URL ni donnée du compte.
+    private void startPanelFrameSampling() {
+        // Un second postFrameCallback par-dessus un sampler déjà actif doublerait chaque
+        // frame (comptes et relances) : retirer d'abord, toujours.
+        Choreographer.getInstance().removeFrameCallback(panelFrameCallback);
+        panelFrameCount = 0; panelJank32 = 0; panelJank50 = 0; panelWorstFrameMs = 0; panelLastFrameNanos = 0;
+        Choreographer.getInstance().postFrameCallback(panelFrameCallback);
+    }
+
+    private void stopPanelFrameSampling() {
+        Choreographer.getInstance().removeFrameCallback(panelFrameCallback);
+        if (panelFrameCount > 0) {
+            android.util.Log.i("IPTV-Playback", "panel_scroll frames=" + panelFrameCount + " jank32=" + panelJank32
+                + " jank50=" + panelJank50 + " worst_ms=" + panelWorstFrameMs);
+            // Compteurs consommés : sans remise à zéro, un second arrêt (onPause/onDestroy
+            // après une fermeture normale du panneau) reloggerait un bilan périmé.
+            panelFrameCount = 0; panelJank32 = 0; panelJank50 = 0; panelWorstFrameMs = 0;
+        }
+        panelLastFrameNanos = 0;
+    }
+
+    private final Choreographer.FrameCallback panelFrameCallback = new Choreographer.FrameCallback() {
+        @Override public void doFrame(long frameTimeNanos) {
+            if (panelLastFrameNanos != 0) {
+                long ms = (frameTimeNanos - panelLastFrameNanos) / 1_000_000L;
+                panelFrameCount++;
+                if (ms > 32) { panelJank32++; if (ms > 50) panelJank50++; }
+                if (ms > panelWorstFrameMs) panelWorstFrameMs = ms;
+            }
+            panelLastFrameNanos = frameTimeNanos;
+            Choreographer.getInstance().postFrameCallback(this);
+        }
+    };
 
     private class ChannelPanelAdapter extends BaseAdapter {
         private final ArrayList<Integer> visible = new ArrayList<>();
@@ -1325,20 +1466,13 @@ public class NativePlayerActivity extends AppCompatActivity {
             boolean current = channel == channelIndex;
             name.setText(channelTitles.get(channel));
             name.setTextColor(current ? C_ACCENT : C_TEXT);
-            name.setTypeface(current ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            // setTypeface relance la mise en page du texte : ne l'écrire que s'il change.
+            if ((name.getTypeface() == Typeface.DEFAULT_BOLD) != current) name.setTypeface(current ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             edge.setVisibility(current ? View.VISIBLE : View.INVISIBLE);
             row.setBackgroundColor(current ? C_ELEV : Color.TRANSPARENT);
-            long now = System.currentTimeMillis();
-            int index = currentProgramIndex(channel, now);
-            JSONArray prog = index >= 0 ? programAt(channel, index) : null;
-            if (prog != null) {
-                program.setText(hour(prog.optLong(0)) + "  " + prog.optString(2, ""));
-                program.setVisibility(View.VISIBLE);
-            } else {
-                String group = channelGroups != null ? channelGroups.get(channel) : "";
-                program.setText(group);
-                program.setVisibility(group.isEmpty() ? View.GONE : View.VISIBLE);
-            }
+            ProgramLine line = programLineOf(channel, System.currentTimeMillis());
+            program.setText(line.text);
+            program.setVisibility(!line.hasProgram && line.text.isEmpty() ? View.GONE : View.VISIBLE);
             return row;
         }
     }
@@ -1401,6 +1535,12 @@ public class NativePlayerActivity extends AppCompatActivity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (!vod && channelUrls != null) {
+            int digit = digitOf(keyCode);
+            if (digit >= 0) { typeDigit(digit); return true; }
+            if (numberBuffer.length() > 0 && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+                commitNumber(); return true;
+            }
             switch (keyCode) {
                 case KeyEvent.KEYCODE_CHANNEL_UP:
                 case KeyEvent.KEYCODE_PAGE_UP:
@@ -1728,6 +1868,10 @@ public class NativePlayerActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
+        // L'échantillonneur se relance à chaque frame : le laisser vivre après une sortie
+        // panneau ouvert retiendrait l'activité en mémoire et travaillerait en arrière-plan.
+        stopPanelFrameSampling();
+        cancelNumberEntry();
         resumed = false;
         // En petite fenêtre, l'activity est en pause mais la vidéo doit continuer.
         if (isInPipMode()) return;
@@ -1749,6 +1893,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        numberHandler.removeCallbacksAndMessages(null);
         logSessionSummary();
         cancelNextEpisode();
         if (isFinishing()) {
@@ -1757,6 +1902,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             String subPath = getIntent().getStringExtra("subtitleFile");
             if (subPath != null) new File(subPath).delete();
         }
+        stopPanelFrameSampling(); // ceinture et bretelles : onPause devrait déjà l'avoir arrêté
         hideHandler.removeCallbacksAndMessages(null);
         progressHandler.removeCallbacksAndMessages(null);
         cancelSleepTimer();
@@ -1792,7 +1938,9 @@ public class NativePlayerActivity extends AppCompatActivity {
         rebuffer.close();
         saveProgress();
         if (!vod && streamUrl != null) {
-            Intent result = new Intent(); result.putExtra("channelUrl", streamUrl); attachStats(result); setResult(RESULT_OK, result);
+            Intent result = new Intent(); result.putExtra("channelUrl", streamUrl);
+            if (jumpNumber != null) result.putExtra("jumpNumber", jumpNumber);
+            attachStats(result); setResult(RESULT_OK, result);
         }
         super.finish();
     }
@@ -2015,7 +2163,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void updateRecButton() {
         if (btnRec == null) return;
         btnRec.setText(recording ? "■" : "REC");
-        btnRec.setBackground(rounded(Color.parseColor(recording ? "#FF5A4A" : "#26262D"), 24));
+        styleFocusable(btnRec, recording ? C_LIVE : C_TRACK, C_ACCENT, Color.WHITE);
     }
 
 
@@ -2051,10 +2199,116 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (nextEpisodePanel != null) nextEpisodePanel.setVisibility(View.GONE);
     }
 
+    // ── Saisie du numéro de chaîne ─────────────────────────────────
+
+    private static int digitOf(int keyCode) {
+        if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) return keyCode - KeyEvent.KEYCODE_0;
+        if (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9) return keyCode - KeyEvent.KEYCODE_NUMPAD_0;
+        return -1;
+    }
+
+    /** « 007 » et « 7 » désignent la même chaîne. */
+    static String normalizeNumber(String value) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        if (!trimmed.matches("\\d+")) return trimmed;
+        String stripped = trimmed.replaceFirst("^0+", "");
+        return stripped.isEmpty() ? "0" : stripped;
+    }
+
+    private String numberAt(int index) {
+        if (channelNumbers == null || index < 0 || index >= channelNumbers.size()) return "";
+        return channelNumbers.get(index).trim();
+    }
+
+    private int indexOfNumber(String typed) {
+        if (channelNumbers == null || typed.isEmpty()) return -1;
+        for (int i = 0; i < channelNumbers.size(); i++) {
+            if (typed.equals(normalizeNumber(channelNumbers.get(i)))) return i;
+        }
+        return -1;
+    }
+
+    private void buildNumberOverlay(FrameLayout root) {
+        numberOverlay = new TextView(this);
+        numberOverlay.setTextColor(C_TEXT);
+        numberOverlay.setTextSize(30);
+        numberOverlay.setTypeface(Typeface.DEFAULT_BOLD);
+        numberOverlay.setMaxLines(2);
+        numberOverlay.setPadding(dp(22), dp(12), dp(22), dp(12));
+        numberOverlay.setBackground(rounded(Color.argb(230, 20, 20, 23), 16));
+        numberOverlay.setVisibility(View.GONE);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        lp.setMargins(dp(24), dp(24), dp(24), dp(24));
+        root.addView(numberOverlay, lp);
+    }
+
+    private void typeDigit(int digit) {
+        if (numberOverlay == null) return;
+        if (numberBuffer.length() >= 5) numberBuffer.setLength(0);
+        numberBuffer.append(digit);
+        String typed = normalizeNumber(numberBuffer.toString());
+        int match = indexOfNumber(typed);
+        String name = match >= 0 && channelTitles != null ? channelTitles.get(match) : "";
+        int split = numberBuffer.length();
+        SpannableString text = new SpannableString(numberBuffer + (name.isEmpty() ? "" : "\n" + name));
+        if (!name.isEmpty()) {
+            text.setSpan(new ForegroundColorSpan(C_MUTED), split, text.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            text.setSpan(new android.text.style.RelativeSizeSpan(0.5f), split, text.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        numberOverlay.setText(text);
+        numberOverlay.setVisibility(View.VISIBLE);
+        numberOverlay.bringToFront();
+        numberHandler.removeCallbacksAndMessages(null);
+        numberHandler.postDelayed(this::commitNumber, 1800);
+    }
+
+    private void commitNumber() {
+        numberHandler.removeCallbacksAndMessages(null);
+        String typed = normalizeNumber(numberBuffer.toString());
+        numberBuffer.setLength(0);
+        if (typed.isEmpty() || channelUrls == null) { hideNumberOverlay(); return; }
+        int found = indexOfNumber(typed);
+        if (found >= 0) {
+            hideNumberOverlay();
+            if (found != channelIndex) switchTo(found);
+            return;
+        }
+        if (channelTotal > channelUrls.size()) {
+            // Chaîne hors du contexte chargé : la page la retrouve dans la liste complète et relance.
+            jumpNumber = typed;
+            finish();
+            return;
+        }
+        if (numberOverlay != null) {
+            numberOverlay.setText("Aucune chaîne n° " + typed);
+            numberHandler.postDelayed(this::hideNumberOverlay, 1500);
+        }
+    }
+
+    private void hideNumberOverlay() {
+        if (numberOverlay != null) numberOverlay.setVisibility(View.GONE);
+    }
+
+    /** Abandonne la saisie en cours : sans ça, le délai de validation survit à Home et
+     *  change de chaîne (ou recrée le lecteur) alors que l'activité n'est plus visible. */
+    private void cancelNumberEntry() {
+        numberBuffer.setLength(0);
+        numberHandler.removeCallbacksAndMessages(null);
+        hideNumberOverlay();
+    }
+
     @Override
     public void onBackPressed() {
+        if (numberBuffer.length() > 0) { cancelNumberEntry(); return; }
         if (nextEpisodePanel != null && nextEpisodePanel.getVisibility() == View.VISIBLE) { cancelNextEpisode(); return; }
         if (isChannelPanelOpen()) { closeChannelPanel(); return; }
+        // Retour ferme d'abord les commandes (direct) ou le contrôleur (VOD) avant de quitter.
+        if (isControlsVisible || (vod && playerView != null && playerView.isControllerFullyVisible())) {
+            if (vod && playerView != null && playerView.isControllerFullyVisible()) playerView.hideController();
+            hideControls();
+            return;
+        }
         super.onBackPressed();
     }
 
@@ -2123,6 +2377,8 @@ public class NativePlayerActivity extends AppCompatActivity {
             items[i] = opt.label + (opt.isSelected ? "  ✓" : "");
         }
 
+        // Le dialog fait partie de l'utilisation des commandes : pas de masquage pendant.
+        hideHandler.removeCallbacksAndMessages(null);
         new AlertDialog.Builder(this)
             .setTitle("Piste audio (langue)")
             .setSingleChoiceItems(items, selectedOptionIndex, (dialog, which) -> {
@@ -2150,6 +2406,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                 }
             })
             .setNegativeButton("Fermer", null)
+            .setOnDismissListener(dialog -> scheduleHideControls())
             .show();
     }
 
@@ -2306,6 +2563,8 @@ public class NativePlayerActivity extends AppCompatActivity {
             };
         }
 
+        // Le dialog fait partie de l'utilisation des commandes : pas de masquage pendant.
+        hideHandler.removeCallbacksAndMessages(null);
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Minuteur de mise en veille");
         builder.setItems(options, (dialog, which) -> {
@@ -2318,7 +2577,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                 sleepOnEnd = true;
                 if (btnSleep != null) {
                     btnSleep.setText("🌙 Fin");
-                    btnSleep.setBackground(rounded(Color.parseColor("#F0B455"), 24));
+                    styleFocusable(btnSleep, C_ACCENT, Color.WHITE, Color.WHITE);
                 }
                 Toast.makeText(this, "Arrêt prévu à la fin de la vidéo", Toast.LENGTH_SHORT).show();
             } else {
@@ -2331,6 +2590,7 @@ public class NativePlayerActivity extends AppCompatActivity {
             }
         });
         builder.setNegativeButton("Annuler", null);
+        builder.setOnDismissListener(dialog -> scheduleHideControls());
         builder.show();
     }
 
@@ -2339,7 +2599,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         sleepTargetTimeMs = android.os.SystemClock.elapsedRealtime() + (minutes * 60_000L);
         sleepOnEnd = false;
         if (btnSleep != null) {
-            btnSleep.setBackground(rounded(Color.parseColor("#F0B455"), 24));
+            styleFocusable(btnSleep, C_ACCENT, Color.WHITE, Color.WHITE);
             btnSleep.setText("🌙 " + minutes + "m");
         }
         Toast.makeText(this, "Mise en veille dans " + minutes + " min", Toast.LENGTH_SHORT).show();
@@ -2381,7 +2641,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         sleepOnEnd = false;
         if (btnSleep != null) {
             btnSleep.setText("Veille");
-            btnSleep.setBackground(rounded(Color.parseColor("#26262D"), 24));
+            styleFocusable(btnSleep, C_TRACK, C_ACCENT, Color.WHITE);
         }
     }
 

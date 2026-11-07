@@ -37,7 +37,7 @@ export interface ScheduledRecording {
 }
 
 interface NativePlayerPluginType {
-  open(options: { url: string; title?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined }): Promise<{ channelUrl?: string | undefined; stats?: PlaybackStats | undefined }>;
+  open(options: { url: string; title?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
   openWeb(options: { url: string; title?: string | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
@@ -74,7 +74,51 @@ function isAvailable(): boolean {
 
 /** Programme transmis au lecteur Android : [début ms, fin ms, titre]. */
 export type NativeProgram = [number, number, string];
-export interface NativeZapContext { urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][] }
+export interface NativeZapContext { urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][]; numbers?: string[]; total?: number }
+
+/** « 007 » et « 7 » désignent la même chaîne ; tout ce qui n'est pas un nombre est ignoré. */
+function normalizeNumber(value: string | undefined): string {
+  const trimmed = (value ?? '').trim();
+  return /^\d{1,9}$/.test(trimmed) ? String(Number(trimmed)) : '';
+}
+
+interface ChannelNumbering { numbers: string[]; byNumber: Map<string, number> }
+const numberingCache = new WeakMap<Channel[], ChannelNumbering>();
+
+/**
+ * Numérotation d'une liste, calculée une seule fois sur la liste complète pour que
+ * lecteur Android et page désignent toujours la même chaîne, quelle que soit la
+ * fenêtre de chaînes transmise au lecteur :
+ * - tvg-chno numérique d'abord : la première chaîne qui le porte le garde, les doublons non ;
+ * - sinon la position (1 = première), si ce numéro n'est pas déjà pris par un tvg-chno.
+ * Chaque numéro désigne donc une seule chaîne ; une chaîne peut rester sans numéro.
+ */
+export function channelNumbering(channels: Channel[]): ChannelNumbering {
+  const cached = numberingCache.get(channels);
+  if (cached) return cached;
+  const numbers = new Array<string>(channels.length).fill('');
+  const byNumber = new Map<string, number>();
+  channels.forEach((c, i) => {
+    const chno = normalizeNumber(c.chno);
+    if (chno && !byNumber.has(chno)) { byNumber.set(chno, i); numbers[i] = chno; }
+  });
+  channels.forEach((_, i) => {
+    if (numbers[i]) return;
+    const position = String(i + 1);
+    if (!byNumber.has(position)) { byNumber.set(position, i); numbers[i] = position; }
+  });
+  const result = { numbers, byNumber };
+  numberingCache.set(channels, result);
+  return result;
+}
+
+/** Chaîne correspondant à un numéro saisi, selon la même numérotation que le lecteur Android. */
+export function findChannelByNumber(channels: Channel[], number: string): Channel | null {
+  const typed = normalizeNumber(number);
+  if (!typed) return null;
+  const index = channelNumbering(channels).byNumber.get(typed);
+  return index === undefined ? null : channels[index] ?? null;
+}
 
 const MAX_ZAP_WINDOW = 300;
 /** Programmes à venir transmis par chaîne : de quoi tenir le bandeau plusieurs heures. */
@@ -129,10 +173,14 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
   }
 
   const windowSlice = ordered.slice(start, end);
+  const allNumbers = channelNumbering(channels).numbers;
   const zap: NativeZapContext = {
     urls: windowSlice.map(c => c.url),
     titles: windowSlice.map(c => c.name),
     index: index - start,
+    // Chaîne choisie absente de la liste (ajoutée en fin) : pas de numéro, la page ne la retrouverait pas.
+    numbers: windowSlice.map((_, i) => allNumbers[start + i] ?? ''),
+    total: ordered.length,
   };
   if (windowSlice.some(c => c.group)) zap.groups = windowSlice.map(c => c.group || '');
   if (epg) {
@@ -147,7 +195,7 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
   return zap;
 }
 
-async function openPlayer(method: 'open' | 'openExternal', url: string, title?: string, zap?: NativeZapContext, onReturned?: (url: string) => void): Promise<boolean> {
+async function openPlayer(method: 'open' | 'openExternal', url: string, title?: string, zap?: NativeZapContext, onReturned?: (url: string) => void, onJump?: (number: string) => void): Promise<boolean> {
   if (!isAvailable() || isPlaybackDelegated()) return false;
   try {
     const parsed = new URL(url);
@@ -166,11 +214,16 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
           channelUrls: zap.urls, channelTitles: zap.titles, channelIndex: zap.index,
           ...(zap.groups?.length === zap.urls.length ? { channelGroups: zap.groups } : {}),
           ...(zap.epg?.length === zap.urls.length ? { channelEpg: zap.epg } : {}),
+          ...(zap.numbers?.length === zap.urls.length ? { channelNumbers: zap.numbers, channelTotal: zap.total ?? zap.urls.length } : {}),
         }
         : {}),
     });
     if (result && 'stats' in result && result.stats) recordNativeStats(result.stats);
     if (result && 'channelUrl' in result && typeof result.channelUrl === 'string' && zap?.urls.includes(result.channelUrl)) onReturned?.(result.channelUrl);
+    // Numéro tapé hors du contexte transmis : la page relance le lecteur sur cette chaîne,
+    // une fois celui-ci refermé (le verrou de lecture déléguée est levé dans finally).
+    const jump = result && 'jumpNumber' in result ? result.jumpNumber : undefined;
+    if (onJump && typeof jump === 'string' && /^\d{1,5}$/.test(jump)) window.setTimeout(() => onJump(jump), 0);
     return true;
   } catch {
     toast.error(method === 'open'
@@ -275,8 +328,8 @@ export const NativePlayerBridge = {
     } catch { toast.error('Impossible d’ouvrir cette vidéo sur Android.'); return false; }
     finally { setPlaybackDelegated(false); }
   },
-  async open(url: string, title?: string, zap?: NativeZapContext, onReturned?: (url: string) => void): Promise<boolean> {
-    return openPlayer('open', url, title, zap, onReturned);
+  async open(url: string, title?: string, zap?: NativeZapContext, onReturned?: (url: string) => void, onJump?: (number: string) => void): Promise<boolean> {
+    return openPlayer('open', url, title, zap, onReturned, onJump);
   },
   async openExternal(url: string, title?: string): Promise<boolean> {
     return openPlayer('openExternal', url, title);

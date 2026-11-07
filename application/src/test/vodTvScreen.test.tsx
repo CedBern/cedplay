@@ -51,9 +51,9 @@ it('arrive sur la grille, se déplace et OK ouvre la fiche', () => {
   key('ArrowRight');
   expect(active().dataset.tvRow).toBe('1');
   key('ArrowDown');
-  expect(active().dataset.tvRow).toBe('7');
+  expect(active().dataset.tvRow).toBe('6');
   fireEvent.click(active());
-  expect(onOpen).toHaveBeenCalledWith(items[7]);
+  expect(onOpen).toHaveBeenCalledWith(items[6]);
 });
 
 it('gauche en début de ligne passe aux catégories, droite rend la grille', () => {
@@ -105,20 +105,20 @@ it('saut de page atteint la cellule « Afficher davantage » qui charge la suite
 
 it('colonne de droite : lecture directe du film, fiche, Ma Liste', () => {
   const { onOpen, onPlay, onToggleWatchlistItem } = setup();
-  for (let i = 0; i < 5; i++) key('ArrowRight');
-  key('ArrowRight'); // bord droit de la ligne : entre dans la colonne de droite
+  for (let i = 0; i < 4; i++) key('ArrowRight');
+  key('ArrowRight'); // bord droit de la ligne (4 % 5) : entre dans la colonne de droite
   expect(col()).toBe('info');
   expect(active()).toHaveTextContent('Regarder');
   fireEvent.click(active());
-  expect(onPlay).toHaveBeenCalledWith(items[5]);
+  expect(onPlay).toHaveBeenCalledWith(items[4]);
   key('ArrowDown');
   expect(active()).toHaveTextContent('Ouvrir la fiche');
   fireEvent.click(active());
-  expect(onOpen).toHaveBeenCalledWith(items[5]);
+  expect(onOpen).toHaveBeenCalledWith(items[4]);
   key('ArrowDown');
   expect(active()).toHaveTextContent('Ajouter à Ma Liste');
   fireEvent.click(active());
-  expect(onToggleWatchlistItem).toHaveBeenCalledWith(items[5]);
+  expect(onToggleWatchlistItem).toHaveBeenCalledWith(items[4]);
 });
 
 it.each([1, 2, 7])('%i titre(s) : la colonne de droite reste atteignable aux flèches seules', (n) => {

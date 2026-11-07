@@ -49,7 +49,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
     } catch { toast.error('Impossible d’enregistrer les paramètres'); }
     finally { setSaving(false); }
   };
-  type ToggleKey = 'autoplay' | 'muteOnStart' | 'autoLoadLastPlaylist' | 'autoReconnect' | 'keyboardNavigation' | 'compactModeDefault' | 'virtualizationEnabledDefault' | 'telemetryPersistence';
+  type ToggleKey = 'autoplay' | 'muteOnStart' | 'autoLoadLastPlaylist' | 'startOnLastChannel' |'autoReconnect' | 'keyboardNavigation' | 'compactModeDefault' | 'virtualizationEnabledDefault' | 'telemetryPersistence';
   const toggle = (key: ToggleKey, label: string, hint?: string) => <label key={key} className="flex min-h-12 cursor-pointer items-center justify-between gap-4 py-2">
     <span className="min-w-0">
       <span className="block text-sm text-foreground">{label}</span>
@@ -87,6 +87,22 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
 
         {section('Listes et guide TV', <>
           {toggle('autoLoadLastPlaylist', 'Reprendre la dernière liste au démarrage')}
+          {toggle('startOnLastChannel', 'Démarrer sur la dernière chaîne regardée', 'La chaîne se relance dès l’ouverture de l’application.')}
+          <div className="py-3">
+            <span className="block text-sm text-foreground">Actualiser la liste automatiquement</span>
+            <span className="block text-xs text-muted-foreground">Listes M3U importées par adresse et connexions Xtream, quand aucune vidéo n’est en cours. Favoris et variantes sont conservés. Le guide TV se met déjà à jour tout seul.</span>
+            <div role="group" aria-label="Actualiser la liste automatiquement" className="mt-2 flex flex-wrap gap-2">
+              {([[0, 'Jamais'], [6, '6 h'], [12, '12 h'], [24, '24 h'], [72, '3 jours']] as const).map(([value, label]) => <Button
+                key={value}
+                type="button"
+                size="sm"
+                variant={(draft.playlistRefreshHours ?? 24) === value ? 'default' : 'outline'}
+                aria-pressed={(draft.playlistRefreshHours ?? 24) === value}
+                className="min-h-10 px-4"
+                onClick={() => setDraft({ ...draft, playlistRefreshHours: value })}
+              >{label}</Button>)}
+            </div>
+          </div>
           {toggle('compactModeDefault', 'Liste compacte par défaut')}
           {toggle('virtualizationEnabledDefault', 'Optimiser les grandes listes', 'Recommandé au-delà de quelques centaines de chaînes.')}
           <label className="block py-3">
@@ -178,7 +194,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           </div>
         </>)}
 
-        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.8.9 · Direct, films et séries</p>
+        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.9.0 · Direct, films et séries</p>
         <div className="sticky -bottom-6 -mx-6 flex justify-end gap-2 border-t border-neutral-900 bg-background px-6 py-3">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
           <Button disabled={saving} onClick={save}>{saving ? 'Enregistrement…' : 'Enregistrer'}</Button>

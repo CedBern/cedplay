@@ -1,6 +1,7 @@
-import { NativePlayerBridge, buildNativeZap, setNativeEpg } from '@/utils/nativePlayer';
+import { NativePlayerBridge, buildNativeZap, setNativeEpg, findChannelByNumber } from '@/utils/nativePlayer';
 import { findExistingPlaylist, reconcilePlaylist } from '@/utils/playlistIdentity';
 import { getXtreamAccount, saveXtreamAccount } from '@/utils/xtreamCatalog';
+import { canRefreshPlaylist, downloadXtreamLive, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,12 +34,18 @@ import { adultGroupNames } from '@/utils/parentalControl';
 import { popDueReminders } from '@/utils/reminders';
 import { loadCatchupIndex, streamIdOf, catchupUrl, type CatchupIndex } from '@/utils/catchup';
 import type { EPGProgram } from '@/types/epg';
+import { isPlaybackDelegated } from '@/utils/playbackOwnership';
+/** Date de la dernière actualisation réussie d'une liste par adresse (manuelle, automatique ou import). */
+const playlistRefreshedKey = (playlistId: string) => `playlistRefreshedAt:${playlistId}`;
 // Dynamic telemetry import helper
 let telemetryLoggerPromise: Promise<typeof import('@/utils/telemetry/logger')> | undefined;
 function getTelemetryLogger() { if (!telemetryLoggerPromise) telemetryLoggerPromise = import('@/utils/telemetry/logger'); return telemetryLoggerPromise; }
 
 export function IPTVPlayer() {
   const [currentPlaylist, setCurrentPlaylist] = useState<PlaylistInfo | null>(null);
+  // Liste affichée à l'instant présent, lue par les traitements asynchrones (actualisation).
+  const currentPlaylistRef = useRef(currentPlaylist);
+  currentPlaylistRef.current = currentPlaylist;
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   // L'application s'ouvre sur l'Accueil : reprise, favoris en direct, Ma liste.
   const [activeTab, setActiveTab] = useState('continue');
@@ -69,6 +76,7 @@ export function IPTVPlayer() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [openingChannel, setOpeningChannel] = useState<string | null>(null);
   const nativeOpening = useRef(false);
+  const [pendingNativeNumber, setPendingNativeNumber] = useState<string | null>(null);
   const webPlayerSection = useRef<HTMLDivElement>(null);
   /** Une chaîne a été lancée dans le lecteur web : il reste actif (plein ou mini) jusqu'à sa fermeture. */
   const [webSession, setWebSession] = useState(false);
@@ -128,7 +136,11 @@ export function IPTVPlayer() {
         if (playlist && settings.autoLoadLastPlaylist !== false) {
           setCurrentPlaylist(playlist);
           const lastId = await getLastChannelForPlaylist(playlist.id);
-          if (!cancelled && lastId) setCurrentChannel(playlist.channels.find(c => c.id === lastId) || null);
+          const last = lastId ? playlist.channels.find(c => c.id === lastId) || null : null;
+          if (!cancelled && lastId) setCurrentChannel(last);
+          // Démarrage sur la dernière chaîne : même chemin qu'un raccourci Android (contrôle parental compris).
+          // Un raccourci déjà reçu garde la priorité.
+          if (!cancelled && last && settings.startOnLastChannel) setLaunchChannelId(current => current ?? last.id);
         } else setActiveTab('loader');
       } catch { if (!cancelled) toast.error('Impossible de restaurer les données enregistrées.'); }
       finally { if (!cancelled) setLoadingInitial(false); }
@@ -160,9 +172,13 @@ export function IPTVPlayer() {
       const saved = await getPlaylistsFromDB();
       const existing = findExistingPlaylist(saved, playlist);
       if (existing) {
+        // Compte et choix Xtream sont rangés sous l'id de la nouvelle liste : à lire avant
+        // que reconcilePlaylist() ne lui rende l'id de l'ancienne.
         const linkedAccount = getXtreamAccount(playlist);
+        const liveSelection = readLiveSelection(playlist.id);
         playlist = reconcilePlaylist(existing, playlist);
         if (linkedAccount) saveXtreamAccount(existing.id, linkedAccount);
+        if (liveSelection) saveLiveSelection(existing.id, liveSelection);
         updated = true;
       }
     } catch { /* la déduplication est optionnelle */ }
@@ -174,6 +190,8 @@ export function IPTVPlayer() {
       setAllPlaylists(refreshed);
       StorageManager.setLastPlaylist(playlist.name);
       await setMeta('lastPlaylistId', playlist.id);
+      // Liste fraîchement téléchargée : pas de nouvelle actualisation automatique tout de suite.
+      if (canRefreshPlaylist(playlist)) void setMeta(playlistRefreshedKey(playlist.id), Date.now()).catch(() => {});
       // Attempt restore last channel for this (if previously existed under same id, usually new id though)
       try {
         const lastChannelId = await getLastChannelForPlaylist(playlist.id);
@@ -320,7 +338,7 @@ export function IPTVPlayer() {
         const variant = match?.variants?.find(v => v.url === url);
         remember(variant || match || channel);
         setActiveTab('channels');
-      });
+      }, number => setPendingNativeNumber(number));
       if (opened) setActiveTab('channels');
     } finally {
       window.clearTimeout(dismissSpinner);
@@ -328,6 +346,14 @@ export function IPTVPlayer() {
       setOpeningChannel(null);
     }
   }, [currentPlaylist, playableChannels, parentalUnlocked, parentalLockedGroups]);
+  // Numéro tapé dans le lecteur Android hors des chaînes qu'il connaît : relance sur la bonne chaîne.
+  useEffect(() => {
+    if (!pendingNativeNumber) return;
+    setPendingNativeNumber(null);
+    const target = findChannelByNumber(playableChannels, pendingNativeNumber);
+    if (target) void openNativeChannel(target);
+    else toast.error(`Aucune chaîne n° ${pendingNativeNumber}`);
+  }, [pendingNativeNumber, playableChannels, openNativeChannel]);
   const handleChannelSelect = useCallback((channel: Channel) => {
     if (NativePlayerBridge.isAvailable()) void openNativeChannel(channel);
     else handleWebChannelSelect(channel);
@@ -481,29 +507,69 @@ export function IPTVPlayer() {
     return () => { cancelled = true; window.clearInterval(id); };
   }, []);
 
-  /** Rafraîchit une liste importée par URL en conservant son identité (favoris, variantes, lien Xtream). */
-  const refreshPlaylist = async (pl: PlaylistInfo) => {
-    if (!pl.url) { toast.error('Cette liste ne peut pas être rafraîchie automatiquement. Réimporte-la depuis Mes listes.'); return; }
-    const toastId = toast.loading('Mise à jour de la liste…');
+  /** Rafraîchit une liste (M3U par adresse ou connexion Xtream) en conservant son identité (favoris, variantes, lien Xtream). */
+  const refreshPlaylist = async (pl: PlaylistInfo, options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+    const account = pl.url ? null : isXtreamLiveImport(pl) ? getXtreamAccount(pl) : null;
+    if (!pl.url && !account) { if (!silent) toast.error('Cette liste ne peut pas être rafraîchie automatiquement. Réimporte-la depuis Mes listes.'); return; }
+    const toastId = silent ? undefined : toast.loading('Mise à jour de la liste…');
+    const toastOptions = toastId !== undefined ? { id: toastId } : {};
     try {
-      const content = await CORSProxy.fetchWithProxy(pl.url);
-      if (!content.includes('#EXTINF:') || content.trim().startsWith('<')) {
-        throw new Error('Le serveur ne renvoie plus une liste M3U.');
+      let fresh: PlaylistInfo;
+      if (pl.url) {
+        const content = await CORSProxy.fetchWithProxy(pl.url);
+        if (!content.includes('#EXTINF:') || content.trim().startsWith('<')) {
+          throw new Error('Le serveur ne renvoie plus une liste M3U.');
+        }
+        const host = (() => { try { return new URL(pl.url!).hostname; } catch { return 'liste'; } })();
+        fresh = { ...(await parseM3UInWorker(content, `Liste — ${host}`, () => {})), url: pl.url };
+      } else {
+        fresh = await downloadXtreamLive(pl, account!);
       }
-      const host = (() => { try { return new URL(pl.url).hostname; } catch { return 'liste'; } })();
-      const fresh = await parseM3UInWorker(content, `Liste — ${host}`, () => {});
-      const updated = reconcilePlaylist(pl, { ...fresh, url: pl.url });
+      // Pendant le téléchargement, la liste a pu être modifiée (favoris), supprimée ou
+      // quittée : on repart de sa version enregistrée et on ne touche à l'écran que si
+      // elle est toujours la liste affichée.
+      const stored = await getPlaylistFromDB(pl.id);
+      if (!stored) return;
+      const updated = reconcilePlaylist(stored, fresh);
       await savePlaylistToDB(updated);
       setAllPlaylists(prev => prev.map(p => p.id === pl.id ? updated : p));
-      if (currentPlaylist?.id === pl.id) {
-        setCurrentPlaylist(updated);
+      if (currentPlaylistRef.current?.id === pl.id) {
+        setCurrentPlaylist(current => current?.id === pl.id ? updated : current);
         setCurrentChannel(current => current ? updated.channels.find(c => c.id === current.id) || null : null);
       }
-      toast.success(`Liste mise à jour : ${updated.channels.length} chaînes.`, { id: toastId });
+      void setMeta(playlistRefreshedKey(pl.id), Date.now()).catch(() => {});
+      if (!silent) toast.success(`Liste mise à jour : ${updated.channels.length} chaînes.`, toastOptions);
     } catch (e) {
-      toast.error(e instanceof Error && e.message.includes('M3U') ? e.message : 'Mise à jour impossible (réseau ou serveur).', { id: toastId });
+      if (silent) { console.warn('Actualisation automatique de la liste impossible', e); return; }
+      const message = e instanceof Error && (e.message.includes('M3U') || e.message.includes('Xtream') || e.message.includes('fournisseur')) ? e.message : 'Mise à jour impossible (réseau ou serveur).';
+      toast.error(message, toastOptions);
     }
   };
+
+  // Actualisation automatique de la liste par adresse (réglage, 24 h par défaut), comme au
+  // démarrage d'une box : premier contrôle 20 s après l'ouverture, puis toutes les 30 min,
+  // jamais pendant une lecture déléguée au lecteur Android (bande passante et connexions).
+  const refreshPlaylistRef = useRef(refreshPlaylist);
+  refreshPlaylistRef.current = refreshPlaylist;
+  const refreshHours = appSettings.playlistRefreshHours ?? 24;
+  const refreshPlaylistId = currentPlaylist && canRefreshPlaylist(currentPlaylist) ? currentPlaylist.id : null;
+  useEffect(() => {
+    if (loadingInitial || !refreshPlaylistId || refreshHours <= 0) return;
+    let cancelled = false;
+    let running = false;
+    const check = async () => {
+      const playlist = currentPlaylistRef.current;
+      if (cancelled || running || isPlaybackDelegated() || playlist?.id !== refreshPlaylistId) return;
+      const last = await getMeta<number>(playlistRefreshedKey(playlist.id)).catch(() => undefined);
+      if (cancelled || (typeof last === 'number' && Date.now() - last < refreshHours * 3_600_000)) return;
+      running = true;
+      try { await refreshPlaylistRef.current(playlist, { silent: true }); } finally { running = false; }
+    };
+    const first = window.setTimeout(() => void check(), 20_000);
+    const timer = window.setInterval(() => void check(), 30 * 60_000);
+    return () => { cancelled = true; window.clearTimeout(first); window.clearInterval(timer); };
+  }, [loadingInitial, refreshPlaylistId, refreshHours]);
 
   const navigate = (section: NavSection) => {
     if (section === 'vod') setActiveTab(current => (current === 'movies' || current === 'series' ? current : lastVodTab));

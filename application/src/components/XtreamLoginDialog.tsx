@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { toast } from 'sonner';
 import { getProxyBase } from '@/utils/proxy';
@@ -16,23 +16,14 @@ import {
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
-import type { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
+import type { PlaylistInfo } from '@/types/channel';
 import { fetchXtreamLimits, saveXtreamAccount } from '@/utils/xtreamCatalog';
+import { fetchLiveChannels, saveLiveSelection } from '@/utils/xtreamLive';
 
 interface Category {
   category_id: string;
   category_name: string;
   parent_id?: number;
-}
-
-interface RawStream {
-  num: number;
-  name: string;
-  stream_type: string;
-  stream_id: number;
-  stream_icon?: string;
-  epg_channel_id?: string;
-  custom_sid?: string;
 }
 
 interface XtreamLoginDialogProps {
@@ -148,78 +139,18 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
     const cleanPass = password.trim();
 
     const selectedList = categories.filter(c => selectedCats.has(c.category_id));
-    const allChannels: Channel[] = [];
-    const groupMap = new Map<string, Channel[]>();
+    const account = { server: cleanServer, username: cleanUser, password: cleanPass };
 
     try {
-      // Import parallèle à concurrence limitée : 100 catégories en série seraient
-      // 100 allers-retours lents ; on en traite 5 à la fois.
-      const concurrency = 5;
-      const failedCategories: string[] = [];
-      let nextIndex = 0;
-      let doneCount = 0;
-      const total = selectedList.length;
-      const fetchCategory = async (cat: Category) => {
-        const isNative = Capacitor.isNativePlatform();
-        const streamUrl = isNative
-          ? `${cleanServer}/player_api.php?username=${encodeURIComponent(cleanUser)}&password=${encodeURIComponent(cleanPass)}&action=get_live_streams&category_id=${encodeURIComponent(cat.category_id)}`
-          : `${getProxyBase()}/xtream/streams?server=${encodeURIComponent(cleanServer)}&username=${encodeURIComponent(cleanUser)}&password=${encodeURIComponent(cleanPass)}&category_id=${encodeURIComponent(cat.category_id)}`;
-        try {
-          const res = await fetch(streamUrl);
-          if (!res.ok) { failedCategories.push(cat.category_name); return; }
-          const streams: RawStream[] = await res.json();
-          if (!Array.isArray(streams)) { failedCategories.push(cat.category_name); return; }
-          for (const s of streams) {
-            const primaryExt = streamFormat === 'm3u8' ? 'm3u8' : 'ts';
-            const fallbackExt = streamFormat === 'm3u8' ? 'ts' : 'm3u8';
-            const streamDirectUrl = `${cleanServer}/live/${encodeURIComponent(cleanUser)}/${encodeURIComponent(cleanPass)}/${s.stream_id}.${primaryExt}`;
-            const fallbackUrl = `${cleanServer}/live/${encodeURIComponent(cleanUser)}/${encodeURIComponent(cleanPass)}/${s.stream_id}.${fallbackExt}`;
-
-            const altVariant: Channel = {
-              id: uuidv5(`${cleanServer}\0${s.stream_id}\0${fallbackExt}`, uuidv5.URL),
-              name: `${s.name.trim()} (${fallbackExt.toUpperCase()})`,
-              url: fallbackUrl,
-              group: cat.category_name,
-              isFavorite: false,
-            };
-
-            const channel: Channel = {
-              id: uuidv5(`${cleanServer}\0${s.stream_id}`, uuidv5.URL),
-              name: s.name.trim(),
-              url: streamDirectUrl,
-              variants: [altVariant],
-              group: cat.category_name,
-              ...(s.stream_icon ? { logo: s.stream_icon } : {}),
-              ...(s.custom_sid || s.epg_channel_id ? { tvgId: s.custom_sid || s.epg_channel_id } : {}),
-              isFavorite: false,
-            };
-            allChannels.push(channel);
-            if (!groupMap.has(cat.category_name)) groupMap.set(cat.category_name, []);
-            groupMap.get(cat.category_name)!.push(channel);
-          }
-        } catch {
-          failedCategories.push(cat.category_name);
-        } finally {
-          doneCount += 1;
-          setImportProgress(Math.round((doneCount / total) * 100));
-        }
-      };
-      const workerTask = async () => {
-        while (nextIndex < selectedList.length) {
-          const i = nextIndex++;
-          await fetchCategory(selectedList[i]);
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(concurrency, selectedList.length) }, () => workerTask()));
+      // Import parallèle à concurrence limitée (5 catégories à la fois), partagé avec
+      // l'actualisation automatique : mêmes chaînes, mêmes identifiants.
+      const { channels: allChannels, groups, failed: failedCategories } = await fetchLiveChannels(
+        account, selectedList, streamFormat, (done, total) => setImportProgress(Math.round((done / total) * 100)),
+      );
 
       if (allChannels.length === 0) {
         throw new Error('Aucune chaîne récupérée dans les catégories sélectionnées.');
       }
-
-      const groups: ChannelGroup[] = [...groupMap.entries()].map(([name, channels]) => ({
-        name,
-        channels,
-      }));
 
       const playlist: PlaylistInfo = {
         id: uuidv4(),
@@ -229,11 +160,12 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
         totalChannelsBeforeDedup: allChannels.length,
       };
 
-      saveXtreamAccount(playlist.id, { server: cleanServer, username: cleanUser, password: cleanPass });
+      saveXtreamAccount(playlist.id, account);
+      saveLiveSelection(playlist.id, { categoryIds: selectedList.map(c => c.category_id), format: streamFormat });
       // Limites du compte (lectures simultanées) pour l'avertissement de la mosaïque,
       // lues en arrière-plan : une réponse lente du panneau ne doit pas retarder la fin
       // de l'import. En échec ou en attente indéfinie, la mosaïque relira la valeur plus tard.
-      void fetchXtreamLimits(playlist.id, { server: cleanServer, username: cleanUser, password: cleanPass }).catch(() => {});
+      void fetchXtreamLimits(playlist.id, account).catch(() => {});
       await onPlaylistLoaded(playlist);
       toast.success(`${allChannels.length} chaînes importées avec succès !${failedCategories.length ? ` (${failedCategories.length} catégorie(s) en échec)` : ''}`);
       setOpen(false);

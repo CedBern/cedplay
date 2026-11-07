@@ -140,6 +140,19 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     window.addEventListener('vod-history-updated', update);
     return () => window.removeEventListener('vod-history-updated', update);
   }, []);
+  // Libellés de reprise : la fiche éclair les affiche à chaque déplacement de grille —
+  // lecture localStorage mise en cache par titre, invalidée quand l'historique bouge
+  // ou au retour de lecture (focus rendu à la fenêtre).
+  const progressCache = useRef(new Map<string, string>());
+  useEffect(() => {
+    const invalidate = () => progressCache.current.clear();
+    window.addEventListener('vod-history-updated', invalidate);
+    window.addEventListener('focus', invalidate);
+    return () => {
+      window.removeEventListener('vod-history-updated', invalidate);
+      window.removeEventListener('focus', invalidate);
+    };
+  }, []);
   const catalogCacheKey = JSON.stringify([playlist.id, account]);
 
   // Historique de lecture + catalogue complet : le catalogue entier n'est chargé
@@ -269,7 +282,17 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     return searchIndex.filter(({ lower }) => lower.includes(q)).map(({ item }) => item);
   }, [searchIndex, debouncedSearch]);
   const mediaKey = (id: string) => `${playlist.id}:${kind}:${id}`;
-  const progressLabel = (id: string) => { const saved = readVodProgress(mediaKey(id)); return saved ? `Reprendre à ${Math.floor(saved.positionMs / 60000)} min` : 'Regarder'; };
+  const progressLabel = useCallback((id: string) => {
+    const cache = progressCache.current;
+    const cached = cache.get(id);
+    if (cached !== undefined) return cached;
+    const saved = readVodProgress(mediaKey(id));
+    const label = saved ? `Reprendre à ${Math.floor(saved.positionMs / 60000)} min` : 'Regarder';
+    cache.set(id, label);
+    return label;
+    // mediaKey ne dépend que de playlist.id et kind, stables pour la vie du composant.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const play = async (id: string, ext: string, title: string, restart = false) => {
     if (!account || busy) return;
     try {

@@ -34,6 +34,8 @@ export interface AppSettings {
   tvPreview?: boolean; // ancien réglage aperçu (on/off) ; conservé pour la migration
   tvPreviewMode?: 'auto' | 'manual' | 'off'; // aperçu vidéo : au survol, via le bouton « Aperçu », ou désactivé
   proxyUrl?: string; // adresse du relais CORS pour les builds web hébergés (vide = relais local de développement)
+  startOnLastChannel?: boolean; // relance la dernière chaîne regardée à l'ouverture de l'application
+  playlistRefreshHours?: number; // actualisation automatique de la liste par URL (heures ; 0 = jamais)
   __version?: number; // internal version for migrations
 }
 
@@ -64,6 +66,8 @@ const appSettingsSchema = z.object({
   tvPreview: z.boolean().optional(),
   tvPreviewMode: z.enum(['auto', 'manual', 'off']).optional(),
   proxyUrl: z.string().max(300).optional(),
+  startOnLastChannel: z.boolean().optional(),
+  playlistRefreshHours: z.number().int().min(0).max(168).optional(),
   __version: z.number().optional()
 });
 
@@ -147,7 +151,9 @@ export class StorageManager {
   parentalPin: '',
   proxyUrl: '',
   tvPreviewMode: 'auto',
-  __version: 9
+  startOnLastChannel: false,
+  playlistRefreshHours: 24,
+  __version: 10
     };
   }
 
@@ -302,6 +308,8 @@ export class StorageManager {
         ...(p.proxyUrl !== undefined ? { proxyUrl: p.proxyUrl } : {}),
         ...(p.tvPreview !== undefined ? { tvPreview: p.tvPreview } : {}),
         ...(p.tvPreviewMode !== undefined ? { tvPreviewMode: p.tvPreviewMode } : {}),
+        ...(p.startOnLastChannel !== undefined ? { startOnLastChannel: p.startOnLastChannel } : {}),
+        ...(p.playlistRefreshHours !== undefined ? { playlistRefreshHours: p.playlistRefreshHours } : {}),
         ...(p.__version !== undefined ? { __version: p.__version } : {})
       };
       return this.migrateIfNeeded(base);
@@ -334,7 +342,9 @@ export class StorageManager {
       proxyUrl: typeof s.proxyUrl === 'string' ? String(s.proxyUrl).slice(0, 300) : '',
       tvPreview: coerceBool(s.tvPreview, base.tvPreview as boolean),
       tvPreviewMode: s.tvPreviewMode === 'manual' || s.tvPreviewMode === 'off' || s.tvPreviewMode === 'auto' ? s.tvPreviewMode : 'auto',
-      __version: 9
+      startOnLastChannel: coerceBool(s.startOnLastChannel, false),
+      playlistRefreshHours: typeof s.playlistRefreshHours === 'number' && Number.isInteger(s.playlistRefreshHours) && s.playlistRefreshHours >= 0 && s.playlistRefreshHours <= 168 ? s.playlistRefreshHours : 24,
+      __version: 10
     };
     return this.migrateIfNeeded(safe);
   }
@@ -390,6 +400,12 @@ export class StorageManager {
     if (s.__version < 9) {
       if (s.tvPreviewMode === undefined) s.tvPreviewMode = s.tvPreview === false ? 'off' : 'auto';
       s.__version = 9;
+    }
+    // v9 -> v10 (démarrage sur la dernière chaîne, actualisation automatique de la liste)
+    if (s.__version < 10) {
+      if (s.startOnLastChannel === undefined) s.startOnLastChannel = false;
+      if (s.playlistRefreshHours === undefined) s.playlistRefreshHours = 24;
+      s.__version = 10;
     }
     if (s.playbackRate !== undefined) s.playbackRate = Math.min(2, Math.max(0.5, s.playbackRate));
     return s;

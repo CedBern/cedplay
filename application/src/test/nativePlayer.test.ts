@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NativePlayerBridge, RecordingsBridge, buildNativeZap } from '@/utils/nativePlayer';
+import { NativePlayerBridge, RecordingsBridge, buildNativeZap, findChannelByNumber } from '@/utils/nativePlayer';
 import { isPlaybackDelegated, onPlaybackDelegated, setPlaybackDelegated } from '@/utils/playbackOwnership';
+import type { Channel } from '@/types/channel';
 
 const mocks = vi.hoisted(() => ({
   platform: 'android', available: true,
@@ -105,7 +106,7 @@ describe('Passation au lecteur Android', () => {
 });
 
 it('renvoie seulement une chaîne appartenant au contexte et maintient le verrou pendant son traitement', async () => {
-  const channels = Array.from({ length: 2501 }, (_, i) => ({ id: String(i), name: `Chaîne ${i}`, url: `https://example.test/${i}.ts` }));
+  const channels: Channel[] = Array.from({ length: 2501 }, (_, i) => ({ id: String(i), name: `Chaîne ${i}`, url: `https://example.test/${i}.ts` }));
   const zap = buildNativeZap(channels, channels[2001]);
   expect(zap.urls.length).toBeLessThanOrEqual(300);
   expect(zap.urls[zap.index]).toBe(channels[2001].url);
@@ -143,7 +144,86 @@ it('joint groupes et programmes à venir au contexte de zapping', () => {
 it('garde les voisins quand la chaîne sélectionnée est une variante', () => {
   const variant = { id: 'a-hd', name: 'A HD', url: 'https://example.test/a-hd' };
   const base = { id: 'a', name: 'A', url: 'https://example.test/a', variants: [variant] };
-  expect(buildNativeZap([base, { id: 'b', name: 'B', url: 'https://example.test/b' }], variant)).toEqual({ urls: [variant.url, 'https://example.test/b'], titles: ['A HD', 'B'], index: 0 });
+  expect(buildNativeZap([base, { id: 'b', name: 'B', url: 'https://example.test/b' }], variant)).toEqual({ urls: [variant.url, 'https://example.test/b'], titles: ['A HD', 'B'], index: 0, numbers: ['1', '2'], total: 2 });
+});
+
+describe('Numéros de chaîne', () => {
+  const channels: Channel[] = Array.from({ length: 2501 }, (_, i) => ({ id: String(i), name: `Chaîne ${i}`, url: `https://example.test/${i}.ts` }));
+
+  it('numérote le contexte avec tvg-chno, sinon la position dans la liste complète', () => {
+    const list = [...channels];
+    list[2000] = { ...list[2000], chno: '42' };
+    const zap = buildNativeZap(list, list[2001]);
+    expect(zap.total).toBe(2501);
+    expect(zap.numbers?.length).toBe(zap.urls.length);
+    expect(zap.numbers?.[zap.index]).toBe('2002');
+    expect(zap.numbers?.[zap.index - 1]).toBe('42');
+  });
+
+  it('retrouve une chaîne par tvg-chno avant la position, zéros de tête ignorés', () => {
+    const list = [
+      { id: 'a', name: 'A', url: 'https://example.test/a', chno: '7' },
+      { id: 'b', name: 'B', url: 'https://example.test/b' },
+    ];
+    expect(findChannelByNumber(list, '007')?.id).toBe('a');
+    expect(findChannelByNumber(list, '2')?.id).toBe('b');
+    expect(findChannelByNumber(list, '3')).toBeNull();
+    expect(findChannelByNumber(list, '0')).toBeNull();
+  });
+
+  it('ne donne jamais à la position un numéro déjà porté par un tvg-chno lointain', () => {
+    const list = [...channels];
+    list[2000] = { ...list[2000], chno: '1' };
+    const nearStart = buildNativeZap(list, list[0]);
+    expect(nearStart.numbers?.[0]).toBe('');
+    expect(nearStart.numbers).not.toContain('1');
+    expect(findChannelByNumber(list, '1')?.id).toBe('2000');
+    const nearFar = buildNativeZap(list, list[2000]);
+    expect(nearFar.numbers?.[nearFar.index]).toBe('1');
+  });
+
+  it('garde un tvg-chno en double pour sa première chaîne seulement', () => {
+    const list = [...channels];
+    list[100] = { ...list[100], chno: '5' };
+    list[1900] = { ...list[1900], chno: '005' };
+    const zap = buildNativeZap(list, list[1900]);
+    expect(zap.numbers?.[zap.index]).toBe('1901');
+    expect(zap.numbers).not.toContain('5');
+    expect(findChannelByNumber(list, '5')?.id).toBe('100');
+  });
+
+  it('chaque numéro transmis désigne pour la page la même chaîne que pour le lecteur', () => {
+    const list = channels.map((c, i) => (i % 97 === 0 ? { ...c, chno: String((i * 7) % 3000) } : c));
+    for (const at of [0, 150, 1234, 2400, 2500]) {
+      const zap = buildNativeZap(list, list[at]);
+      zap.numbers?.forEach((n, i) => {
+        if (!n) return;
+        expect(findChannelByNumber(list, n)?.url).toBe(zap.urls[i]);
+      });
+      const shown = (zap.numbers ?? []).filter(Boolean);
+      expect(new Set(shown).size).toBe(shown.length);
+    }
+  });
+
+  it('transmet les numéros au plugin et relance sur un numéro hors contexte après la fermeture', async () => {
+    const zap = buildNativeZap(channels, channels[10]);
+    mocks.open.mockResolvedValue({ channelUrl: channels[10].url, jumpNumber: '2400' });
+    const jump = vi.fn(() => expect(isPlaybackDelegated()).toBe(false));
+    expect(await NativePlayerBridge.open(channels[10].url, channels[10].name, zap, undefined, jump)).toBe(true);
+    expect(mocks.open).toHaveBeenCalledWith(expect.objectContaining({ channelNumbers: zap.numbers, channelTotal: 2501 }));
+    expect(jump).not.toHaveBeenCalled();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(jump).toHaveBeenCalledWith('2400');
+  });
+
+  it('ignore un numéro renvoyé invalide', async () => {
+    const zap = buildNativeZap(channels, channels[10]);
+    mocks.open.mockResolvedValue({ channelUrl: channels[10].url, jumpNumber: '12a' });
+    const jump = vi.fn();
+    await NativePlayerBridge.open(channels[10].url, channels[10].name, zap, undefined, jump);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(jump).not.toHaveBeenCalled();
+  });
 });
 
 it('sauvegarde chaque épisode visité sous sa propre identité après zapping', async () => {

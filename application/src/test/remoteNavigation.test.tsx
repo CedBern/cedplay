@@ -98,6 +98,23 @@ it('redirige immédiatement un focus natif sur un cadre vers son bouton utilisab
   expect(screen.getByText('Lire la chaîne')).toHaveFocus();
 });
 
+it('ne redirige pas les écrans autogérés (data-remote-self) : leur focus reste en place', () => {
+  // Ces écrans posent eux-mêmes le focus à chaque flèche ; la redirection natif→bouton
+  // y est inutile et son scan document-entier coûtait une passe par déplacement.
+  geometry();
+  function Screen() {
+    useRemoteNavigation();
+    return <div data-remote-self>
+      <button data-remote-start>Démarrer</button>
+      <div role="tabpanel" tabIndex={0}><button>Action interne</button></div>
+    </div>;
+  }
+  render(<Screen />);
+  fireEvent.keyDown(document.body, { key: 'ArrowDown' });
+  screen.getByRole('tabpanel').focus();
+  expect(screen.getByRole('tabpanel')).toHaveFocus();
+});
+
 it('les panneaux Radix ne constituent plus un arrêt de navigation clavier ou TV', async () => {
   render(<Tabs defaultValue="direct"><TabsList><TabsTrigger value="direct">Direct</TabsTrigger></TabsList>
     <TabsContent value="direct"><button>Lire</button></TabsContent>
