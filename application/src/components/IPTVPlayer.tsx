@@ -530,25 +530,15 @@ export function IPTVPlayer() {
   // Zapping stable (préc./suiv.) : évite de re-rendre le lecteur à chaque état parent.
   const onNextChannel = useMemo(() => (currentChannelIndex >= 0 ? () => zap(1) : undefined), [currentChannelIndex, zap]);
   const onPrevChannel = useMemo(() => (currentChannelIndex >= 0 ? () => zap(-1) : undefined), [currentChannelIndex, zap]);
-    // Zapping numérique (saisie des chiffres dans le lecteur).
+  // Zapping numérique (saisie des chiffres dans le lecteur) : même résolution que la box,
+  // numérotation canonique partagée (chno/num fournisseur d'abord, sinon position).
   const zapToNumber = useCallback((number: number) => {
     const list = playableChannels;
     if (!list.length || !Number.isFinite(number) || number <= 0) return;
-    // Favoris d'abord : 1 = premier favori de cette liste.
-    const favoriteChannels = favoriteIds
-      .map(id => list.find(c => c.id === id || c.variants?.some(v => v.id === id)))
-      .filter((c): c is Channel => Boolean(c));
-    if (number <= favoriteChannels.length) {
-      const target = favoriteChannels[number - 1];
-      if (target.id !== currentChannel?.id) handleChannelSelect(target);
-      return;
-    }
-    // D'abord le numéro de chaîne M3U (tvg-chno), sinon la position dans la liste.
-    const byChno = list.findIndex(c => c.chno === String(number));
-    const idx = byChno >= 0 ? byChno : Math.min(number - 1, list.length - 1);
-    const target = list[idx];
+    const target = findChannelByNumber(list, String(number));
     if (target && target.id !== currentChannel?.id) handleChannelSelect(target);
-  }, [playableChannels, currentChannel, handleChannelSelect, favoriteIds]);
+    else if (!target) toast.error(`Aucune chaîne n° ${number}`);
+  }, [playableChannels, currentChannel, handleChannelSelect]);
   const epg = useEPG(currentPlaylist, appSettings);
   const epgData = epg.data;
 
@@ -912,6 +902,7 @@ export function IPTVPlayer() {
               <LazyTvLiveScreen
                 playlistId={currentPlaylist.id}
                 groups={visibleGroups}
+                zapList={playableChannels}
                 favoriteIds={favoriteIds}
                 epgData={epgData}
                 currentChannel={currentChannel}

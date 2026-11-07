@@ -38,6 +38,7 @@ import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.content.res.ColorStateList;
 import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.PlaybackParameters;
@@ -113,6 +114,10 @@ public class NativePlayerActivity extends AppCompatActivity {
     private boolean afrEnabled;
     /** Reprises automatiques après une erreur transitoire (coupure réseau, serveur surchargé). */
     private static final int AUTO_RETRY_MAX = 2;
+    /** Fenêtre de rafale P+/P− : les appuis suivant le premier coalescent en un seul tune. */
+    private static final int ZAP_SETTLE_MS = 350;
+    /** Durée d'affichage du bandeau de zap. */
+    private static final int ZAP_OVERLAY_MS = 3000;
 
     private ExoPlayer player;
     private PlayerView playerView;
@@ -134,12 +139,40 @@ public class NativePlayerActivity extends AppCompatActivity {
     private ArrayList<JSONArray> channelPrograms;
     /** Numéro affiché de chaque chaîne du contexte (tvg-chno, sinon position dans la liste complète). */
     private ArrayList<String> channelNumbers;
+    /** Logo (URL) de chaque chaîne du contexte : affiché dans le bandeau de zap. */
+    private ArrayList<String> channelLogos;
     /** Taille de la liste complète côté page : au-delà du contexte, la page relance sur le numéro saisi. */
     private int channelTotal = 0;
-    /** Saisie du numéro de chaîne aux touches 0-9 de la télécommande. */
+    /** Saisie du numéro de chaîne aux touches 0-9 de la télécommande (9 chiffres : numéros choisis). */
     private final ChannelNumberInput numberBuffer = new ChannelNumberInput();
     private final Handler numberHandler = new Handler(Looper.getMainLooper());
     private TextView numberOverlay;
+    /** Bandeau de zap : logo, numéro · nom et programme en cours de la chaîne visée. */
+    private LinearLayout zapOverlay;
+    private ImageView zapLogo;
+    private TextView zapHeadline, zapProgram;
+    private final Handler zapHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hideZapRunnable = () -> { if (zapOverlay != null) zapOverlay.setVisibility(View.GONE); };
+    /** Cible cumulée des appuis P+/P− rapprochés : un seul tune à la fin de la rafale. */
+    private int pendingZapTarget = -1;
+    /** Vrai du premier appui P+/P− jusqu'à la fin de la fenêtre de rafale : le premier
+     *  appui accorde immédiatement, les suivants coalescent pendant ZAP_SETTLE_MS. */
+    private boolean zapBurst;
+    private final Runnable zapCommitRunnable = this::commitPendingZap;
+    /** Minuteur du tune de rafale, distinct de hideHandler : le masquage des commandes purge
+     *  tout le minuteur de la barre (removeCallbacksAndMessages) et ne doit pas annuler le
+     *  tune en attente (ex. deux appuis P+ puis OK avant la fin de la rafale). Il ne meurt
+     *  qu'avec un nouveau zap, un saut direct ou la sortie (cancelPendingZap). */
+    private final Handler zapCommitHandler = new Handler(Looper.getMainLooper());
+    /** Chargeur de logos du bandeau : deux fils d'exécution et un cache mémoire, sans dépendance. */
+    private static final int LOGO_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+    /** Cache borné en octets (et non en entrées) : un logo grand format ne chasse pas dix petits. */
+    private final android.util.LruCache<String, android.graphics.Bitmap> logoCache = new android.util.LruCache<String, android.graphics.Bitmap>(LOGO_CACHE_MAX_BYTES) {
+        @Override protected int sizeOf(String key, android.graphics.Bitmap value) { return value.getByteCount(); }
+    };
+    private java.util.concurrent.ExecutorService logoExecutor;
+    /** Dernière chaîne visée : les téléchargements de logos périmés sortent de la file sans se lancer. */
+    private final java.util.concurrent.atomic.AtomicInteger zapWantedTarget = new java.util.concurrent.atomic.AtomicInteger(-1);
     /** Numéro demandé hors du contexte chargé : rendu à la page à la fermeture. */
     private String jumpNumber;
     private LinearLayout infoBar;
@@ -346,7 +379,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                 }
                 JSONArray entries = new JSONArray(json.toString());
                 channelUrls = new java.util.ArrayList<>(); channelTitles = new java.util.ArrayList<>();
-                channelGroups = new ArrayList<>(); channelPrograms = new ArrayList<>(); channelNumbers = new ArrayList<>();
+                channelGroups = new ArrayList<>(); channelPrograms = new ArrayList<>(); channelNumbers = new ArrayList<>(); channelLogos = new ArrayList<>();
                 for (int i = 0; i < entries.length(); i++) {
                     JSONArray entry = entries.getJSONArray(i);
                     channelUrls.add(entry.getString(0)); channelTitles.add(entry.getString(1));
@@ -354,6 +387,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                     JSONArray programs = entry.length() > 3 ? entry.optJSONArray(3) : null;
                     channelPrograms.add(programs != null ? programs : new JSONArray());
                     channelNumbers.add(entry.length() > 4 ? entry.optString(4, "") : "");
+                    channelLogos.add(entry.length() > 5 ? entry.optString(5, "") : "");
                 }
                 channelTotal = Math.max(channelUrls.size(), getIntent().getIntExtra("channelTotal", channelUrls.size()));
                 if (channelIndex >= 0 && channelIndex < channelUrls.size()) {
@@ -370,7 +404,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                 || channelUrls.size() != channelTitles.size()
                 || channelIndex < 0 || channelIndex >= channelUrls.size()) {
             channelUrls = null; channelTitles = null; channelIndex = -1;
-            channelGroups = null; channelPrograms = null; channelNumbers = null; channelTotal = 0;
+            channelGroups = null; channelPrograms = null; channelNumbers = null; channelLogos = null; channelTotal = 0;
             programLineCache.clear();
         }
         if (savedInstanceState != null) previousIndex = savedInstanceState.getInt("previousIndex", -1);
@@ -713,7 +747,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (tvUi) buildTvBand(root);
         // Liste des chaînes (direct) ou des épisodes (série).
         if (channelUrls != null && (!vod || episodeIds != null)) buildChannelPanel(root);
-        if (!vod && channelUrls != null) buildNumberOverlay(root);
+        if (!vod && channelUrls != null) { buildNumberOverlay(root); buildZapOverlay(root); }
         buildCornerBadge(root);
         if (!tvUi) {
             optionsSheet = new OptionsSheet(this, root, new OptionsSheet.Listener() {
@@ -908,10 +942,14 @@ public class NativePlayerActivity extends AppCompatActivity {
             ArrayList<JSONArray> programs = new ArrayList<>(urls.size());
             for (int i = 0; i < urls.size(); i++) programs.add(UNKNOWN_EPG);
             if (channelPrograms != null) for (int i = 0; i < channelPrograms.size(); i++) programs.set(windowStart + i, channelPrograms.get(i));
+            // Logos du bandeau : ceux de la fenêtre restent valables ; vide ailleurs (texte seul).
+            ArrayList<String> logos = new ArrayList<>(urls.size());
+            for (int i = 0; i < urls.size(); i++) logos.add("");
+            if (channelLogos != null) for (int i = 0; i < channelLogos.size(); i++) logos.set(windowStart + i, channelLogos.get(i));
             // La chaîne lancée peut être une variante (autre qualité) de la ligne de la liste.
             if (!savedIndexIsFull && streamUrl != null) { urls.set(current, streamUrl); if (streamTitle != null) titles.set(current, streamTitle); }
             if (savedIndexIsFull) { streamUrl = urls.get(current); streamTitle = titles.get(current); }
-            channelUrls = urls; channelTitles = titles; channelGroups = groups; channelNumbers = numbers; channelPrograms = programs;
+            channelUrls = urls; channelTitles = titles; channelGroups = groups; channelNumbers = numbers; channelPrograms = programs; channelLogos = logos;
             channelIndex = current; previousIndex = previous; channelTotal = urls.size();
             programLineCache.clear();
             fullListAdopted = true;
@@ -922,18 +960,36 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void switchChannel(int delta) {
         if (channelUrls == null || channelTitles == null || channelIndex < 0) return;
         int size = channelUrls.size();
-        int next;
         if (vod) {
-            next = channelIndex + delta;
-            if (next < 0 || next >= size) return;
-        } else {
-            next = (channelIndex + delta + size) % size;
+            int nextVod = channelIndex + delta;
+            if (nextVod < 0 || nextVod >= size) return;
+            switchTo(nextVod);
+            return;
         }
-        switchTo(next);
+        // P+/P− : le premier appui accorde immédiatement (réactivité type TiviMate) ; les
+        // appuis suivants de la rafale cumulent la cible, le bandeau suit aussitôt et le
+        // tune n'a lieu qu'après ZAP_SETTLE_MS sans nouvel appui — un appui maintenu ne
+        // prépare le flux qu'une seconde fois au lieu de re-préparer à chaque répétition.
+        if (zapStartedAtMs == 0) zapStartedAtMs = SystemClock.elapsedRealtime();
+        int base = pendingZapTarget >= 0 ? pendingZapTarget : channelIndex;
+        int next = (base + delta + size) % size;
+        if (!zapBurst) {
+            switchTo(next);
+            zapBurst = true;
+            zapCommitHandler.removeCallbacks(zapCommitRunnable);
+            zapCommitHandler.postDelayed(zapCommitRunnable, ZAP_SETTLE_MS);
+            return;
+        }
+        pendingZapTarget = next;
+        showZapOverlay(next);
+        zapCommitHandler.removeCallbacks(zapCommitRunnable);
+        zapCommitHandler.postDelayed(zapCommitRunnable, ZAP_SETTLE_MS);
     }
 
     private void switchTo(int next) {
         cancelNextEpisode();
+        // Un saut direct (numéro validé, panneau) prime sur un zap P+/P− en attente.
+        cancelPendingZap();
         if (channelUrls == null || channelTitles == null || channelIndex < 0) return;
         if (next < 0 || next >= channelUrls.size() || next == channelIndex) return;
         if (recording) stopRecording();
@@ -980,8 +1036,29 @@ public class NativePlayerActivity extends AppCompatActivity {
         } else {
             initPlayer(streamUrl);
         }
-        // TV : bandeau ouvert, il le reste ; sinon, bandeau d'infos seul, sans prendre le focus.
-        if (tvUi && !isControlsVisible) showInfoOnly(); else showControls();
+        if (!vod) showZapOverlay(next);
+        // TV : bandeau de commandes ouvert, il le reste ; sinon le bandeau de zap avec logo suffit, sans doublon en bas.
+        if (tvUi && !isControlsVisible) {
+            if (vod) showInfoOnly();
+            else { updateInfoBar(); updateCornerBadge(); }
+        } else {
+            showControls();
+        }
+    }
+
+    /** Tune effectif à la fin d'une rafale P+/P− (cible cumulée, ou simple fin de fenêtre). */
+    private void commitPendingZap() {
+        int target = pendingZapTarget;
+        pendingZapTarget = -1;
+        zapBurst = false;
+        if (target >= 0 && target != channelIndex) switchTo(target);
+    }
+
+    /** Annule un zap P+/P− en attente : sans ça, le tune survit à Home (activité plus visible). */
+    private void cancelPendingZap() {
+        zapCommitHandler.removeCallbacks(zapCommitRunnable);
+        pendingZapTarget = -1;
+        zapBurst = false;
     }
 
     private void openInVlc() {
@@ -1925,7 +2002,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         // Une interruption ouverte appartient au média quitté : la clôturer ici, sinon son
         // chronomètre déborderait sur le chargement puis la lecture de la chaîne suivante.
         rebuffer.close();
-        zapStartedAtMs = SystemClock.elapsedRealtime();
+        if (zapStartedAtMs == 0) zapStartedAtMs = SystemClock.elapsedRealtime();
         firstFrameLogged = false;
         hideError();
         loadingBar.setVisibility(View.VISIBLE);
@@ -2096,6 +2173,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         // panneau ouvert retiendrait l'activité en mémoire et travaillerait en arrière-plan.
         stopPanelFrameSampling();
         cancelNumberEntry();
+        cancelPendingZap();
+        hideZapOverlay();
         resumed = false;
         // En petite fenêtre, l'activity est en pause mais la vidéo doit continuer.
         if (isInPipMode()) return;
@@ -2118,6 +2197,9 @@ public class NativePlayerActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         numberHandler.removeCallbacksAndMessages(null);
+        zapHandler.removeCallbacksAndMessages(null);
+        cancelPendingZap();
+        if (logoExecutor != null) logoExecutor.shutdownNow();
         logSessionSummary();
         cancelNextEpisode();
         if (isFinishing()) {
@@ -2522,6 +2604,118 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void hideNumberOverlay() {
         if (numberOverlay != null) numberOverlay.setVisibility(View.GONE);
+    }
+
+    /** Bandeau de zap (haut-gauche, sous la barre de commandes) : logo, numéro · nom,
+     *  programme en cours. Jamais focalisable : la télécommande reste à la page. */
+    private void buildZapOverlay(FrameLayout root) {
+        zapOverlay = new LinearLayout(this);
+        zapOverlay.setOrientation(LinearLayout.HORIZONTAL);
+        zapOverlay.setGravity(Gravity.CENTER_VERTICAL);
+        zapOverlay.setPadding(dp(12), dp(8), dp(16), dp(8));
+        zapOverlay.setBackground(rounded(Color.argb(235, 20, 20, 23), 12));
+        zapLogo = new ImageView(this);
+        zapLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        zapLogo.setVisibility(View.GONE);
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        logoLp.setMarginEnd(dp(12));
+        zapOverlay.addView(zapLogo, logoLp);
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        zapHeadline = new TextView(this);
+        zapHeadline.setTextColor(C_TEXT);
+        zapHeadline.setTextSize(17);
+        zapHeadline.setTypeface(Typeface.DEFAULT_BOLD);
+        zapHeadline.setMaxLines(1);
+        zapHeadline.setMaxWidth(dp(340));
+        zapProgram = new TextView(this);
+        zapProgram.setTextColor(C_MUTED);
+        zapProgram.setTextSize(13);
+        zapProgram.setMaxLines(1);
+        zapProgram.setMaxWidth(dp(340));
+        textCol.addView(zapHeadline);
+        textCol.addView(zapProgram);
+        zapOverlay.addView(textCol, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        zapOverlay.setVisibility(View.GONE);
+        // Sous la barre de commandes : pas de chevauchement quand elle est affichée.
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
+        lp.setMargins(dp(24), dp(72), dp(24), dp(24));
+        root.addView(zapOverlay, lp);
+    }
+
+    /** Affiche le bandeau sur la chaîne visée et programme son masquage. */
+    private void showZapOverlay(int target) {
+        if (zapOverlay == null || channelTitles == null || target < 0 || target >= channelTitles.size()) return;
+        zapWantedTarget.set(target); // les téléchargements de logos périmés sortent de la file
+        String number = numberAt(target);
+        String name = channelTitles.get(target);
+        String head = number.isEmpty() ? name : number + "  " + name;
+        SpannableString text = new SpannableString(head);
+        if (!number.isEmpty()) {
+            text.setSpan(new ForegroundColorSpan(C_ACCENT), 0, number.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            text.setSpan(new ForegroundColorSpan(C_TEXT), number.length(), head.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        zapHeadline.setText(text);
+        ProgramLine line = programLineOf(target, System.currentTimeMillis());
+        zapProgram.setText(line.hasProgram ? line.text
+            : (channelGroups != null && target >= 0 && target < channelGroups.size() ? channelGroups.get(target) : ""));
+        loadZapLogo(target);
+        zapOverlay.setVisibility(View.VISIBLE);
+        zapOverlay.bringToFront();
+        zapHandler.removeCallbacks(hideZapRunnable);
+        zapHandler.postDelayed(hideZapRunnable, ZAP_OVERLAY_MS);
+    }
+
+    private void hideZapOverlay() {
+        zapHandler.removeCallbacks(hideZapRunnable);
+        if (zapOverlay != null) zapOverlay.setVisibility(View.GONE);
+    }
+
+    /** Logo de la chaîne dans le bandeau : cache mémoire, deux fils d'exécution, échec ou URL
+     *  vide → logo masqué (texte seul). Aucune URL dans les logs. */
+    private void loadZapLogo(int target) {
+        String url = channelLogos != null && target >= 0 && target < channelLogos.size() ? channelLogos.get(target) : "";
+        zapLogo.setTag(url);
+        if (url.isEmpty()) { zapLogo.setImageDrawable(null); zapLogo.setVisibility(View.GONE); return; }
+        android.graphics.Bitmap cached = logoCache.get(url);
+        if (cached != null) { zapLogo.setImageBitmap(cached); zapLogo.setVisibility(View.VISIBLE); return; }
+        zapLogo.setImageDrawable(null);
+        zapLogo.setVisibility(View.GONE);
+        // Deux fils : un téléchargement déjà commencé ne retarde plus le suivant — les
+        // demandes périmées sortent de toute façon de la file avant même de se connecter.
+        if (logoExecutor == null) logoExecutor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        final ImageView view = zapLogo;
+        logoExecutor.execute(() -> {
+            // Une cible plus récente a été visée : on sort sans télécharger, la file passe
+            // aussitôt à la demande à jour au lieu de tarder sur du périmé.
+            if (target != zapWantedTarget.get()) return;
+            android.graphics.Bitmap bitmap = null;
+            try {
+                java.net.HttpURLConnection connection = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                try (java.io.InputStream in = connection.getInputStream()) {
+                    android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+                    options.inSampleSize = 2; // Les logos sont petits à l'écran : la moitié suffit.
+                    bitmap = android.graphics.BitmapFactory.decodeStream(in, null, options);
+                } finally {
+                    connection.disconnect();
+                }
+            } catch (Exception ignored) { /* pas de logo : le bandeau reste textuel */ }
+            final android.graphics.Bitmap result = bitmap;
+            runOnUiThread(() -> {
+                // Une autre chaîne a pu être visée pendant le chargement.
+                if (!url.equals(view.getTag())) return;
+                if (result != null) {
+                    logoCache.put(url, result);
+                    view.setImageBitmap(result);
+                    view.setVisibility(View.VISIBLE);
+                } else {
+                    view.setImageDrawable(null);
+                    view.setVisibility(View.GONE);
+                }
+            });
+        });
     }
 
     /** Abandonne la saisie en cours : sans ça, le délai de validation survit à Home et

@@ -29,6 +29,18 @@ function xtreamPlaylist(id: string, groups: Record<string, Array<[number, string
 beforeEach(() => { localStorage.clear(); fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 
+describe('Numérotation Xtream', () => {
+  it('reprend le numéro du fournisseur (num) comme numéro de chaîne, ignore 0 et absence', () => {
+    const withNum = buildLiveChannel(account, { stream_id: 10, name: 'Info 1', num: 42, stream_icon: 'http://i.test/a.png' }, 'FR | Info', 'm3u8');
+    expect(withNum.chno).toBe('42');
+    expect(withNum.logo).toBe('http://i.test/a.png');
+    const zero = buildLiveChannel(account, { stream_id: 11, name: 'Info 2', num: 0 }, 'FR | Info', 'm3u8');
+    expect(zero.chno).toBeUndefined();
+    const none = buildLiveChannel(account, { stream_id: 12, name: 'Info 3' }, 'FR | Info', 'm3u8');
+    expect(none.chno).toBeUndefined();
+  });
+});
+
 describe('Actualisation des listes Xtream', () => {
   it('reprend les catégories choisies à l\'import, avec les mêmes identifiants de chaînes', async () => {
     const before = xtreamPlaylist('p1', { 'FR | Info': [[10, 'Info 1']] });

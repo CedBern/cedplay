@@ -303,3 +303,26 @@ it('journalise aussi le bilan du direct et rien sans bilan', async () => {
   await flush();
   expect(telemetry.log).not.toHaveBeenCalled();
 });
+it('transmet les logos au plugin et les omet quand aucune chaîne n’en porte', async () => {
+  const withLogo: Channel[] = [
+    { id: '1', name: 'Une', url: 'https://example.test/1.ts', logo: 'https://example.test/1.png' },
+    { id: '2', name: 'Deux', url: 'https://example.test/2.ts' },
+  ];
+  const zapWithLogo = buildNativeZap(withLogo, withLogo[0]);
+  expect(zapWithLogo.logos).toEqual(['https://example.test/1.png', '']);
+  mocks.open.mockResolvedValueOnce({ channelUrl: withLogo[0].url });
+  await NativePlayerBridge.open(withLogo[0].url, withLogo[0].name, zapWithLogo);
+  expect(mocks.open).toHaveBeenLastCalledWith(expect.objectContaining({
+    channelLogos: ['https://example.test/1.png', ''],
+  }));
+
+  const withoutLogo: Channel[] = [
+    { id: '1', name: 'Une', url: 'https://example.test/1.ts' },
+    { id: '2', name: 'Deux', url: 'https://example.test/2.ts' },
+  ];
+  const zapWithoutLogo = buildNativeZap(withoutLogo, withoutLogo[0]);
+  expect(zapWithoutLogo.logos).toBeUndefined();
+  mocks.open.mockResolvedValueOnce({ channelUrl: withoutLogo[0].url });
+  await NativePlayerBridge.open(withoutLogo[0].url, withoutLogo[0].name, zapWithoutLogo);
+  expect(mocks.open.mock.lastCall?.[0]).not.toHaveProperty('channelLogos');
+});

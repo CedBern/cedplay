@@ -353,7 +353,8 @@ export function VideoPlayer({ channel, className = '', autoplay = true, keyboard
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
         setZapBuffer(prev => {
-          const next = (prev + e.key).slice(0, 4);
+          // Longueur unique avec le lecteur natif et l'écran Direct : 5 chiffres.
+          const next = (prev + e.key).slice(0, 5);
           if (zapTimerRef.current !== null) clearTimeout(zapTimerRef.current);
           zapTimerRef.current = setTimeout(() => { setZapBuffer(''); }, 1500);
           return next;
@@ -378,6 +379,15 @@ export function VideoPlayer({ channel, className = '', autoplay = true, keyboard
           onPrevChannel?.();
           break;
         case 'PageDown':
+          e.preventDefault();
+          onNextChannel?.();
+          break;
+        // Touches chaîne de la télécommande : même zapping que Page haut/bas.
+        case 'ChannelUp':
+          e.preventDefault();
+          onPrevChannel?.();
+          break;
+        case 'ChannelDown':
           e.preventDefault();
           onNextChannel?.();
           break;

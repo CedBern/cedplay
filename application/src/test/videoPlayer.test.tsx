@@ -116,5 +116,12 @@ describe('VideoPlayer', () => {
     fireEvent.keyDown(window, { key: 'PageDown' });
     expect(onNextChannel).toHaveBeenCalledTimes(1);
     expect(onPrevChannel).toHaveBeenCalledTimes(1);
+
+    // Touches chaîne de la télécommande : même zapping que Page haut/bas.
+    fireEvent.keyDown(window, { key: 'ChannelUp' });
+    expect(onPrevChannel).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(window, { key: 'ChannelDown' });
+    expect(onNextChannel).toHaveBeenCalledTimes(2);
+    expect(onPrevChannel).toHaveBeenCalledTimes(2);
   });
 });

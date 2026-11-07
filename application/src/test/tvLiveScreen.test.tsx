@@ -115,7 +115,61 @@ it('groupe protégé : liste vide, OK demande le code', () => {
 it('les favoris s’ouvrent en premier quand il y en a', () => {
   setup({ favoriteIds: ['be-1'] });
   expect(screen.getByRole('heading', { name: 'Favoris' })).toBeVisible();
-  expect(active()).toHaveAccessibleName('1. Bruxelles');
+  // Numérotation canonique : Bruxelles porte le numéro 4 de la liste complète,
+  // pas la position 1 de la catégorie Favoris.
+  expect(active()).toHaveAccessibleName('4. Bruxelles');
+});
+
+it('les chiffres composent un numéro, la sélection rejoint la chaîne après validation', () => {
+  vi.useFakeTimers();
+  try {
+    setup({ zapList: [...fr, ...be] });
+    key('2');
+    expect(screen.getByRole('status', { name: 'Zapping' })).toHaveTextContent('2');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(active().dataset.tvRow).toBe('1');
+    expect(active()).toHaveAccessibleName('2. Culture');
+    expect(screen.queryByRole('status', { name: 'Zapping' })).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it('un numéro sans chaîne affiche le message et ne déplace pas la sélection', () => {
+  vi.useFakeTimers();
+  try {
+    setup({ zapList: [...fr, ...be] });
+    key('9');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(screen.getByRole('status', { name: 'Zapping' })).toHaveTextContent('Aucune chaîne n° 9');
+    expect(active().dataset.tvRow).toBe('0');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(screen.queryByRole('status', { name: 'Zapping' })).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it('le tampon accepte 5 chiffres, comme le lecteur natif', () => {
+  vi.useFakeTimers();
+  try {
+    setup({ zapList: [...fr, ...be] });
+    for (const d of ['1', '2', '3', '4', '5']) key(d);
+    expect(screen.getByRole('status', { name: 'Zapping' })).toHaveTextContent('12345');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(screen.getByRole('status', { name: 'Zapping' })).toHaveTextContent('Aucune chaîne n° 12345');
+  } finally { vi.useRealTimers(); }
+});
+
+it('un numéro d’une autre catégorie rejoint la chaîne et sa catégorie', () => {
+  vi.useFakeTimers();
+  try {
+    setup({ zapList: [...fr, ...be] });
+    // Partir d'une catégorie sans Bruxelles : la liste France (catégories triées : Adulte, Belgique, France).
+    key('ArrowLeft'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowRight');
+    act(() => { vi.advanceTimersByTime(600); }); // laisse la sélection de catégorie s'appliquer
+    expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
+    key('4');
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(screen.getByRole('heading', { name: 'Belgique' })).toBeVisible();
+    expect(active()).toHaveAccessibleName('4. Bruxelles');
+  } finally { vi.useRealTimers(); }
 });
 
 it('entrer dans une catégorie qui contient la chaîne en cours : le focus va sur elle', () => {

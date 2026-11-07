@@ -71,6 +71,8 @@ export function buildLiveChannel(account: XtreamLiveAccount, stream: RawStream, 
     group,
     ...(stream.stream_icon ? { logo: stream.stream_icon } : {}),
     ...(stream.custom_sid || stream.epg_channel_id ? { tvgId: stream.custom_sid || stream.epg_channel_id } : {}),
+    // Numéro du fournisseur : alimente la numérotation canonique partagée avec le lecteur Android.
+    ...(typeof stream.num === 'number' && stream.num > 0 ? { chno: String(stream.num) } : {}),
     isFavorite: false,
   };
 }

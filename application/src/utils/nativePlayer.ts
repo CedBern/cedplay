@@ -38,7 +38,7 @@ export interface ScheduledRecording {
 }
 
 interface NativePlayerPluginType {
-  open(options: { url: string; title?: string | undefined; tvUi?: boolean | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
+  open(options: { url: string; title?: string | undefined; tvUi?: boolean | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; channelLogos?: string[] | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
   openWeb(options: { url: string; title?: string | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
@@ -88,7 +88,7 @@ function isAvailable(): boolean {
 /** Programme transmis au lecteur Android : [début ms, fin ms, titre]. */
 export type NativeProgram = [number, number, string];
 export interface NativeZapContext {
-  urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][]; numbers?: string[]; total?: number;
+  urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][]; numbers?: string[]; total?: number; logos?: string[];
   /** Début de la fenêtre dans la liste complète. */
   start?: number;
   /** Liste complète déjà transmise au lecteur Android (zapping sur toutes les chaînes). */
@@ -229,6 +229,7 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
     total: ordered.length,
   };
   if (windowSlice.some(c => c.group)) zap.groups = windowSlice.map(c => c.group || '');
+  if (windowSlice.some(c => c.logo)) zap.logos = windowSlice.map(c => c.logo || '');
   // Chaîne trouvée dans une liste déjà transmise : le lecteur peut zapper sur toute la liste.
   if (syncedZapList?.channels === channels && index < channels.length) { zap.listKey = syncedZapList.key; zap.listIndex = index; }
   if (epg) {
@@ -270,6 +271,7 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
           ...(zap.groups?.length === zap.urls.length ? { channelGroups: zap.groups } : {}),
           ...(zap.epg?.length === zap.urls.length ? { channelEpg: zap.epg } : {}),
           ...(zap.numbers?.length === zap.urls.length ? { channelNumbers: zap.numbers, channelTotal: zap.total ?? zap.urls.length } : {}),
+          ...(zap.logos?.length === zap.urls.length ? { channelLogos: zap.logos } : {}),
           ...(zap.listKey && zap.listIndex !== undefined && zap.start !== undefined ? { listKey: zap.listKey, listIndex: zap.listIndex, windowStart: zap.start } : {}),
         }
         : {}),

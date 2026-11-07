@@ -105,9 +105,11 @@ public class NativePlayerPlugin extends Plugin {
                     JSArray groups = call.getArray("channelGroups", null);
                     JSArray epg = call.getArray("channelEpg", null);
                     JSArray numbers = call.getArray("channelNumbers", null);
+                    JSArray logos = call.getArray("channelLogos", null);
                     if (groups != null && groups.length() != urlList.size()) groups = null;
                     if (epg != null && epg.length() != urlList.size()) epg = null;
                     if (numbers != null && numbers.length() != urlList.size()) numbers = null;
+                    if (logos != null && logos.length() != urlList.size()) logos = null;
                     channelFile = File.createTempFile("zap-", ".json", getContext().getCacheDir());
                     try (JsonWriter writer = new JsonWriter(new OutputStreamWriter(new FileOutputStream(channelFile), StandardCharsets.UTF_8))) {
                         writer.beginArray();
@@ -125,6 +127,7 @@ public class NativePlayerPlugin extends Plugin {
                             }
                             writer.endArray();
                             writer.value(numbers != null ? numbers.optString(i, "") : "");
+                            writer.value(logos != null ? logos.optString(i, "") : "");
                             writer.endArray();
                         }
                         writer.endArray();
@@ -152,6 +155,7 @@ public class NativePlayerPlugin extends Plugin {
                 call.getData().remove("channelGroups");
                 call.getData().remove("channelEpg");
                 call.getData().remove("channelNumbers");
+                call.getData().remove("channelLogos");
             }
             launchPlayer(call, intent);
         } catch (Exception e) {

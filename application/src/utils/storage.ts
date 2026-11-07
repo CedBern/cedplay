@@ -59,6 +59,7 @@ const appSettingsSchema = z.object({
   autoLoadLastPlaylist: z.boolean().optional(),
   autoReconnect: z.boolean().optional(),
   epgUrl: z.string().max(500).optional(),
+  // Les jetons de lecture v4 TMDB font ~220 caractères : 200 les tronquait.
   tmdbApiKey: z.string().max(MAX_TMDB_CREDENTIAL_LENGTH).optional(),
   subtitlesEnabled: z.boolean().optional(),
   subtitleAutoTranslate: z.boolean().optional(),
@@ -342,6 +343,7 @@ export class StorageManager {
       autoLoadLastPlaylist: coerceBool(s.autoLoadLastPlaylist, base.autoLoadLastPlaylist as boolean),
       autoReconnect: coerceBool(s.autoReconnect, base.autoReconnect as boolean),
       epgUrl: typeof s.epgUrl === 'string' ? String(s.epgUrl).slice(0, 500) : (base.epgUrl as string),
+      // Large marge : les jetons de lecture v4 TMDB dépassent 200 caractères.
       tmdbApiKey: typeof s.tmdbApiKey === 'string' ? String(s.tmdbApiKey).slice(0, MAX_TMDB_CREDENTIAL_LENGTH) : (base.tmdbApiKey as string),
       subtitlesEnabled: coerceBool(s.subtitlesEnabled, base.subtitlesEnabled as boolean),
       subtitleAutoTranslate: coerceBool(s.subtitleAutoTranslate, base.subtitleAutoTranslate as boolean),

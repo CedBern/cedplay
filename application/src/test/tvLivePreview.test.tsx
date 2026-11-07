@@ -9,7 +9,11 @@ const bridge = vi.hoisted(() => ({
   hidePreview: vi.fn(async () => {}),
   onPreviewState: vi.fn((_listener: (state: string) => void) => () => {}),
 }));
-vi.mock('@/utils/nativePlayer', () => ({ NativePlayerBridge: bridge }));
+// Le pont natif est simulé ; le reste du module (numérotation partagée) reste réel.
+vi.mock('@/utils/nativePlayer', async importOriginal => ({
+  ...await importOriginal<typeof import('@/utils/nativePlayer')>(),
+  NativePlayerBridge: bridge,
+}));
 
 import { TvLiveScreen } from '@/components/TvLiveScreen';
 

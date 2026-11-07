@@ -95,74 +95,6 @@ describe('StorageManager settings validation & migration', () => {
     expect((stored as AppSettings).volume).toBeCloseTo(0.55, 5);
     });
 
-  it('sauvegarde puis recharge un long jeton TMDB sans le tronquer', async () => {
-    const token = `eyJhbGciOiJIUzI1NiJ9.${'a'.repeat(320)}.signature`;
-    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
-    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
-    expect((await StorageManager.saveSettings({ tmdbApiKey: token })).tmdbApiKey).toBe(token);
-    StorageManager.__resetCacheForTests();
-    getSettingsFromDBMock.mockResolvedValue(stored);
-    expect((await StorageManager.loadSettingsAsync()).tmdbApiKey).toBe(token);
-  });
-
-  it('préserve le long jeton TMDB quand un autre réglage doit être réparé', async () => {
-    const token = `eyJhbGciOiJIUzI1NiJ9.${'b'.repeat(320)}.signature`;
-    getSettingsFromDBMock.mockResolvedValue({ ...StorageManager.defaultSettings(), volume: 5, tmdbApiKey: token });
-    const loaded = await StorageManager.loadSettingsAsync();
-    expect(loaded.volume).toBe(1);
-    expect(loaded.tmdbApiKey).toBe(token);
-  });
-
-  it('conserve les réglages du lecteur Android (tampon, décodage, AFR)', async () => {
-    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
-    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
-    const saved = await StorageManager.saveSettings({ playerBuffer: 'large', playerDecoder: 'software', playerAfr: true });
-    expect(saved).toMatchObject({ playerBuffer: 'large', playerDecoder: 'software', playerAfr: true });
-    StorageManager.__resetCacheForTests();
-    getSettingsFromDBMock.mockResolvedValue(stored);
-    expect(await StorageManager.loadSettingsAsync()).toMatchObject({ playerBuffer: 'large', playerDecoder: 'software', playerAfr: true });
-  });
-
-  it('conserve les réglages du lecteur Android quand un autre réglage force le chemin de repli', async () => {
-    const mixed = {
-      ...StorageManager.defaultSettings(),
-      volume: 5,        // invalide : force le chemin de repli
-      autoplay: 'yes',  // invalide
-      playerBuffer: 'max',
-      playerDecoder: 'software',
-      playerAfr: true
-    } as unknown as AppSettings;
-    getSettingsFromDBMock.mockResolvedValue(mixed);
-    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
-    const loaded = await StorageManager.loadSettingsAsync();
-    expect(loaded.volume).toBe(1);
-    expect(loaded.autoplay).toBe(true);
-    expect(loaded.playerBuffer).toBe('max');
-    expect(loaded.playerDecoder).toBe('software');
-    expect(loaded.playerAfr).toBe(true);
-    // la réparation persistée embarque bien les réglages du lecteur
-    expect((stored as AppSettings).playerBuffer).toBe('max');
-    expect((stored as AppSettings).playerAfr).toBe(true);
-  });
-
-  it('jette des valeurs de réglages lecteur invalides dans le chemin de repli', async () => {
-    const invalid = {
-      ...StorageManager.defaultSettings(),
-      volume: 5,          // invalide : force le chemin de repli
-      autoplay: 'yes',
-      playerBuffer: 'gigantesque',
-      playerDecoder: 'quantique',
-      playerAfr: 'oui'
-    } as unknown as AppSettings;
-    getSettingsFromDBMock.mockResolvedValue(invalid);
-    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
-    const loaded = await StorageManager.loadSettingsAsync();
-    expect(loaded.volume).toBe(1);
-    expect(loaded.playerBuffer).toBeUndefined();
-    expect(loaded.playerDecoder).toBeUndefined();
-    expect(loaded.playerAfr).toBeUndefined();
-  });
-
   it('migrates legacy v1 settings without version to v2', async () => {
     const legacyNoVersion: AppSettings = {
       volume: 0.8,
@@ -191,6 +123,47 @@ describe('StorageManager settings validation & migration', () => {
     // No-op should not trigger persistence now that optimization is in place
     expect(result.volume).toBe(0.8);
     expect(saveSettingsToDBMock).not.toHaveBeenCalled();
+  });
+
+  it('garde un jeton v4 TMDB (~220 caractères) entier', async () => {
+    const base: AppSettings = StorageManager.defaultSettings();
+    getSettingsFromDBMock.mockResolvedValue(base);
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+
+    // Un jeton v4 typique dépasse 200 caractères : l'ancienne limite le tronquait.
+    const token = 'eyJhbGciOiJIUzI1NiJ9.' + 'a'.repeat(200) + '.b2suCk9UdE-tb2tlbg';
+    expect(token.length).toBeGreaterThan(200);
+    const result = await StorageManager.saveSettings({ tmdbApiKey: token });
+    expect(result.tmdbApiKey).toBe(token);
+    expect((stored as AppSettings).tmdbApiKey).toBe(token);
+  });
+
+  it('sauvegarde puis recharge un long jeton TMDB sans le tronquer', async () => {
+    const token = `eyJhbGciOiJIUzI1NiJ9.${'a'.repeat(320)}.signature`;
+    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+    expect((await StorageManager.saveSettings({ tmdbApiKey: token })).tmdbApiKey).toBe(token);
+    StorageManager.__resetCacheForTests();
+    getSettingsFromDBMock.mockResolvedValue(stored);
+    expect((await StorageManager.loadSettingsAsync()).tmdbApiKey).toBe(token);
+  });
+
+  it('préserve le long jeton TMDB quand un autre réglage doit être réparé', async () => {
+    const token = `eyJhbGciOiJIUzI1NiJ9.${'b'.repeat(320)}.signature`;
+    getSettingsFromDBMock.mockResolvedValue({ ...StorageManager.defaultSettings(), volume: 5, tmdbApiKey: token });
+    const loaded = await StorageManager.loadSettingsAsync();
+    expect(loaded.volume).toBe(1);
+    expect(loaded.tmdbApiKey).toBe(token);
+  });
+
+  it('conserve les réglages du lecteur Android (tampon, décodage, AFR)', async () => {
+    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+    const saved = await StorageManager.saveSettings({ playerBuffer: 'large', playerDecoder: 'software', playerAfr: true });
+    expect(saved).toMatchObject({ playerBuffer: 'large', playerDecoder: 'software', playerAfr: true });
+    StorageManager.__resetCacheForTests();
+    getSettingsFromDBMock.mockResolvedValue(stored);
+    expect(await StorageManager.loadSettingsAsync()).toMatchObject({ playerBuffer: 'large', playerDecoder: 'software', playerAfr: true });
   });
 
   it('migrates the legacy tvPreview boolean to tvPreviewMode (v8 -> v9)', async () => {

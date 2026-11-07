@@ -9,7 +9,7 @@ import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData, EPGProgram } from '@/types/epg';
 import { getCurrentProgram, getUpcomingProgram, getProgramProgress, formatTime } from '@/utils/epgXmltv';
 import { getPlayHistory, saveFavoritesToDB } from '@/utils/idb';
-import { NativePlayerBridge, type PreviewState } from '@/utils/nativePlayer';
+import { NativePlayerBridge, channelNumbering, findChannelByNumber, type PreviewState } from '@/utils/nativePlayer';
 
 type Column = 'cat' | 'list' | 'info';
 type CategoryItem =
@@ -24,9 +24,11 @@ const PREVIEW_DELAY = 600;
 interface ChannelRowProps {
   channel: Channel;
   index: number;
+  number: string | undefined;
   /** Décalage vertical calculé par le virtualiseur. */
   start: number;
   selected: boolean;
+  highlighted: boolean;
   playing: boolean;
   program: EPGProgram | null;
   favorite: boolean;
@@ -35,21 +37,21 @@ interface ChannelRowProps {
 }
 
 /** Ligne mémoïsée : à chaque appui de défilement, seules les lignes dont l'état change se re-rendent. */
-const ChannelRow = React.memo(function ChannelRow({ channel, index, start, selected, playing, program, favorite, onPlay, onFocus }: ChannelRowProps) {
+const ChannelRow = React.memo(function ChannelRow({ channel, index, number, start, selected, highlighted, playing, program, favorite, onPlay, onFocus }: ChannelRowProps) {
   return <button
     type="button"
     aria-current={playing ? 'true' : undefined}
-    aria-label={`${index + 1}. ${channel.name}${program ? `, ${program.title}` : ''}`}
+    aria-label={`${number || index + 1}. ${channel.name}${program ? `, ${program.title}` : ''}`}
     data-tv-item
     data-tv-row={index}
     data-channel-row-id={channel.id}
     tabIndex={selected ? 0 : -1}
     onFocus={() => onFocus(index)}
     onClick={() => onPlay(channel)}
-    className={`tv-row absolute left-0 right-0 flex items-center gap-3 rounded-xl px-3 text-left ${selected ? 'is-selected' : ''} ${playing ? 'is-playing' : ''}`}
+    className={`tv-row absolute left-0 right-0 flex items-center gap-3 rounded-xl px-3 text-left ${highlighted ? 'is-selected' : ''} ${playing ? 'is-playing' : ''}`}
     style={{ top: start, height: ROW_HEIGHT - 4 }}
   >
-    <span className="w-8 shrink-0 text-right font-mono text-[13px] tabular-nums opacity-60">{index + 1}</span>
+    <span className="w-8 shrink-0 text-right font-mono text-[13px] tabular-nums opacity-60">{number || '·'}</span>
     <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
     <span className="min-w-0 flex-1">
       <span className="block truncate text-[15px] font-medium leading-5">{channel.name}</span>
@@ -69,6 +71,8 @@ export interface TvLiveScreenProps {
   currentChannel?: Channel | null | undefined;
   lockedGroups?: string[] | undefined;
   unlocked?: boolean | undefined;
+  /** Liste ordonnée du zapping (celle transmise au lecteur natif) : numérotation canonique partagée. */
+  zapList?: Channel[] | undefined;
   onPlay: (channel: Channel) => void;
   onLockedGroupSelect?: (() => void) | undefined;
   onSearch?: (() => void) | undefined;
@@ -110,7 +114,7 @@ function useClock(): Date {
  * Haut depuis le premier élément rend la main à la navigation générale (rubriques).
  */
 export function TvLiveScreen({
-  playlistId, groups, favoriteIds, epgData, currentChannel, lockedGroups, unlocked = false,
+  playlistId, groups, zapList, favoriteIds, epgData, currentChannel, lockedGroups, unlocked = false,
   onPlay, onLockedGroupSelect, onSearch, onGuide, onMosaic, onRecord, preview = false, previewMode = 'auto',
   onEdit, onOrganize, favoriteLists, customGroupOrder = false,
 }: TvLiveScreenProps) {
@@ -145,6 +149,15 @@ export function TvLiveScreen({
   const favorites = useMemo(() => favoriteIds.map(id => byId.get(id)).filter((c): c is Channel => !!c && allowed(c)), [favoriteIds, byId, allowed]);
   const recents = useMemo(() => recentIds.map(id => byId.get(id)).filter((c): c is Channel => !!c && allowed(c)), [recentIds, byId, allowed]);
   const favoriteSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+
+  // Numérotation canonique (celle du lecteur natif) : numéro affiché = numéro tapé = numéro box.
+  const numberingSource = useMemo(() => zapList ?? allChannels.filter(allowed), [zapList, allChannels, allowed]);
+  const numberById = useMemo(() => {
+    const { numbers } = channelNumbering(numberingSource);
+    const map = new Map<string, string>();
+    numberingSource.forEach((c, i) => { if (numbers[i]) map.set(c.id, numbers[i]); });
+    return map;
+  }, [numberingSource]);
 
   const items = useMemo<CategoryItem[]>(() => {
     const list: CategoryItem[] = [];
@@ -360,9 +373,74 @@ export function TvLiveScreen({
     return true;
   };
 
+  // ── Zapping numérique (chiffres de la télécommande) ──────────────────
+  // Tampon comme dans le lecteur : validation auto après 1500 ms, Entrée pour avancer.
+  // Un numéro validé déplace la sélection (jamais de lecture directe) : l'écran garde son
+  // modèle « surligner puis OK », l'aperçu démarre seul après le délai habituel.
+  const [zapBuffer, setZapBuffer] = useState('');
+  const [zapMiss, setZapMiss] = useState<string | null>(null);
+  const zapTimer = useRef<number | null>(null);
+  const clearZapTimer = () => { if (zapTimer.current !== null) { window.clearTimeout(zapTimer.current); zapTimer.current = null; } };
+  useEffect(() => clearZapTimer, []);
+  const commitZap = useCallback((buffer: string) => {
+    clearZapTimer();
+    setZapBuffer('');
+    const target = findChannelByNumber(numberingSource, buffer);
+    if (!target) { setZapMiss(buffer); window.setTimeout(() => setZapMiss(null), 1500); return; }
+    const inList = channels.findIndex(c => c.id === target.id);
+    if (inList >= 0) { requestFocus(); setColumn('list'); setRow(inList); return; }
+    // Ailleurs : rejoindre la catégorie de la chaîne (son groupe, sinon « Toutes »).
+    const inGroup = target.group ? groups.find(g => g.name === target.group) : undefined;
+    const nextCategory = inGroup ? `group:${inGroup.name}` : 'all';
+    const nextChannels = nextCategory === 'all' ? allChannels.filter(allowed) : (inGroup?.channels ?? []);
+    const nextRow = Math.max(0, nextChannels.findIndex(c => c.id === target.id));
+    const nextCatIndex = Math.max(0, items.findIndex(i => i.id === nextCategory));
+    requestFocus();
+    setCategory(nextCategory);
+    setCatIndex(nextCatIndex);
+    setColumn('list');
+    setRow(nextRow);
+  }, [numberingSource, channels, groups, allChannels, allowed, items]);
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
     const key = e.key;
+    // Chiffres : tampon de zapping (aucune autre action n'utilise les chiffres ici).
+    if (/^[0-9]$/.test(key)) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearZapTimer();
+      setZapMiss(null);
+      // Longueur unique avec le lecteur natif (5 chiffres) : un numéro possible dans
+      // un écran doit l'être dans tous.
+      const next = (zapBuffer + key).slice(0, 5);
+      setZapBuffer(next);
+      zapTimer.current = window.setTimeout(() => commitZap(next), 1500);
+      return;
+    }
+    if (key === 'Enter' && zapBuffer) {
+      e.preventDefault();
+      e.stopPropagation();
+      commitZap(zapBuffer);
+      return;
+    }
+    if (key === 'Backspace' && zapBuffer) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearZapTimer();
+      const next = zapBuffer.slice(0, -1);
+      setZapBuffer(next);
+      if (next) zapTimer.current = window.setTimeout(() => commitZap(next), 1500);
+      return;
+    }
+    if (key === 'Escape' && (zapBuffer || zapMiss)) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearZapTimer();
+      setZapBuffer('');
+      setZapMiss(null);
+      return;
+    }
     let handled = false;
     if (preview && column === 'info' && key.startsWith('Arrow')) {
       if (key === 'ArrowDown') handled = moveGrid(2) || true;
@@ -471,13 +549,21 @@ export function TvLiveScreen({
       data-remote-self
       data-tv-live
       data-tv-column={column}
-      className="tv-live grid gap-3 text-foreground"
+      className="tv-live relative grid gap-3 text-foreground"
       style={height ? { height } : undefined}
       onKeyDown={onKeyDown}
       onFocusCapture={onFocusCapture}
       onFocus={onFocusIn}
       onBlur={onFocusOut}
     >
+      {/* Tampon de zapping numérique : chiffres composés, ou numéro sans chaîne */}
+      {(zapBuffer || zapMiss) && (
+        <div role="status" aria-label="Zapping" className="pointer-events-none absolute inset-x-0 top-3 z-40 flex justify-center">
+          <span className="rounded-xl bg-black/85 px-4 py-2 font-mono text-2xl font-bold text-white">
+            {zapBuffer || `Aucune chaîne n° ${zapMiss}`}
+          </span>
+        </div>
+      )}
       {/* Catégories */}
       <nav aria-label="Catégories" data-tv-col="cat" className={`tv-col flex min-h-0 flex-col rounded-2xl border border-neutral-900 bg-neutral-950 ${column === 'cat' ? 'is-active' : ''}`}>
         <div ref={catRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto p-2">
@@ -541,8 +627,10 @@ export function TvLiveScreen({
                   key={v.key}
                   channel={channel}
                   index={v.index}
+                  number={numberById.get(channel.id)}
                   start={v.start}
                   selected={column === 'list' && v.index === row}
+                  highlighted={v.index === row}
                   playing={currentChannel?.id === channel.id}
                   program={epgData ? getCurrentProgram(channel.id, epgData, now) : null}
                   favorite={favoriteSet.has(channel.id)}
@@ -589,7 +677,7 @@ export function TvLiveScreen({
               <p className="mt-0.5 line-clamp-2 font-medium">{current.title}</p>
               <div className="mt-1.5 flex items-center gap-2">
                 <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{formatTime(current.startTime)}–{formatTime(current.endTime)}</span>
-                <span className="h-1 flex-1 overflow-hidden rounded-full bg-neutral-800"><span className="block h-full bg-primary" style={{ width: `${getProgramProgress(current)}%` }} /></span>
+                <span className="h-1 flex-1 overflow-hidden rounded-full bg-neutral-800"><span className="block h-full bg-primary" style={{ width: `${getProgramProgress(current, now)}%` }} /></span>
               </div>
             </div> : <p className="text-muted-foreground">Pas d’information de programme.</p>}
             {upcoming && <div>
