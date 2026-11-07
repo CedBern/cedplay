@@ -98,6 +98,10 @@ public class AudioProgressStore {
             return activeEpisodeId;
         }
 
+        public synchronized void clearActiveEpisodeId() {
+            activeEpisodeId = null;
+        }
+
         public synchronized Entry getEntry(String episodeId) {
             if (episodeId == null || episodeId.isEmpty()) return null;
             return entries.get(episodeId);

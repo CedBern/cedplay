@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Film, HardDrive } from 'lucide-react';
 import { VodLibrary, type VodResumeRequest } from '@/components/VodLibrary';
 import { LocalLibrary } from '@/components/LocalLibrary';
+import { getXtreamAccount } from '@/utils/xtreamCatalog';
 import type { PlaylistInfo } from '@/types/channel';
 
 interface MoviesPanelProps {
@@ -23,9 +24,11 @@ export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandl
   const pill = (active: boolean) => tvMode
     ? `tv-chip inline-flex h-10 items-center gap-2 rounded-full px-4 text-[14px] font-medium transition-colors ${active ? 'is-current text-foreground' : 'text-muted-foreground'}`
     : `inline-flex min-h-9 items-center gap-2 rounded-full border px-3.5 text-[13px] font-medium transition-colors ${active ? 'border-foreground bg-foreground text-background' : 'border-neutral-800 text-muted-foreground hover:text-foreground'}`;
+  const hasCatalog = useMemo(() => getXtreamAccount(playlist) !== null, [playlist]);
   // TV : la source se choisit depuis la colonne de gauche du catalogue (ligne « USB / SD ») ;
   // le sélecteur ne reparaît qu'en bibliothèque locale, pour revenir au catalogue.
-  const showSwitch = !tvMode || source === 'local';
+  // Sans compte Xtream, pas de catalogue ni de colonne : le sélecteur reste le seul accès à USB/SD.
+  const showSwitch = !tvMode || source === 'local' || !hasCatalog;
   return (
     <div className="space-y-4">
       {showSwitch && <div role="group" aria-label="Source des films" className="flex items-center gap-2">

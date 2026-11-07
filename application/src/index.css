@@ -265,18 +265,25 @@ html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .
 /* Affiche surlignée sans focus (position restaurée, colonne voisine) : liseré discret. */
 .tv-vod .tv-row.is-selected { border-color: hsl(var(--primary) / 0.65); }
 .tv-live .tv-action, .tv-vod .tv-action { background-color: hsl(var(--secondary) / 0.6); }
-/* Un seul repère fort, lisible depuis le canapé : la cible qui a le focus. */
+/* Un seul repère fort, lisible depuis le canapé : la cible qui a le focus, en sélection claire
+   (comme « Regarder » et les rubriques) ; l'orange reste l'accent de ce qui est choisi ou en cours. */
 .tv-live [data-tv-item]:focus, .tv-live [data-tv-item]:focus-visible,
 .tv-vod [data-tv-item]:focus, .tv-vod [data-tv-item]:focus-visible {
-  background-color: hsl(var(--primary)) !important;
-  color: hsl(var(--primary-foreground)) !important;
-  box-shadow: 0 0 0 2px hsl(var(--primary)), 0 6px 20px -6px hsl(var(--primary) / 0.6) !important;
+  background-color: hsl(var(--foreground)) !important;
+  color: hsl(var(--background)) !important;
+  box-shadow: 0 0 0 2px hsl(var(--foreground)), 0 8px 22px -8px hsl(0 0% 0% / 0.7) !important;
+}
+/* Textes secondaires (heure, programme, note) : rester lisibles sur la pastille claire. */
+.tv-live [data-tv-item]:focus .text-muted-foreground, .tv-vod [data-tv-item]:focus .text-muted-foreground { color: hsl(var(--background) / 0.68) !important; }
+/* Catégorie choisie ou chaîne en cours, pointées : le trait orange reste visible dans la sélection claire. */
+.tv-live .tv-cat.is-selected:focus, .tv-vod .tv-cat.is-selected:focus, .tv-live .tv-row.is-playing:focus {
+  box-shadow: inset 3px 0 0 hsl(var(--primary)), 0 0 0 2px hsl(var(--foreground)), 0 8px 22px -8px hsl(0 0% 0% / 0.7) !important;
 }
 .tv-live .tv-row:focus, .tv-vod .tv-row:focus { transform: scale(1.015); z-index: 1; }
 /* Affiche : grossir un peu plus pour rester lisible dans la grille. */
 .tv-vod .tv-row:focus { transform: scale(1.04); }
-/* Vignette sans logo : rester lisible sur le fond ambré du focus. */
-.tv-live [data-tv-item]:focus .bg-muted, .tv-vod [data-tv-item]:focus .bg-muted { background-color: hsl(var(--primary-foreground) / 0.14); }
+/* Vignette sans logo : rester lisible sur le fond clair du focus. */
+.tv-live [data-tv-item]:focus .bg-muted, .tv-vod [data-tv-item]:focus .bg-muted { background-color: hsl(var(--background) / 0.1); }
 /* Souris : simple survol, sans voler le repère du focus. */
 @media (hover: hover) { .tv-live [data-tv-item]:hover:not(:focus), .tv-vod [data-tv-item]:hover:not(:focus) { background-color: hsl(var(--accent) / 0.7); } }
 /* La page ne défile pas sous l'écran TV : tout tient dans la hauteur de l'écran. */
@@ -301,12 +308,10 @@ html.tv-mode .tv-vod { transition: height 240ms cubic-bezier(.2, .8, .2, 1); }
 .tv-chip { border: 0; background: transparent; }
 .tv-chip.is-current { background-color: hsl(var(--secondary)); }
 @media (hover: hover) { .tv-chip:hover, .tv-nav-tab:hover { background-color: hsl(var(--foreground) / 0.06); } }
-/* Télécommande : même repère que dans les écrans, une pastille pleine plutôt qu'un cadre. */
+/* Télécommande : sélection claire, comme « Regarder » ; l'orange reste l'accent de la rubrique active. */
 .remote-navigation .tv-nav-tab:focus, .remote-navigation .tv-chip:focus {
-  outline: none !important; background-color: hsl(var(--primary)) !important; color: hsl(var(--primary-foreground)) !important;
+  outline: none !important; background-color: hsl(var(--foreground)) !important; color: hsl(var(--background)) !important;
 }
-.remote-navigation .tv-nav-tab:focus svg { color: inherit; }
-.remote-navigation .tv-nav-tab:focus::after { background: hsl(var(--primary-foreground)); }
 
 /* Fiche éclair du catalogue : « Regarder » en pilule claire, les autres actions en filet fin. */
 .tv-vod .tv-action { border-radius: 9999px; background-color: transparent; box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12); padding-left: 1rem; padding-right: 1rem; }

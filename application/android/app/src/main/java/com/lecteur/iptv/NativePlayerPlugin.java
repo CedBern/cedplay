@@ -951,26 +951,20 @@ public class NativePlayerPlugin extends Plugin {
 
     // ── Lecture audio en arrière-plan (podcasts) ────────────────────────
 
-    private static JSObject snapshotToJS(AudioPlaybackService.StateSnapshot s) {
+    static JSObject snapshotToJS(AudioPlaybackService.StateSnapshot s) {
         JSObject obj = new JSObject();
-        obj.put("state", s.state);
-        obj.put("episodeId", s.episodeId);
-        obj.put("feedUrl", s.feedUrl);
-        obj.put("audioUrl", s.audioUrl);
-        obj.put("title", s.title);
-        obj.put("podcastTitle", s.podcastTitle);
-        obj.put("artworkUrl", s.artworkUrl);
-        obj.put("positionMs", s.positionMs);
-        obj.put("durationMs", s.durationMs);
-        obj.put("speed", s.speed);
-        obj.put("playing", s.playing);
-        if (s.error != null) obj.put("error", s.error);
+        for (java.util.Map.Entry<String, Object> entry : s.toMap().entrySet()) {
+            obj.put(entry.getKey(), entry.getValue());
+        }
         return obj;
     }
 
     private void sendAudioAction(Intent intent) {
         Context ctx = getContext();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && AudioPlaybackService.ACTION_PLAY_EPISODE.equals(intent.getAction())) {
+        String action = intent.getAction();
+        boolean mayStartPlayback = AudioPlaybackService.ACTION_PLAY_EPISODE.equals(action)
+                || AudioPlaybackService.ACTION_RESUME.equals(action);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && mayStartPlayback) {
             ctx.startForegroundService(intent);
         } else {
             ctx.startService(intent);
@@ -1060,7 +1054,9 @@ public class NativePlayerPlugin extends Plugin {
 
     @PluginMethod
     public void getAudioState(PluginCall call) {
-        call.resolve(snapshotToJS(AudioPlaybackService.getCurrentSnapshot(getContext())));
+        AudioPlaybackService.getCurrentSnapshotAsync(getContext(), snapshot -> {
+            call.resolve(snapshotToJS(snapshot));
+        });
     }
 
     @PluginMethod

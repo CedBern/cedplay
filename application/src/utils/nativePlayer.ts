@@ -605,25 +605,27 @@ function notifyAudioTakingOverFromVideo(): void {
   }
 }
 
+function handleNativeAudioEvent(data: Partial<AudioPlaybackState> | null | undefined): void {
+  if (!data) return;
+  emitAudioState({
+    active: Boolean(data.active),
+    playing: Boolean(data.playing),
+    episodeId: data.episodeId ?? null,
+    feedUrl: data.feedUrl ?? '',
+    audioUrl: data.audioUrl ?? '',
+    title: data.title ?? '',
+    podcastTitle: data.podcastTitle ?? '',
+    artworkUrl: data.artworkUrl ?? '',
+    positionMs: Math.max(0, Math.round(data.positionMs || 0)),
+    durationMs: Math.max(0, Math.round(data.durationMs || 0)),
+    speed: clampPodcastSpeed(data.speed ?? 1.0),
+  });
+}
+
 function ensureNativeAudioListener(): void {
   if (nativeAudioListenerAttached || !isAvailable()) return;
   nativeAudioListenerAttached = true;
-  void NativePlayer.addListener('audioState', data => {
-    if (!data) return;
-    emitAudioState({
-      active: Boolean(data.active),
-      playing: Boolean(data.playing),
-      episodeId: data.episodeId ?? null,
-      feedUrl: data.feedUrl ?? '',
-      audioUrl: data.audioUrl ?? '',
-      title: data.title ?? '',
-      podcastTitle: data.podcastTitle ?? '',
-      artworkUrl: data.artworkUrl ?? '',
-      positionMs: Math.max(0, Math.round(data.positionMs || 0)),
-      durationMs: Math.max(0, Math.round(data.durationMs || 0)),
-      speed: clampPodcastSpeed(data.speed ?? 1.0),
-    });
-  }).catch(() => {
+  void NativePlayer.addListener('audioState', handleNativeAudioEvent).catch(() => {
     nativeAudioListenerAttached = false;
   });
 }
@@ -958,8 +960,14 @@ export const AudioBridge = {
     });
   },
 
+  /** Injecte un événement `audioState` tel qu'émis par `NativePlayerPlugin` sur Android (pour les tests). */
+  receiveNativeAudioEventForTests(data: Partial<AudioPlaybackState>): void {
+    handleNativeAudioEvent(data);
+  },
+
   resetForTests(): void {
     currentAudioState = { ...EMPTY_AUDIO_STATE };
+    nativeAudioListenerAttached = false;
     if (webAudioEl) {
       try { webAudioEl.pause(); } catch { /* ignore */ }
     }

@@ -159,4 +159,74 @@ public class AudioProgressStoreTest {
         assertEquals(0L, entry.positionMs);
         assertEquals(1.75f, entry.speed, 0.001f);
     }
+
+    @Test
+    public void snapshotToJSInclutLeChampActivePourLeMiniLecteurAndroid() {
+        AudioPlaybackService.StateSnapshot idle = new AudioPlaybackService.StateSnapshot(
+                "idle", "", "", "", "", "", "", 0L, 0L, 1.0f, false, null);
+        assertFalse(idle.active);
+        assertEquals(Boolean.FALSE, idle.toMap().get("active"));
+
+        AudioPlaybackService.StateSnapshot playing = new AudioPlaybackService.StateSnapshot(
+                "playing",
+                "ep-1",
+                "https://example.test/feed.xml",
+                "https://example.test/ep1.mp3",
+                "Épisode 1",
+                "Mon Podcast",
+                "https://example.test/art.png",
+                45_000L,
+                1_800_000L,
+                1.25f,
+                true,
+                null);
+        assertTrue(playing.active);
+        assertEquals(Boolean.TRUE, playing.toMap().get("active"));
+        assertEquals("ep-1", playing.toMap().get("episodeId"));
+
+        AudioPlaybackService.StateSnapshot paused = new AudioPlaybackService.StateSnapshot(
+                "paused",
+                "ep-1",
+                "https://example.test/feed.xml",
+                "https://example.test/ep1.mp3",
+                "Épisode 1",
+                "Mon Podcast",
+                "https://example.test/art.png",
+                45_000L,
+                1_800_000L,
+                1.25f,
+                false,
+                null);
+        assertTrue(paused.active);
+        assertEquals(Boolean.TRUE, paused.toMap().get("active"));
+    }
+
+    @Test
+    public void reprendLeDernierEpisodeSauvegardeApresRecreationDuServiceMemeSiCurrentEpisodeIdEstVide() {
+        AudioProgressStore.SessionTracker tracker = new AudioProgressStore.SessionTracker();
+        tracker.saveProgress(
+                "ep-saved",
+                "https://example.test/feed.xml",
+                "https://example.test/saved.mp3",
+                "Épisode Sauvegardé",
+                "Mon Podcast",
+                "https://example.test/art.png",
+                312_000L,
+                1_800_000L,
+                1.5f,
+                false,
+                9000L);
+
+        // Le service recréé démarre avec currentEpisodeId == "" :
+        // resolveSavedEntryForResume doit retrouver l'épisode via getActiveEpisodeId().
+        AudioProgressStore.Entry resolved = AudioPlaybackService.resolveSavedEntryForResume(tracker, "");
+        assertNotNull(resolved);
+        assertEquals("ep-saved", resolved.episodeId);
+        assertEquals(312_000L, resolved.positionMs);
+        assertEquals(1.5f, resolved.speed, 0.001f);
+
+        // Et après un arrêt explicite (clearActiveEpisodeId), un service recréé ne relance rien par erreur.
+        tracker.clearActiveEpisodeId();
+        assertEquals(null, AudioPlaybackService.resolveSavedEntryForResume(tracker, ""));
+    }
 }

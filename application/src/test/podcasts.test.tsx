@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { parseItunesDurationMs, parsePodcastRss } from '@/utils/podcastParser';
 import {
@@ -195,5 +195,38 @@ describe('Podcasts Livraison 1A — Analyse RSS, vitesse + position et changemen
       </>
     );
     expect(screen.getByRole('complementary', { name: 'Mini-lecteur audio' })).toHaveAttribute('data-tv-mode', 'true');
+  });
+
+  it('maintient le MiniAudioPlayer affiché et met à jour sa progression lors des événements audioState Android', async () => {
+    const parsed = parsePodcastRss(SAMPLE_RSS, 'https://example.test/rss.xml');
+    const ep1 = parsed.episodes[1]!;
+
+    render(<MiniAudioPlayer tv={false} />);
+    await act(async () => {
+      await AudioBridge.playEpisode(ep1);
+    });
+    expect(screen.getByRole('complementary', { name: 'Mini-lecteur audio' })).toBeInTheDocument();
+
+    // Simule l'événement périodique (5 s) envoyé par NativePlayerPlugin.snapshotToJS sur Android
+    act(() => {
+      AudioBridge.receiveNativeAudioEventForTests({
+        active: true,
+        playing: true,
+        episodeId: ep1.id,
+        feedUrl: ep1.feedUrl,
+        audioUrl: ep1.audioUrl,
+        title: ep1.title,
+        podcastTitle: ep1.podcastTitle,
+        artworkUrl: ep1.artworkUrl ?? '',
+        positionMs: 65_000,
+        durationMs: ep1.durationMs,
+        speed: 1.25,
+      });
+    });
+
+    const mini = screen.getByRole('complementary', { name: 'Mini-lecteur audio' });
+    expect(mini).toBeInTheDocument();
+    expect(within(mini).getByText(/1:05/)).toBeInTheDocument();
+    expect(within(mini).getByText('1.25×')).toBeInTheDocument();
   });
 });

@@ -47,6 +47,7 @@ public class AudioPlaybackService extends MediaSessionService {
     private static final long CHECKPOINT_INTERVAL_MS = 5_000L;
 
     public static class StateSnapshot {
+        public final boolean active;
         public final String state; // "idle" | "loading" | "playing" | "paused" | "ended" | "error"
         public final String episodeId;
         public final String feedUrl;
@@ -73,7 +74,7 @@ public class AudioPlaybackService extends MediaSessionService {
                 float speed,
                 boolean playing,
                 String error) {
-            this.state = state;
+            this.state = state == null ? "idle" : state;
             this.episodeId = episodeId == null ? "" : episodeId;
             this.feedUrl = feedUrl == null ? "" : feedUrl;
             this.audioUrl = audioUrl == null ? "" : audioUrl;
@@ -85,6 +86,25 @@ public class AudioPlaybackService extends MediaSessionService {
             this.speed = AudioProgressStore.clampSpeed(speed);
             this.playing = playing;
             this.error = error;
+            this.active = !this.episodeId.isEmpty() && !"idle".equals(this.state);
+        }
+
+        public java.util.Map<String, Object> toMap() {
+            java.util.LinkedHashMap<String, Object> map = new java.util.LinkedHashMap<>();
+            map.put("active", active);
+            map.put("state", state);
+            map.put("episodeId", episodeId);
+            map.put("feedUrl", feedUrl);
+            map.put("audioUrl", audioUrl);
+            map.put("title", title);
+            map.put("podcastTitle", podcastTitle);
+            map.put("artworkUrl", artworkUrl);
+            map.put("positionMs", positionMs);
+            map.put("durationMs", durationMs);
+            map.put("speed", speed);
+            map.put("playing", playing);
+            if (error != null) map.put("error", error);
+            return map;
         }
     }
 
@@ -105,10 +125,24 @@ public class AudioPlaybackService extends MediaSessionService {
         if (listener != null) listeners.remove(listener);
     }
 
+    /**
+     * Renvoie l'état courant sans jamais interroger ExoPlayer hors du thread principal.
+     * - Sur le thread principal : rafraîchit et mémorise l'instantané depuis ExoPlayer si le service tourne.
+     * - Depuis un autre thread (ex. thread des plugins Capacitor) : renvoie `lastSnapshot` déjà mémorisé
+     *   par le thread principal (ou l'entrée active d'AudioProgressStore si le service est arrêté).
+     */
     public static StateSnapshot getCurrentSnapshot(Context context) {
         AudioPlaybackService instance = activeInstance;
-        if (instance != null) return instance.buildSnapshot(null);
-        // Service arrêté : si un épisode était en cours dans AudioProgressStore, l'exposer en "paused"
+        if (instance != null) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                StateSnapshot snap = instance.buildSnapshot(null);
+                lastSnapshot = snap;
+                return snap;
+            }
+            StateSnapshot cached = lastSnapshot;
+            if (cached != null && cached.active) return cached;
+        }
+        // Service arrêté ou pas encore d'instantané actif : si un épisode était en cours dans AudioProgressStore, l'exposer en "paused"
         if (context != null) {
             AudioProgressStore.SessionTracker tracker = AudioProgressStore.tracker(context);
             String activeId = tracker.getActiveEpisodeId();
@@ -130,6 +164,22 @@ public class AudioPlaybackService extends MediaSessionService {
             }
         }
         return lastSnapshot;
+    }
+
+    /** Interroge l'état sur le thread principal (celui d'ExoPlayer) et invoque le callback. */
+    public static void getCurrentSnapshotAsync(Context context, StateListener callback) {
+        if (callback == null) return;
+        AudioPlaybackService instance = activeInstance;
+        if (instance != null) {
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                callback.onAudioState(getCurrentSnapshot(context));
+            } else {
+                Context appCtx = context != null ? context.getApplicationContext() : null;
+                instance.mainHandler.post(() -> callback.onAudioState(getCurrentSnapshot(appCtx)));
+            }
+            return;
+        }
+        callback.onAudioState(getCurrentSnapshot(context));
     }
 
     /** Met en pause l'audio immédiatement (ex. lancement d'une vidéo TV/VOD ou mosaïque) en sauvegardant la position. */
@@ -157,11 +207,29 @@ public class AudioPlaybackService extends MediaSessionService {
         @Override
         public void run() {
             saveCurrentProgress(false);
+            emitState();
             if (player != null && player.isPlaying()) {
                 mainHandler.postDelayed(this, CHECKPOINT_INTERVAL_MS);
             }
         }
     };
+
+    /**
+     * Résout l'épisode à recharger lorsqu'une commande Reprendre arrive sur un lecteur vide
+     * (y compris lorsque le service a été arrêté puis recréé avec `currentEpisodeId` vide).
+     */
+    static AudioProgressStore.Entry resolveSavedEntryForResume(
+            AudioProgressStore.SessionTracker tracker,
+            String currentEpisodeId) {
+        if (tracker == null) return null;
+        String targetId = (currentEpisodeId != null && !currentEpisodeId.isEmpty())
+                ? currentEpisodeId
+                : tracker.getActiveEpisodeId();
+        if (targetId == null || targetId.isEmpty()) return null;
+        AudioProgressStore.Entry saved = tracker.getEntry(targetId);
+        if (saved == null || saved.audioUrl.isEmpty()) return null;
+        return saved;
+    }
 
     @Override
     public void onCreate() {
@@ -415,10 +483,13 @@ public class AudioPlaybackService extends MediaSessionService {
 
     private void resumePlayback() {
         if (player == null) return;
-        if (player.getMediaItemCount() == 0 && !currentEpisodeId.isEmpty()) {
+        if (player.getMediaItemCount() == 0) {
             // Recharger depuis AudioProgressStore si le lecteur était vide
-            AudioProgressStore.Entry saved = AudioProgressStore.tracker(this).getEntry(currentEpisodeId);
-            if (saved != null && !saved.audioUrl.isEmpty()) {
+            // (y compris après recréation du service où currentEpisodeId est vide : on reprend lastActiveEpisodeId)
+            AudioProgressStore.Entry saved = resolveSavedEntryForResume(
+                    AudioProgressStore.tracker(this),
+                    currentEpisodeId);
+            if (saved != null) {
                 Intent reload = new Intent(ACTION_PLAY_EPISODE);
                 reload.putExtra("episodeId", saved.episodeId);
                 reload.putExtra("feedUrl", saved.feedUrl);
@@ -431,6 +502,7 @@ public class AudioPlaybackService extends MediaSessionService {
                 handlePlayEpisodeIntent(reload);
                 return;
             }
+            return;
         }
         if (player.getPlaybackState() == Player.STATE_ENDED) {
             player.seekTo(0L);
@@ -444,6 +516,8 @@ public class AudioPlaybackService extends MediaSessionService {
     private void stopAndSave() {
         mainHandler.removeCallbacks(checkpointRunnable);
         saveCurrentProgress(false);
+        AudioProgressStore.tracker(this).clearActiveEpisodeId();
+        AudioProgressStore.persist(this);
         if (player != null) {
             player.stop();
             player.clearMediaItems();
