@@ -1,7 +1,7 @@
-import { Clapperboard, Film, House, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
+import { Clapperboard, Film, Headphones, House, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' | 'more';
+export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' | 'podcasts' | 'more';
 
 type Section = { value: NavSection; label: string; Icon: typeof House };
 
@@ -9,15 +9,17 @@ const sections: Section[] = [
   { value: 'continue', label: 'Accueil', Icon: House },
   { value: 'channels', label: 'Direct', Icon: Tv2 },
   { value: 'vod', label: 'Films & séries', Icon: Clapperboard },
+  { value: 'podcasts', label: 'Écouter', Icon: Headphones },
   { value: 'more', label: 'Plus', Icon: LayoutGrid },
 ];
 
-/** TV : Films et Séries sont deux rubriques, sans sélecteur intermédiaire sous l'en-tête. */
+/** TV : Films et Séries sont deux rubriques directes dans le rail, accompagnées de l'entrée Écouter. */
 const tvSections: Section[] = [
   { value: 'continue', label: 'Accueil', Icon: House },
   { value: 'channels', label: 'Direct', Icon: Tv2 },
   { value: 'movies', label: 'Films', Icon: Film },
   { value: 'series', label: 'Séries', Icon: MonitorPlay },
+  { value: 'podcasts', label: 'Écouter', Icon: Headphones },
   { value: 'more', label: 'Plus', Icon: LayoutGrid },
 ];
 
@@ -25,6 +27,7 @@ const tvSections: Section[] = [
 export function navSectionFor(screen: string, tv = false): NavSection | '' {
   if (screen === 'player' || screen === 'channels') return 'channels';
   if (screen === 'movies' || screen === 'series') return tv ? screen : 'vod';
+  if (screen === 'podcasts') return 'podcasts';
   if (screen === 'more' || screen === 'replay' || screen === 'streaming' || screen === 'loader') return 'more';
   if (screen === 'continue') return 'continue';
   return '';
@@ -55,7 +58,7 @@ export function MainNavigation({ onNavigate, tv = false }: { onNavigate: (sectio
   return <TabsList
     aria-label="Rubriques"
     data-main-navigation
-    className="glass fixed inset-x-0 bottom-0 z-40 !mt-0 grid h-auto grid-cols-4 gap-0 rounded-none border-t border-white/5 px-1.5 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)] text-muted-foreground sm:static sm:!mt-0 sm:flex sm:w-max sm:max-w-full sm:justify-start sm:gap-1 sm:overflow-x-auto sm:rounded-full sm:border sm:border-white/5 sm:p-1"
+    className="glass fixed inset-x-0 bottom-0 z-40 !mt-0 grid h-auto grid-cols-5 gap-0 rounded-none border-t border-white/5 px-1.5 pt-1.5 pb-[calc(env(safe-area-inset-bottom)+8px)] text-muted-foreground sm:static sm:!mt-0 sm:flex sm:w-max sm:max-w-full sm:justify-start sm:gap-1 sm:overflow-x-auto sm:rounded-full sm:border sm:border-white/5 sm:p-1"
   >
     {sections.map(({ value, label, Icon }) => <TabsTrigger
       key={value}

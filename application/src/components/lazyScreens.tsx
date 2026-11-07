@@ -12,6 +12,7 @@ export const LazyVideoPlayer = lazy(() => import('@/components/VideoPlayer').the
 export const LazyVodLibrary = lazy(() => import('@/components/VodLibrary').then(m => ({ default: m.VodLibrary })));
 export const LazyMoviesPanel = lazy(() => import('@/components/MoviesPanel').then(m => ({ default: m.MoviesPanel })));
 export const LazyContinuePanel = lazy(() => import('@/components/ContinuePanel').then(m => ({ default: m.ContinuePanel })));
+export const LazyPodcastsPanel = lazy(() => import('@/components/PodcastsPanel').then(m => ({ default: m.PodcastsPanel })));
 export const LazyReplayPanel = lazy(() => import('@/components/ReplayPanel').then(m => ({ default: m.ReplayPanel })));
 export const LazyStreamingPanel = lazy(() => import('@/components/StreamingPanel').then(m => ({ default: m.StreamingPanel })));
 export const LazyRecordings = lazy(() => import('@/components/Recordings').then(m => ({ default: m.Recordings })));

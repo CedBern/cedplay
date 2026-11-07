@@ -45,7 +45,7 @@ it('ouvre sur Accueil, garde Direct actif dans son lecteur et retrouve Plus apr�
   await user.keyboard('{Escape}');
   await waitFor(() => expect(screen.getByRole('button', { name: 'Connexion Xtream' })).toHaveFocus());
   const navigation = screen.getByRole('tablist', { name: 'Rubriques' });
-  expect(within(navigation).getAllByRole('tab').map(t => t.textContent)).toEqual(['Accueil', 'Direct', 'Films & séries', 'Plus']);
+  expect(within(navigation).getAllByRole('tab').map(t => t.textContent)).toEqual(['Accueil', 'Direct', 'Films & séries', 'Écouter', 'Plus']);
   await user.click(within(navigation).getByRole('tab', { name: 'Direct' }));
   expect(screen.getByText('Liste des chaînes test')).toBeVisible();
   await user.click(screen.getByRole('button', { name: 'Lecteur' }));

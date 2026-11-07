@@ -7,7 +7,10 @@ import type { EPGData } from '@/types/epg';
 import { safeImage } from '@/utils/xtreamCatalog';
 import { toast } from 'sonner';
 import type { Channel, PlaylistInfo } from '@/types/channel';
-import { Bookmark, Check, Clock, Film, Heart, MonitorPlay, Play, Tv, X } from 'lucide-react';
+import type { PodcastProgress } from '@/types/podcast';
+import { AudioBridge } from '@/utils/nativePlayer';
+import { onPodcastStorageChange, readAllEpisodeProgress } from '@/utils/podcastStorage';
+import { Bookmark, Check, Clock, Film, Headphones, Heart, MonitorPlay, Play, Tv, X } from 'lucide-react';
 
 interface ContinuePanelProps {
   playlist: PlaylistInfo;
@@ -38,6 +41,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
   const [, setTick] = useState(0);
   const [history, setHistory] = useState<PlayHistoryEntry[]>([]);
   const [watchlist, setWatchlist] = useState<VodWatchlistItem[]>([]);
+  const [podcastProgress, setPodcastProgress] = useState<Record<string, PodcastProgress>>(() => readAllEpisodeProgress());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -68,12 +72,16 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     };
     handleFavoritesUpdate();
     window.addEventListener('favorites-updated', handleFavoritesUpdate);
+    const unsubPodcast = onPodcastStorageChange(() => {
+      if (!cancelled) setPodcastProgress(readAllEpisodeProgress());
+    });
     // Le programme « en ce moment » change : rafraîchir chaque minute.
     const ticker = window.setInterval(() => setTick(t => t + 1), 60_000);
 
     return () => {
       cancelled = true;
       window.clearInterval(ticker);
+      unsubPodcast();
       window.removeEventListener('favorites-updated', handleFavoritesUpdate);
       window.removeEventListener('vod-watchlist-updated', handleWatchlistUpdate);
       window.removeEventListener('vod-history-updated', handleHistoryUpdate);
@@ -144,6 +152,25 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     return watchlist.filter(item => item.playlistId === playlist.id);
   }, [watchlist, playlist.id]);
 
+  const inProgressPodcasts = useMemo(() => {
+    return Object.values(podcastProgress)
+      .filter(p => !p.completed && p.positionMs > 0 && p.audioUrl)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, 6);
+  }, [podcastProgress]);
+
+  const resumePodcast = (prog: PodcastProgress) => {
+    void AudioBridge.playEpisode({
+      id: prog.episodeId,
+      feedUrl: prog.feedUrl,
+      audioUrl: prog.audioUrl,
+      title: prog.title || 'Épisode',
+      podcastTitle: prog.podcastTitle || 'Podcast',
+      durationMs: prog.durationMs,
+      ...(prog.artworkUrl ? { artworkUrl: prog.artworkUrl } : {}),
+    });
+  };
+
   const resume = (entry: PlayHistoryEntry) => {
     // `vod:<playlistId>:<kind>:<id>` → reprendre ce titre précis.
     const match = entry.channelId.match(/^vod:([^:]+):(movie|series):([^:]+)$/);
@@ -211,7 +238,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     return <p role="status" className="text-sm text-neutral-400">Chargement de la reprise…</p>;
   }
 
-  if (favoriteChannels.length === 0 && recentLive.length === 0 && inProgressVod.length === 0 && watchlistItems.length === 0) {
+  if (favoriteChannels.length === 0 && recentLive.length === 0 && inProgressVod.length === 0 && watchlistItems.length === 0 && inProgressPodcasts.length === 0) {
     return (
       <div className="text-center py-16">
         <Clock className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -256,6 +283,49 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
                   </span>}
                 </span>
               </button>;
+            })}
+          </div>
+        </section>
+      )}
+
+      {inProgressPodcasts.length > 0 && (
+        <section aria-label="Podcasts en cours">
+          <h2 className="mb-3 flex items-center gap-2 text-[17px] font-semibold tracking-tight text-foreground">
+            <Headphones className="h-4 w-4 text-primary" aria-hidden="true" /> Reprendre l’écoute
+          </h2>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {inProgressPodcasts.map(prog => {
+              const percent = prog.durationMs > 0
+                ? Math.min(100, Math.max(0, Math.round((prog.positionMs / prog.durationMs) * 100)))
+                : null;
+              const minAt = Math.max(0, Math.floor(prog.positionMs / 60_000));
+              const secAt = Math.floor((prog.positionMs % 60_000) / 1000);
+              const posLabel = `${minAt}:${String(secAt).padStart(2, '0')}`;
+              return (
+                <button
+                  key={prog.episodeId}
+                  type="button"
+                  onClick={() => resumePodcast(prog)}
+                  className="press flex min-h-[72px] items-center gap-3 rounded-2xl border border-neutral-900 bg-card p-3 text-left hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-secondary text-primary">
+                    <Headphones className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14px] font-semibold text-foreground">{prog.title}</span>
+                    <span className="block truncate text-[12px] text-muted-foreground">
+                      {prog.podcastTitle ? `${prog.podcastTitle} · ` : ''}
+                      Reprendre à {posLabel}
+                      {prog.speed && prog.speed !== 1 ? ` · ${prog.speed}×` : ''}
+                    </span>
+                    {percent !== null && (
+                      <span className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-neutral-800">
+                        <span className="block h-full bg-primary" style={{ width: `${percent}%` }} />
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
             })}
           </div>
         </section>

@@ -1,4 +1,4 @@
-import { NativePlayerBridge, buildNativeZap, setNativeEpg, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
+import { NativePlayerBridge, AudioBridge, buildNativeZap, setNativeEpg, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
 import { findExistingPlaylist, reconcilePlaylist } from '@/utils/playlistIdentity';
 import { getXtreamAccount, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { canRefreshPlaylist, downloadXtreamLive, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
@@ -23,7 +23,8 @@ import { MosaicPicker } from '@/components/MosaicPicker';
 import type { VodResumeRequest } from '@/components/VodLibrary';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
+import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
+import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
 import { downloadStalkerPlaylist, stalkerAvailable } from '@/utils/stalker';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2 } from 'lucide-react';
@@ -92,6 +93,11 @@ export function IPTVPlayer() {
   const webPlayerSection = useRef<HTMLDivElement>(null);
   /** Une chaîne a été lancée dans le lecteur web : il reste actif (plein ou mini) jusqu'à sa fermeture. */
   const [webSession, setWebSession] = useState(false);
+  useEffect(() => {
+    void AudioBridge?.syncFromNative?.();
+    if (!AudioBridge?.onAudioTakeover) return;
+    return AudioBridge.onAudioTakeover(() => setWebSession(false));
+  }, []);
   // En-tête : verre dépoli dès que la page défile.
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -391,6 +397,7 @@ export function IPTVPlayer() {
   }, [playableChannels]);
 
   const handleWebChannelSelect = useCallback((channel: Channel) => {
+    void AudioBridge?.pauseForVideo?.();
     setWebSession(true);
     // Contrôle parental : toute sélection d'une chaîne adulte passe par le code.
     if (!parentalUnlocked && parentalLockedGroups.includes(channel.group || '')) {
@@ -872,6 +879,7 @@ export function IPTVPlayer() {
           {tvMode ? appHeader : <MainNavigation onNavigate={navigate} />}
 
           <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} /></Suspense></TabsContent>
+          <TabsContent value="podcasts" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyPodcastsPanel tvMode={tvMode} /></Suspense></TabsContent>
           <TabsContent value={tvMode ? (activeTab === 'series' ? 'series' : 'movies') : 'vod'} className="screen-enter space-y-4">
             {!tvMode && <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
               {(['movies', 'series'] as const).map(kind => <button
@@ -929,7 +937,7 @@ export function IPTVPlayer() {
                 <div className="flex w-full sm:w-auto items-center gap-1.5 shrink-0">
                   <Button variant={channelView === 'list' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'list' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'list'} title="Vue liste" onClick={() => setChannelView('list')}><List aria-hidden="true" className="h-4 w-4 mr-1.5" />Liste</Button>
                   <Button variant={channelView === 'grid' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'grid' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'grid'} title="Grille des programmes (guide TV)" onClick={() => setChannelView('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4 mr-1.5" />Grille</Button>
-                  {currentChannel && <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => { setWebSession(true); setActiveTab('player'); }} title={currentChannel.name}><Play aria-hidden="true" className="h-4 w-4 mr-2" />Lecteur</Button>}
+                  {currentChannel && <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => { void AudioBridge?.pauseForVideo?.(); setWebSession(true); setActiveTab('player'); }} title={currentChannel.name}><Play aria-hidden="true" className="h-4 w-4 mr-2" />Lecteur</Button>}
                 </div>
               </CardHeader>
               <CardContent className="live-view-content flex-1 min-h-0 pb-6">
@@ -1203,6 +1211,7 @@ export function IPTVPlayer() {
           {currentPlaylist && <Suspense fallback={<PanelFallback className="h-64" />}><LazyRecordings channels={playableChannels} initialChannel={recordingsChannel && playableChannels.some(c => c.id === recordingsChannel.id) ? recordingsChannel : undefined} /></Suspense>}
         </DialogContent>
       </Dialog>
+      <MiniAudioPlayer tv={tvMode} onOpenPodcasts={() => setActiveTab('podcasts')} />
     </div>
   );
 }

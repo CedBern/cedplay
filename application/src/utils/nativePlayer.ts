@@ -5,6 +5,13 @@ import { readVodProgress, saveVodProgress } from './xtreamCatalog';
 import { updateVodHistoryProgress, pushPlayHistory } from './idb';
 import type { Channel } from '@/types/channel';
 import type { EPGData } from '@/types/epg';
+import type { AudioPlaybackState, PodcastEpisode, PodcastProgress } from '@/types/podcast';
+import {
+  clampPodcastSpeed,
+  getEpisodeProgress,
+  mergeNativeEpisodeProgress,
+  saveEpisodeProgress,
+} from './podcastStorage';
 import { getActiveUserAgent } from './userAgent';
 
 interface NativeStream { url: string; title: string }
@@ -64,7 +71,28 @@ interface NativePlayerPluginType {
   showPreview(options: PreviewRequest): Promise<void>;
   stopPreview(): Promise<void>;
   hidePreview(): Promise<void>;
+  playAudioEpisode(options: {
+    episodeId: string;
+    feedUrl?: string;
+    audioUrl: string;
+    title: string;
+    podcastTitle?: string;
+    artworkUrl?: string;
+    startPositionMs?: number;
+    durationMs?: number;
+    speed?: number;
+    restart?: boolean;
+  }): Promise<AudioPlaybackState>;
+  pauseAudio(): Promise<void>;
+  resumeAudio(): Promise<void>;
+  stopAudio(): Promise<void>;
+  seekAudioTo(options: { positionMs: number }): Promise<void>;
+  seekAudioBy(options: { deltaMs: number }): Promise<void>;
+  setAudioSpeed(options: { speed: number }): Promise<void>;
+  getAudioState(): Promise<AudioPlaybackState>;
+  getAudioProgressAll(): Promise<{ entries: PodcastProgress[] }>;
   addListener(event: 'previewState', listener: (data: { state: PreviewState }) => void): Promise<PluginListenerHandle>;
+  addListener(event: 'audioState', listener: (data: AudioPlaybackState) => void): Promise<PluginListenerHandle>;
 }
 
 /** Réglages du lecteur Android, gardés par Android pour le lecteur, l'aperçu, la mosaïque et les enregistrements. */
@@ -260,6 +288,7 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
     return false;
   }
   setPlaybackDelegated(true);
+  void AudioBridge.pauseForVideo();
   try {
     // The Android plugin resolves when the activity closes, not when it opens.
     const result = await NativePlayer[method]({
@@ -305,6 +334,7 @@ export const NativePlayerBridge = {
   /** Aperçu vidéo de l'écran Direct TV, posé par Android au-dessus du cadre donné. */
   async showPreview(request: PreviewRequest): Promise<boolean> {
     if (!isAvailable() || isPlaybackDelegated()) return false;
+    void AudioBridge.pauseForVideo();
     try { await NativePlayer.showPreview(request); return true; } catch { return false; }
   },
   /** Coupe le flux de l'aperçu (la connexion au fournisseur se libère) en gardant le lecteur prêt. */
@@ -352,6 +382,7 @@ export const NativePlayerBridge = {
       try { return !['http:', 'https:'].includes(new URL(s.url).protocol); } catch { return true; }
     })) { toast.error('Choisis de 2 à 8 flux HTTP distincts pour la mosaïque.'); return false; }
     setPlaybackDelegated(true);
+    void AudioBridge.pauseForVideo();
     try { await NativePlayer.openMosaic({ streams }); return true; }
     catch { toast.error('Impossible d’ouvrir la mosaïque Android.'); return false; }
     finally { setPlaybackDelegated(false); }
@@ -368,6 +399,7 @@ export const NativePlayerBridge = {
     try { if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error(); }
     catch { toast.error('Adresse de vidéo invalide.'); return false; }
     setPlaybackDelegated(true);
+    void AudioBridge.pauseForVideo();
     try {
       const result = await NativePlayer.openVod({
         url,
@@ -455,6 +487,7 @@ export const LocalLibraryBridge = {
   async playLocal(uri: string, title: string, subtitleUri?: string): Promise<{ positionMs: number; durationMs: number; completed?: boolean } | null> {
     if (!isAvailable() || isPlaybackDelegated()) return null;
     setPlaybackDelegated(true);
+    void AudioBridge.pauseForVideo();
     try {
       return await NativePlayer.playLocal({ uri, title, tvUi: isTvUi(), ...(subtitleUri ? { subtitleUri } : {}) });
     } catch { toast.error('Impossible de lire ce fichier.'); return null; }
@@ -520,5 +553,415 @@ export const RecordingsBridge = {
     if (!isAvailable()) return false;
     try { await NativePlayer.cancelScheduledRecording({ id }); return true; }
     catch { toast.error('Annulation impossible.'); return false; }
+  },
+};
+
+const EMPTY_AUDIO_STATE: AudioPlaybackState = {
+  active: false,
+  playing: false,
+  episodeId: null,
+  feedUrl: '',
+  audioUrl: '',
+  title: '',
+  podcastTitle: '',
+  artworkUrl: '',
+  positionMs: 0,
+  durationMs: 0,
+  speed: 1.0,
+};
+
+let currentAudioState: AudioPlaybackState = { ...EMPTY_AUDIO_STATE };
+const audioStateListeners = new Set<(state: AudioPlaybackState) => void>();
+const videoStopCallbacks = new Set<() => void>();
+let nativeAudioListenerAttached = false;
+let webAudioEl: HTMLAudioElement | null = null;
+
+function emitAudioState(next: AudioPlaybackState): void {
+  currentAudioState = { ...next };
+  if (next.active && next.episodeId) {
+    saveEpisodeProgress({
+      episodeId: next.episodeId,
+      feedUrl: next.feedUrl,
+      audioUrl: next.audioUrl,
+      title: next.title,
+      podcastTitle: next.podcastTitle,
+      ...(next.artworkUrl ? { artworkUrl: next.artworkUrl } : {}),
+      positionMs: next.positionMs,
+      durationMs: next.durationMs,
+      speed: next.speed,
+    });
+  }
+  audioStateListeners.forEach(fn => {
+    try { fn(currentAudioState); } catch { /* ignore */ }
+  });
+}
+
+function notifyAudioTakingOverFromVideo(): void {
+  videoStopCallbacks.forEach(fn => {
+    try { fn(); } catch { /* ignore */ }
+  });
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('cedplay:audio-play'));
+  }
+}
+
+function ensureNativeAudioListener(): void {
+  if (nativeAudioListenerAttached || !isAvailable()) return;
+  nativeAudioListenerAttached = true;
+  void NativePlayer.addListener('audioState', data => {
+    if (!data) return;
+    emitAudioState({
+      active: Boolean(data.active),
+      playing: Boolean(data.playing),
+      episodeId: data.episodeId ?? null,
+      feedUrl: data.feedUrl ?? '',
+      audioUrl: data.audioUrl ?? '',
+      title: data.title ?? '',
+      podcastTitle: data.podcastTitle ?? '',
+      artworkUrl: data.artworkUrl ?? '',
+      positionMs: Math.max(0, Math.round(data.positionMs || 0)),
+      durationMs: Math.max(0, Math.round(data.durationMs || 0)),
+      speed: clampPodcastSpeed(data.speed ?? 1.0),
+    });
+  }).catch(() => {
+    nativeAudioListenerAttached = false;
+  });
+}
+
+function isJsdomEnv(): boolean {
+  return typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '');
+}
+
+function getOrCreateWebAudio(): HTMLAudioElement | null {
+  if (typeof document === 'undefined' || isJsdomEnv()) return null;
+  if (webAudioEl) return webAudioEl;
+  const el = document.createElement('audio');
+  el.preload = 'metadata';
+  el.addEventListener('timeupdate', () => {
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    const pos = Math.max(0, Math.round((el.currentTime || 0) * 1000));
+    const dur = Number.isFinite(el.duration) && el.duration > 0
+      ? Math.round(el.duration * 1000)
+      : currentAudioState.durationMs;
+    emitAudioState({
+      ...currentAudioState,
+      positionMs: pos,
+      durationMs: dur,
+    });
+  });
+  el.addEventListener('loadedmetadata', () => {
+    if (!currentAudioState.active) return;
+    const dur = Number.isFinite(el.duration) && el.duration > 0
+      ? Math.round(el.duration * 1000)
+      : currentAudioState.durationMs;
+    if (dur > 0 && dur !== currentAudioState.durationMs) {
+      emitAudioState({ ...currentAudioState, durationMs: dur });
+    }
+  });
+  el.addEventListener('ended', () => {
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    const finalDur = currentAudioState.durationMs > 0
+      ? currentAudioState.durationMs
+      : Math.max(10_000, currentAudioState.positionMs);
+    emitAudioState({
+      ...currentAudioState,
+      playing: false,
+      positionMs: finalDur,
+      durationMs: finalDur,
+    });
+  });
+  webAudioEl = el;
+  return el;
+}
+
+function saveActiveEpisodeBeforeTransition(): void {
+  if (!currentAudioState.active || !currentAudioState.episodeId) return;
+  let pos = currentAudioState.positionMs;
+  let dur = currentAudioState.durationMs;
+  if (!isAvailable() && webAudioEl && Number.isFinite(webAudioEl.currentTime) && webAudioEl.currentTime > 0) {
+    pos = Math.max(pos, Math.round(webAudioEl.currentTime * 1000));
+    if (Number.isFinite(webAudioEl.duration) && webAudioEl.duration > 0) {
+      dur = Math.round(webAudioEl.duration * 1000);
+    }
+  }
+  saveEpisodeProgress({
+    episodeId: currentAudioState.episodeId,
+    feedUrl: currentAudioState.feedUrl,
+    audioUrl: currentAudioState.audioUrl,
+    title: currentAudioState.title,
+    podcastTitle: currentAudioState.podcastTitle,
+    ...(currentAudioState.artworkUrl ? { artworkUrl: currentAudioState.artworkUrl } : {}),
+    positionMs: pos,
+    durationMs: dur,
+    speed: currentAudioState.speed,
+  });
+}
+
+/**
+ * Pont vers le service audio d'arrière-plan (`AudioPlaybackService` sur Android, `<audio>` sur Web).
+ * Garantit :
+ * 1. L'enregistrement de la position et de la vitesse sous l'identifiant de l'épisode précédent avant tout changement d'épisode.
+ * 2. La restauration de la vitesse choisie avec la position lors de la reprise d'un épisode.
+ * 3. L'exclusion mutuelle avec la vidéo (passage podcast <-> vidéo sans double son).
+ */
+export const AudioBridge = {
+  getState(): AudioPlaybackState {
+    return { ...currentAudioState };
+  },
+
+  subscribe(listener: (state: AudioPlaybackState) => void): () => void {
+    ensureNativeAudioListener();
+    audioStateListeners.add(listener);
+    listener({ ...currentAudioState });
+    return () => { audioStateListeners.delete(listener); };
+  },
+
+  /** Permet au lecteur vidéo Web (IPTVPlayer) d'être averti dès qu'un podcast démarre afin de couper la vidéo. */
+  onAudioTakeover(callback: () => void): () => void {
+    videoStopCallbacks.add(callback);
+    return () => { videoStopCallbacks.delete(callback); };
+  },
+
+  /** Synchronise les progressions enregistrées par le service Android en arrière-plan (écran éteint). */
+  async syncFromNative(): Promise<void> {
+    if (!isAvailable()) return;
+    ensureNativeAudioListener();
+    try {
+      const [{ entries }, state] = await Promise.all([
+        NativePlayer.getAudioProgressAll().catch(() => ({ entries: [] as PodcastProgress[] })),
+        NativePlayer.getAudioState().catch(() => null),
+      ]);
+      if (Array.isArray(entries) && entries.length > 0) {
+        mergeNativeEpisodeProgress(entries);
+      }
+      if (state && state.active && state.episodeId) {
+        emitAudioState({
+          active: Boolean(state.active),
+          playing: Boolean(state.playing),
+          episodeId: state.episodeId,
+          feedUrl: state.feedUrl ?? '',
+          audioUrl: state.audioUrl ?? '',
+          title: state.title ?? '',
+          podcastTitle: state.podcastTitle ?? '',
+          artworkUrl: state.artworkUrl ?? '',
+          positionMs: Math.max(0, Math.round(state.positionMs || 0)),
+          durationMs: Math.max(0, Math.round(state.durationMs || 0)),
+          speed: clampPodcastSpeed(state.speed ?? 1.0),
+        });
+      }
+    } catch { /* ignore */ }
+  },
+
+  /** Lance ou reprend un épisode en restaurant sa position et sa vitesse, après avoir sauvegardé l'épisode précédent. */
+  async playEpisode(
+    episode: Pick<PodcastEpisode, 'id' | 'feedUrl' | 'audioUrl' | 'title' | 'podcastTitle'> & {
+      durationMs?: number;
+      artworkUrl?: string;
+    },
+    options?: {
+      startPositionMs?: number;
+      speed?: number;
+      restart?: boolean;
+    }
+  ): Promise<AudioPlaybackState> {
+    ensureNativeAudioListener();
+    // 1. Sauvegarder immédiatement la dernière position et vitesse sous l'épisode précédent avant de basculer
+    if (currentAudioState.active && currentAudioState.episodeId) {
+      saveActiveEpisodeBeforeTransition();
+    }
+
+    // 2. Couper toute vidéo active (aperçu direct Android ou vidéo Web) pour éviter tout double son
+    notifyAudioTakingOverFromVideo();
+    if (isAvailable()) {
+      void NativePlayer.stopPreview().catch(() => {});
+    }
+
+    // 3. Restaurer la position et la vitesse propres à cet épisode
+    const saved = getEpisodeProgress(episode.id);
+    const restart = Boolean(options?.restart);
+    const resolvedPositionMs = restart
+      ? 0
+      : typeof options?.startPositionMs === 'number' && options.startPositionMs >= 0
+        ? Math.round(options.startPositionMs)
+        : saved && !saved.completed
+          ? Math.max(0, Math.round(saved.positionMs))
+          : 0;
+    const resolvedSpeed = clampPodcastSpeed(
+      typeof options?.speed === 'number' && options.speed > 0
+        ? options.speed
+        : saved?.speed ?? 1.0
+    );
+    const resolvedDurationMs = Math.max(
+      0,
+      Math.round(episode.durationMs || saved?.durationMs || 0)
+    );
+
+    const optimistic: AudioPlaybackState = {
+      active: true,
+      playing: true,
+      episodeId: episode.id,
+      feedUrl: episode.feedUrl || '',
+      audioUrl: episode.audioUrl,
+      title: episode.title,
+      podcastTitle: episode.podcastTitle || '',
+      artworkUrl: episode.artworkUrl || '',
+      positionMs: resolvedPositionMs,
+      durationMs: resolvedDurationMs,
+      speed: resolvedSpeed,
+    };
+
+    emitAudioState(optimistic);
+
+    if (isAvailable()) {
+      try {
+        await NativePlayer.playAudioEpisode({
+          episodeId: episode.id,
+          feedUrl: episode.feedUrl,
+          audioUrl: episode.audioUrl,
+          title: episode.title,
+          podcastTitle: episode.podcastTitle,
+          ...(episode.artworkUrl ? { artworkUrl: episode.artworkUrl } : {}),
+          startPositionMs: resolvedPositionMs,
+          durationMs: resolvedDurationMs,
+          speed: resolvedSpeed,
+          restart,
+        });
+      } catch {
+        toast.error('Impossible de démarrer la lecture du podcast sur Android.');
+      }
+      return currentAudioState;
+    }
+
+    const audio = getOrCreateWebAudio();
+    if (audio) {
+      try {
+        if (audio.src !== episode.audioUrl) {
+          audio.src = episode.audioUrl;
+        }
+        audio.playbackRate = resolvedSpeed;
+        audio.defaultPlaybackRate = resolvedSpeed;
+        try {
+          audio.currentTime = resolvedPositionMs / 1000;
+        } catch { /* metadata not yet loaded in some browsers */ }
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => { /* headless test environment */ });
+        }
+      } catch { /* ignore in test env */ }
+    }
+    return currentAudioState;
+  },
+
+  async pause(): Promise<void> {
+    if (!currentAudioState.active) return;
+    saveActiveEpisodeBeforeTransition();
+    emitAudioState({ ...currentAudioState, playing: false });
+    if (isAvailable()) {
+      try { await NativePlayer.pauseAudio(); } catch { /* ignore */ }
+    } else if (webAudioEl) {
+      try { webAudioEl.pause(); } catch { /* ignore */ }
+    }
+  },
+
+  /** Met en pause le podcast lorsqu'une vidéo (Direct, VOD, Mosaïque, Vidéo locale) démarre. */
+  async pauseForVideo(): Promise<void> {
+    if (currentAudioState.active && currentAudioState.playing) {
+      await this.pause();
+    } else if (isAvailable()) {
+      try { await NativePlayer.pauseAudio(); } catch { /* ignore */ }
+    }
+  },
+
+  async resume(): Promise<void> {
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    notifyAudioTakingOverFromVideo();
+    emitAudioState({ ...currentAudioState, playing: true });
+    if (isAvailable()) {
+      try { await NativePlayer.resumeAudio(); } catch { /* ignore */ }
+    } else if (webAudioEl) {
+      try {
+        webAudioEl.playbackRate = currentAudioState.speed;
+        const p = webAudioEl.play();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch { /* ignore */ }
+    }
+  },
+
+  async togglePlayPause(): Promise<void> {
+    if (!currentAudioState.active) return;
+    if (currentAudioState.playing) {
+      await this.pause();
+    } else {
+      await this.resume();
+    }
+  },
+
+  async stop(): Promise<void> {
+    if (currentAudioState.active) {
+      saveActiveEpisodeBeforeTransition();
+    }
+    emitAudioState({ ...EMPTY_AUDIO_STATE });
+    if (isAvailable()) {
+      try { await NativePlayer.stopAudio(); } catch { /* ignore */ }
+    } else if (webAudioEl) {
+      try {
+        webAudioEl.pause();
+        webAudioEl.removeAttribute('src');
+      } catch { /* ignore */ }
+    }
+  },
+
+  async seekTo(positionMs: number): Promise<void> {
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    const clamped = currentAudioState.durationMs > 0
+      ? Math.max(0, Math.min(currentAudioState.durationMs, Math.round(positionMs)))
+      : Math.max(0, Math.round(positionMs));
+    emitAudioState({ ...currentAudioState, positionMs: clamped });
+    if (isAvailable()) {
+      try { await NativePlayer.seekAudioTo({ positionMs: clamped }); } catch { /* ignore */ }
+    } else if (webAudioEl) {
+      try { webAudioEl.currentTime = clamped / 1000; } catch { /* ignore */ }
+    }
+  },
+
+  async seekBy(deltaMs: number): Promise<void> {
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    const target = Math.max(0, currentAudioState.positionMs + Math.round(deltaMs));
+    await this.seekTo(target);
+  },
+
+  async setSpeed(speed: number): Promise<void> {
+    const safeSpeed = clampPodcastSpeed(speed);
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    emitAudioState({ ...currentAudioState, speed: safeSpeed });
+    if (isAvailable()) {
+      try { await NativePlayer.setAudioSpeed({ speed: safeSpeed }); } catch { /* ignore */ }
+    } else if (webAudioEl) {
+      try {
+        webAudioEl.playbackRate = safeSpeed;
+        webAudioEl.defaultPlaybackRate = safeSpeed;
+      } catch { /* ignore */ }
+    }
+  },
+
+  /** Simule l'avancement de la tête de lecture dans l'épisode actif (utilisé par le lecteur Web ou les tests). */
+  reportPosition(positionMs: number, durationMs?: number): void {
+    if (!currentAudioState.active || !currentAudioState.episodeId) return;
+    const safePos = Math.max(0, Math.round(positionMs));
+    const safeDur = typeof durationMs === 'number' && durationMs > 0
+      ? Math.round(durationMs)
+      : currentAudioState.durationMs;
+    emitAudioState({
+      ...currentAudioState,
+      positionMs: safePos,
+      durationMs: safeDur,
+    });
+  },
+
+  resetForTests(): void {
+    currentAudioState = { ...EMPTY_AUDIO_STATE };
+    if (webAudioEl) {
+      try { webAudioEl.pause(); } catch { /* ignore */ }
+    }
   },
 };

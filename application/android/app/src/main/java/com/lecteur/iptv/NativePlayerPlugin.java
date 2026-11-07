@@ -865,6 +865,7 @@ public class NativePlayerPlugin extends Plugin {
 
     private void launchPlayer(PluginCall call, Intent intent) {
         playerOpen = true;
+        AudioPlaybackService.pauseIfPlaying(getContext());
         getActivity().runOnUiThread(() -> { if (preview != null) preview.pause(); });
         try {
             startActivityForResult(call, intent, "playerClosed");
@@ -898,6 +899,7 @@ public class NativePlayerPlugin extends Plugin {
         }
         getActivity().runOnUiThread(() -> {
             if (playerOpen) { call.resolve(); return; }
+            AudioPlaybackService.pauseIfPlaying(getContext());
             try {
                 preview().show(url, x.floatValue(), y.floatValue(), width.floatValue(), height.floatValue(), (float) radius, (float) dpr);
                 call.resolve();
@@ -930,10 +932,159 @@ public class NativePlayerPlugin extends Plugin {
         if (preview != null && !playerOpen) preview.resume();
     }
 
+    private final AudioPlaybackService.StateListener audioListener = snapshot -> {
+        notifyListeners("audioState", snapshotToJS(snapshot));
+    };
+
+    @Override
+    public void load() {
+        super.load();
+        AudioPlaybackService.addListener(audioListener);
+    }
+
     @Override
     protected void handleOnDestroy() {
+        AudioPlaybackService.removeListener(audioListener);
         if (preview != null) preview.hide();
         super.handleOnDestroy();
+    }
+
+    // ── Lecture audio en arrière-plan (podcasts) ────────────────────────
+
+    private static JSObject snapshotToJS(AudioPlaybackService.StateSnapshot s) {
+        JSObject obj = new JSObject();
+        obj.put("state", s.state);
+        obj.put("episodeId", s.episodeId);
+        obj.put("feedUrl", s.feedUrl);
+        obj.put("audioUrl", s.audioUrl);
+        obj.put("title", s.title);
+        obj.put("podcastTitle", s.podcastTitle);
+        obj.put("artworkUrl", s.artworkUrl);
+        obj.put("positionMs", s.positionMs);
+        obj.put("durationMs", s.durationMs);
+        obj.put("speed", s.speed);
+        obj.put("playing", s.playing);
+        if (s.error != null) obj.put("error", s.error);
+        return obj;
+    }
+
+    private void sendAudioAction(Intent intent) {
+        Context ctx = getContext();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && AudioPlaybackService.ACTION_PLAY_EPISODE.equals(intent.getAction())) {
+            ctx.startForegroundService(intent);
+        } else {
+            ctx.startService(intent);
+        }
+    }
+
+    @PluginMethod
+    public void playAudioEpisode(PluginCall call) {
+        String episodeId = call.getString("episodeId");
+        String audioUrl = call.getString("audioUrl");
+        if (episodeId == null || episodeId.isEmpty() || !isHttpUrl(audioUrl)) {
+            call.reject("Adresse d'épisode invalide");
+            return;
+        }
+        // Coupe l'aperçu vidéo TV si actif : pas de double son.
+        getActivity().runOnUiThread(() -> { if (preview != null) preview.stop(); });
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_PLAY_EPISODE);
+        intent.putExtra("episodeId", episodeId);
+        intent.putExtra("audioUrl", audioUrl);
+        intent.putExtra("feedUrl", call.getString("feedUrl", ""));
+        intent.putExtra("title", call.getString("title", ""));
+        intent.putExtra("podcastTitle", call.getString("podcastTitle", ""));
+        intent.putExtra("artworkUrl", call.getString("artworkUrl", ""));
+        Double startPos = call.getDouble("startPositionMs");
+        if (startPos != null) intent.putExtra("startPositionMs", startPos.longValue());
+        Float speed = call.getFloat("speed");
+        if (speed != null && speed > 0f) intent.putExtra("speed", speed.floatValue());
+        sendAudioAction(intent);
+        call.resolve(snapshotToJS(AudioPlaybackService.getCurrentSnapshot(getContext())));
+    }
+
+    @PluginMethod
+    public void pauseAudio(PluginCall call) {
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_PAUSE);
+        sendAudioAction(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void resumeAudio(PluginCall call) {
+        getActivity().runOnUiThread(() -> { if (preview != null) preview.stop(); });
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_RESUME);
+        sendAudioAction(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopAudio(PluginCall call) {
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_STOP);
+        sendAudioAction(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void seekAudioTo(PluginCall call) {
+        Double pos = call.getDouble("positionMs", 0.0);
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_SEEK_TO);
+        intent.putExtra("positionMs", pos != null ? pos.longValue() : 0L);
+        sendAudioAction(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void seekAudioBy(PluginCall call) {
+        Double delta = call.getDouble("deltaMs", 0.0);
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_SEEK_BY);
+        intent.putExtra("deltaMs", delta != null ? delta.longValue() : 0L);
+        sendAudioAction(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void setAudioSpeed(PluginCall call) {
+        Float speed = call.getFloat("speed", 1.0f);
+        Intent intent = new Intent(getContext(), AudioPlaybackService.class);
+        intent.setAction(AudioPlaybackService.ACTION_SET_SPEED);
+        intent.putExtra("speed", speed != null ? speed.floatValue() : 1.0f);
+        sendAudioAction(intent);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getAudioState(PluginCall call) {
+        call.resolve(snapshotToJS(AudioPlaybackService.getCurrentSnapshot(getContext())));
+    }
+
+    @PluginMethod
+    public void getAudioProgressAll(PluginCall call) {
+        JSArray entries = new JSArray();
+        for (AudioProgressStore.Entry e : AudioProgressStore.tracker(getContext()).getAllEntries()) {
+            JSObject obj = new JSObject();
+            obj.put("episodeId", e.episodeId);
+            obj.put("feedUrl", e.feedUrl);
+            obj.put("audioUrl", e.audioUrl);
+            obj.put("title", e.title);
+            obj.put("podcastTitle", e.podcastTitle);
+            obj.put("artworkUrl", e.artworkUrl);
+            obj.put("positionMs", e.positionMs);
+            obj.put("durationMs", e.durationMs);
+            obj.put("speed", e.speed);
+            obj.put("completed", e.completed);
+            obj.put("updatedAt", e.updatedAt);
+            entries.put(obj);
+        }
+        JSObject res = new JSObject();
+        res.put("entries", entries);
+        res.put("lastActiveEpisodeId", AudioProgressStore.tracker(getContext()).getActiveEpisodeId());
+        call.resolve(res);
     }
 
     // ── Raccourcis de l'icône (appui long) : chaînes favorites ────────
