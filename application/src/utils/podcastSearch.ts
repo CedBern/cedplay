@@ -275,7 +275,7 @@ export async function searchPodcasts(
       // Gpodder colle parfois l'adresse e-mail : « France Inter (podcast@radiofrance.com) ».
       const author = (r.author || '').replace(/\s*\([^)]*@[^)]*\)/g, '').trim();
       const sameShow = (it: PodcastSearchResult) =>
-        normalizeName(it.title) === normalizeName(title) && authorsCompatible(it.author, author);
+        normalizeName(it.title) === normalizeName(title) && authorsMatch(it.author, author);
 
       // Un résultat Apple sans flux reçoit celui de Gpodder seulement si titre ET auteur concordent.
       const matchingApple = items.find(it => !it.feedUrl && sameShow(it));
@@ -334,21 +334,24 @@ function normalizeName(value: string): string {
 // Mots trop communs pour distinguer deux producteurs (France Culture / France Inter…).
 const GENERIC_AUTHOR_WORDS = new Set(['radio', 'france', 'podcast', 'podcasts', 'media', 'medias', 'studio', 'studios', 'les', 'the']);
 
-function authorsCompatible(a: string, b: string): boolean {
+/**
+ * Vrai seulement si les deux auteurs sont connus et désignent visiblement le même producteur.
+ * Un auteur absent ou trop vague (« Radio France ») ne confirme pas l'identité d'une émission.
+ */
+export function authorsMatch(a: string, b: string): boolean {
   const na = normalizeName(a);
   const nb = normalizeName(b);
-  if (!na || !nb || na.includes(nb) || nb.includes(na)) return true;
+  if (!na || !nb) return false;
+  if (na === nb) return true;
   const words = (s: string) => s.split(' ').filter(w => w.length >= 3 && !GENERIC_AUTHOR_WORDS.has(w));
   const wa = words(na);
   const wb = new Set(words(nb));
-  // Sans mot distinctif d'un côté, l'auteur ne permet pas de trancher.
-  if (wa.length === 0 || wb.size === 0) return true;
   return wa.some(w => wb.has(w));
 }
 
 /**
  * Retrouve dans les annuaires le flux d'une émission connue par son titre (et son auteur).
- * Ne choisit seul que si une seule émission porte exactement ce titre avec un auteur compatible ;
+ * Ne choisit seul que si une seule émission porte exactement ce titre avec le même auteur, connu des deux côtés ;
  * sinon renvoie les émissions possibles pour que l'utilisateur tranche.
  */
 async function findFeedForShow(
@@ -371,7 +374,7 @@ async function findFeedForShow(
 
   const wanted = normalizeName(title);
   const sameTitle = withFeed.filter(it => normalizeName(it.title) === wanted);
-  const confirmed = sameTitle.filter(it => authorsCompatible(author, it.author));
+  const confirmed = sameTitle.filter(it => authorsMatch(author, it.author));
   if (confirmed.length === 1) return { match: confirmed[0], candidates: [] };
 
   if (confirmed.length > 0) return { candidates: confirmed.slice(0, 6) };
@@ -390,6 +393,17 @@ async function findFeedForShow(
     .sort((a, b) => b.score - a.score)
     .map(x => x.it);
   return { candidates: near.slice(0, 6) };
+}
+
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 function isAppleHost(host: string): boolean {
@@ -475,16 +489,19 @@ export async function resolvePodcastLink(
     return { kind: 'apple', resolved: false, warning: NO_PUBLIC_FEED };
   }
 
-  // 3. Spotify (open.spotify.com/show/…) : seul le titre est lisible sur la page
+  // 3. Spotify (open.spotify.com/show/…) : titre, et auteur quand la description le donne
   if (parsed.hostname === 'open.spotify.com' && parsed.pathname.startsWith('/show/')) {
     const html = await fetchHtmlText(normalized, options?.signal);
     const raw =
       html?.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
       html?.match(/<title>([^<]+)<\/title>/i)?.[1] ||
       '';
-    const showTitle = raw.replace(/\s*\|\s*(Podcast on )?Spotify$/i, '').trim();
+    const showTitle = decodeEntities(raw.replace(/\s*\|\s*(Podcast on )?Spotify$/i, '').trim());
+    // og:description ressemble à « Écoute X sur Spotify. Podcast · Auteur · Résumé » ; sinon auteur inconnu.
+    const ogDescription = html?.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i)?.[1] || '';
+    const showAuthor = decodeEntities(ogDescription.match(/Podcast\s*·\s*([^·]+?)\s*(?:·|$)/)?.[1] || '');
     if (showTitle) {
-      const { match, candidates } = await findFeedForShow(showTitle, '', options?.signal);
+      const { match, candidates } = await findFeedForShow(showTitle, showAuthor, options?.signal);
       if (match) return { kind: 'spotify', resolved: true, feedUrl: match.feedUrl, podcast: match };
       if (candidates.length > 0) return { kind: 'spotify', resolved: false, candidates };
     }

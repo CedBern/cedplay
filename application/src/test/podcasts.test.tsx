@@ -45,6 +45,54 @@ const SAMPLE_RSS = `<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>`;
 
+const SAMPLE_ATOM = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <title>Atome Radio</title>
+  <subtitle>Une émission au format Atom.</subtitle>
+  <link rel="self" href="https://example.test/atom" />
+  <link href="https://example.test/atome-radio" />
+  <logo>https://example.test/atome.jpg</logo>
+  <id>urn:atome</id>
+  <entry>
+    <id>urn:atome:1</id>
+    <title>Premier essai</title>
+    <published>2025-11-04T06:00:00Z</published>
+    <summary>Le premier.</summary>
+    <link rel="alternate" href="https://example.test/atome-radio/1" />
+    <link rel="enclosure" type="audio/mpeg" href="https://example.test/audio/atome1.mp3" />
+    <itunes:duration>12:00</itunes:duration>
+  </entry>
+  <entry>
+    <id>urn:atome:2</id>
+    <title>Second essai</title>
+    <updated>2025-11-05T06:00:00Z</updated>
+    <content type="html">&lt;p&gt;Le &lt;b&gt;second&lt;/b&gt;.&lt;/p&gt;</content>
+    <link rel="enclosure" type="audio/mpeg" href="https://example.test/audio/atome2.mp3" />
+  </entry>
+  <entry>
+    <id>urn:atome:texte</id>
+    <title>Billet sans audio</title>
+    <link href="https://example.test/atome-radio/billet" />
+  </entry>
+</feed>`;
+
+const SAMPLE_RDF = `<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:enc="http://purl.oclc.org/net/rss_2.0/enc#">
+  <channel rdf:about="https://example.test/rdf">
+    <title>Radio RDF</title>
+    <link>https://example.test/radio-rdf</link>
+    <description>Un vieux flux RSS 1.0.</description>
+  </channel>
+  <item rdf:about="https://example.test/radio-rdf/1">
+    <title>Épisode RDF</title>
+    <link>https://example.test/radio-rdf/1</link>
+    <dc:date>2025-11-03T06:00:00Z</dc:date>
+    <description>Dans un flux RDF.</description>
+    <enc:enclosure rdf:resource="https://example.test/audio/rdf1.mp3" enc:type="audio/mpeg" />
+  </item>
+</rdf:RDF>`;
+
 describe('Podcasts Livraison 1A — Analyse RSS, vitesse + position et changement d’épisode', () => {
   beforeEach(() => {
     clearPodcastStorageForTests();
@@ -247,6 +295,36 @@ describe('Podcasts Livraison 1A — Analyse RSS, vitesse + position et changemen
     expect(within(mini).getByText('1.25×')).toBeInTheDocument();
     // Temps restant lisible : durée audio restante (30:00 - 1:05), indépendante de la vitesse.
     expect(within(mini).getByText('Reste 29 min')).toBeInTheDocument();
+  });
+});
+
+describe('Formats de flux pris en charge', () => {
+  it('Atom : émission, épisodes audio (lien enclosure), dates, résumés et pochette', () => {
+    const { feed, episodes } = parsePodcastRss(SAMPLE_ATOM, 'https://example.test/atom');
+    expect(feed.title).toBe('Atome Radio');
+    expect(feed.description).toBe('Une émission au format Atom.');
+    expect(feed.artworkUrl).toBe('https://example.test/atome.jpg');
+    expect(feed.siteUrl).toBe('https://example.test/atome-radio');
+    expect(episodes.map(e => e.title)).toEqual(['Second essai', 'Premier essai']);
+    expect(episodes.map(e => e.audioUrl)).toEqual(['https://example.test/audio/atome2.mp3', 'https://example.test/audio/atome1.mp3']);
+    expect(episodes[0]!.description).toBe('Le second .');
+    expect(episodes[1]!.durationMs).toBe(12 * 60 * 1000);
+    expect(episodes[1]!.publishedAt).toBe(Date.parse('2025-11-04T06:00:00Z'));
+  });
+
+  it('RSS 1.0 (RDF) : épisodes placés à côté de <channel>, avec enc:enclosure', () => {
+    const { feed, episodes } = parsePodcastRss(SAMPLE_RDF, 'https://example.test/rdf');
+    expect(feed.title).toBe('Radio RDF');
+    expect(feed.siteUrl).toBe('https://example.test/radio-rdf');
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]!.audioUrl).toBe('https://example.test/audio/rdf1.mp3');
+    expect(episodes[0]!.publishedAt).toBe(Date.parse('2025-11-03T06:00:00Z'));
+    expect(episodes[0]!.description).toBe('Dans un flux RDF.');
+  });
+
+  it('autre document XML : message clair, sans parler de <channel>', () => {
+    expect(() => parsePodcastRss('<?xml version="1.0"?><opml><body /></opml>', 'https://example.test/x'))
+      .toThrow('Format de flux non reconnu : RSS ou Atom attendu.');
   });
 });
 
@@ -539,6 +617,26 @@ describe('Écouter — présentation sobre', () => {
       }
     });
 
+    it('s’abonne à un flux Atom collé sans extension', async () => {
+      const user = userEvent.setup();
+      const atomUrl = 'https://example.test/atom';
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.startsWith(atomUrl)) return Promise.resolve({ ok: true, text: () => Promise.resolve(SAMPLE_ATOM) });
+        return Promise.reject(new Error('Unknown url'));
+      });
+      try {
+        render(<PodcastsPanel />);
+        await user.click(screen.getByRole('button', { name: /Coller un lien/i }));
+        await user.type(screen.getByRole('textbox', { name: 'Lien ou adresse RSS du podcast' }), atomUrl);
+        await user.click(screen.getByRole('button', { name: 'Ajouter depuis ce lien' }));
+        expect(await screen.findByRole('button', { name: 'Atome Radio', pressed: true })).toBeInTheDocument();
+        expect(readPodcastFeeds().map(f => f.url)).toEqual([atomUrl]);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     it('n’accepte pas une page HTML qui mentionne <rss> comme un flux', async () => {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = vi.fn().mockImplementation(() =>
@@ -602,6 +700,42 @@ describe('Écouter — présentation sobre', () => {
         const r = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id1111111');
         expect(r.resolved).toBe(true);
         expect(r.feedUrl).toBe('https://example.test/cours.xml');
+      });
+
+      it('auteur absent d’un côté : un titre identique ne suffit pas, choix proposé', async () => {
+        // Apple ne donne pas d'auteur
+        const dir1 = directory([{ title: 'La Terre au carré', author: 'France Inter', url: 'https://example.test/terre.xml' }]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('lookup') ? Promise.resolve(lookup('La Terre au carré', '')) : dir1(url) ?? Promise.reject(new Error(url))
+        );
+        const noAppleAuthor = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id2222222');
+        expect(noAppleAuthor.resolved).toBe(false);
+        expect(noAppleAuthor.candidates?.map(c => c.feedUrl)).toEqual(['https://example.test/terre.xml']);
+
+        // L'annuaire ne donne pas d'auteur
+        const dir2 = directory([{ title: 'La Terre au carré', author: '', url: 'https://example.test/terre.xml' }]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('lookup') ? Promise.resolve(lookup('La Terre au carré', 'France Inter')) : dir2(url) ?? Promise.reject(new Error(url))
+        );
+        const noDirectoryAuthor = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id3333333');
+        expect(noDirectoryAuthor.resolved).toBe(false);
+        expect(noDirectoryAuthor.candidates).toHaveLength(1);
+      });
+
+      it('Spotify : titre seul → choix proposé ; auteur lisible et concordant → abonnement direct', async () => {
+        const dir = directory([{ title: 'Transfert', author: 'Slate.fr Podcasts', url: 'https://example.test/transfert.xml' }]);
+        let page = '<meta property="og:title" content="Transfert | Podcast on Spotify">';
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('open.spotify.com') ? Promise.resolve({ ok: true, text: () => Promise.resolve(page) }) : dir(url) ?? Promise.reject(new Error(url))
+        );
+        const titleOnly = await resolvePodcastLink('https://open.spotify.com/show/abc');
+        expect(titleOnly.resolved).toBe(false);
+        expect(titleOnly.candidates?.map(c => c.feedUrl)).toEqual(['https://example.test/transfert.xml']);
+
+        page += '<meta property="og:description" content="Listen to Transfert on Spotify. Podcast · Slate.fr · Des histoires vraies.">';
+        const withAuthor = await resolvePodcastLink('https://open.spotify.com/show/abc');
+        expect(withAuthor.resolved).toBe(true);
+        expect(withAuthor.feedUrl).toBe('https://example.test/transfert.xml');
       });
 
       it('Spotify : deux émissions du même nom → choix proposé dans l’écran, puis abonnement à celle choisie', async () => {

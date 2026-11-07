@@ -78,57 +78,96 @@ export interface ParsedPodcastFeed {
   episodes: PodcastEpisode[];
 }
 
-/** Analyse un flux RSS 2.0 / iTunes de podcast et extrait l'émission ainsi que ses épisodes audio. */
+/** Erreur de contenu du flux (format, épisodes) : inutile de retenter par un autre chemin réseau. */
+export class FeedFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FeedFormatError';
+  }
+}
+
+function childrenNamed(parent: Element, localName: string): Element[] {
+  return Array.from(parent.children).filter(c => (c.localName || c.tagName).toLowerCase() === localName);
+}
+
+/** Lien Atom portant cette relation (« alternate » par défaut quand rel est absent). */
+function atomLink(parent: Element, rel: string, preferAudio = false): string {
+  const links = childrenNamed(parent, 'link').filter(l => (l.getAttribute('rel') || 'alternate') === rel && l.getAttribute('href'));
+  const chosen = (preferAudio && links.find(l => (l.getAttribute('type') || '').startsWith('audio/'))) || links[0];
+  return chosen?.getAttribute('href')?.trim() || '';
+}
+
+/** Adresse audio d'un élément : enclosure RSS 2.0, enc:enclosure RSS 1.0, lien Atom ou media:content. */
+function audioUrlOf(item: Element, isAtom: boolean): string {
+  if (isAtom) {
+    const href = atomLink(item, 'enclosure', true);
+    if (href) return href;
+  }
+  const enclosure = item.getElementsByTagNameNS('*', 'enclosure')[0] || item.getElementsByTagName('enclosure')[0];
+  const fromEnclosure = enclosure?.getAttribute('url') || enclosure?.getAttribute('rdf:resource') || enclosure?.getAttributeNS('http://www.w3.org/1999/02/22-rdf-syntax-ns#', 'resource');
+  if (fromEnclosure?.trim()) return fromEnclosure.trim();
+  const mediaContent = item.getElementsByTagName('media:content')[0] || item.getElementsByTagNameNS('*', 'content')[0];
+  return mediaContent?.getAttribute('url')?.trim() || '';
+}
+
+/** Analyse un flux de podcast RSS 2.0 / iTunes, RSS 1.0 (RDF) ou Atom, et extrait l'émission et ses épisodes audio. */
 export function parsePodcastRss(xmlText: string, feedUrl: string, now = Date.now()): ParsedPodcastFeed {
   const normalizedUrl = feedUrl.trim();
   const parser = new DOMParser();
-  const doc = parser.parseFromString(xmlText.trim(), 'text/xml');
+  const doc = parser.parseFromString(xmlText.replace(/^\uFEFF/, '').trim(), 'text/xml');
 
   const parserError = doc.getElementsByTagName('parsererror')[0];
   if (parserError) {
-    throw new Error('Le flux RSS est invalide ou illisible.');
+    throw new FeedFormatError('Le flux est invalide ou illisible.');
   }
 
-  const channelEl = doc.getElementsByTagName('channel')[0];
+  const root = doc.documentElement;
+  const isAtom = (root?.localName || '').toLowerCase() === 'feed';
+  const channelEl = isAtom ? root : doc.getElementsByTagName('channel')[0];
   if (!channelEl) {
-    throw new Error('Aucun élément <channel> trouvé dans ce flux RSS.');
+    throw new FeedFormatError('Format de flux non reconnu : RSS ou Atom attendu.');
   }
 
   const feedTitle = stripHtml(directChildText(channelEl, 'title')) || normalizedUrl;
   const feedDescription = stripHtml(
-    directChildText(channelEl, 'description') || directChildText(channelEl, 'itunes:summary')
+    (isAtom ? directChildText(channelEl, 'subtitle') : directChildText(channelEl, 'description'))
+      || directChildText(channelEl, 'itunes:summary')
   );
-  const feedArtwork = findArtwork(channelEl);
-  const siteUrl = directChildText(channelEl, 'link') || undefined;
+  let feedArtwork = findArtwork(channelEl);
+  if (!feedArtwork && isAtom) {
+    const logo = (childrenNamed(channelEl, 'logo')[0] || childrenNamed(channelEl, 'icon')[0])?.textContent?.trim();
+    if (logo && /^https?:\/\//i.test(logo)) feedArtwork = logo;
+  }
+  const siteUrl = (isAtom ? atomLink(channelEl, 'alternate') : directChildText(channelEl, 'link')) || undefined;
 
-  const itemNodes = Array.from(channelEl.getElementsByTagName('item'));
+  // RSS 2.0 : <item> dans <channel>. RSS 1.0 (RDF) : <item> à côté de <channel>. Atom : <entry>.
+  let itemNodes = isAtom ? childrenNamed(channelEl, 'entry') : Array.from(channelEl.getElementsByTagName('item'));
+  if (!isAtom && itemNodes.length === 0) itemNodes = Array.from(doc.getElementsByTagName('item'));
   const episodes: PodcastEpisode[] = [];
   const seenIds = new Set<string>();
 
   for (const item of itemNodes) {
-    const enclosure = item.getElementsByTagName('enclosure')[0];
-    let audioUrl = enclosure?.getAttribute('url')?.trim() || '';
-    if (!audioUrl) {
-      const mediaContent = item.getElementsByTagName('media:content')[0];
-      audioUrl = mediaContent?.getAttribute('url')?.trim() || '';
-    }
+    const audioUrl = audioUrlOf(item, isAtom);
     if (!audioUrl || !/^https?:\/\//i.test(audioUrl)) continue;
 
-    const guid = directChildText(item, 'guid') || audioUrl;
+    const guid = directChildText(item, isAtom ? 'id' : 'guid') || item.getAttribute('rdf:about') || audioUrl;
     const rawId = `${normalizedUrl}::${guid}`;
     if (seenIds.has(rawId)) continue;
     seenIds.add(rawId);
 
     const title = stripHtml(directChildText(item, 'title')) || 'Épisode sans titre';
-    const pubDate = directChildText(item, 'pubDate') || undefined;
+    const pubDate = (isAtom
+      ? directChildText(item, 'published') || directChildText(item, 'updated')
+      : directChildText(item, 'pubDate') || directChildText(item, 'dc:date')) || undefined;
     const parsedDate = pubDate ? Date.parse(pubDate) : Number.NaN;
     const publishedAt = Number.isFinite(parsedDate) ? parsedDate : 0;
     const durationRaw = directChildText(item, 'itunes:duration') || directChildText(item, 'duration');
     const durationMs = parseItunesDurationMs(durationRaw);
     const description = stripHtml(
-      directChildText(item, 'description')
+      (isAtom
+        ? directChildText(item, 'summary') || directChildText(item, 'content')
+        : directChildText(item, 'description') || directChildText(item, 'content:encoded'))
         || directChildText(item, 'itunes:summary')
-        || directChildText(item, 'content:encoded')
     );
     const artworkUrl = findArtwork(item) || feedArtwork;
 
@@ -147,7 +186,7 @@ export function parsePodcastRss(xmlText: string, feedUrl: string, now = Date.now
   }
 
   if (episodes.length === 0) {
-    throw new Error('Ce flux RSS ne contient aucun épisode audio (<enclosure>).');
+    throw new FeedFormatError('Ce flux ne contient aucun épisode audio.');
   }
 
   episodes.sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0));
