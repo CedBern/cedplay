@@ -10,6 +10,7 @@ import {
 } from '@/utils/podcastStorage';
 import { AudioBridge } from '@/utils/nativePlayer';
 import { PodcastsPanel } from '@/components/PodcastsPanel';
+import { formatEpisodeDate, formatEpisodeLength } from '@/utils/podcastFormat';
 import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
 
 const SAMPLE_RSS = `<?xml version="1.0" encoding="UTF-8"?>
@@ -174,18 +175,26 @@ describe('Podcasts Livraison 1A — Analyse RSS, vitesse + position et changemen
       </>
     );
 
-    // L'épisode 2 affiche bien sa position de reprise (5:00) et son badge de vitesse (1.5×)
-    expect(screen.getByText('Reprendre à 5:00')).toBeInTheDocument();
-    expect(screen.getByText('1.5×')).toBeInTheDocument();
+    // Une seule ligne d'infos : l'épisode 2 (28:30, repris à 5:00) affiche le temps restant.
+    const row = screen.getByRole('button', { name: `Reprendre ${ep2.title}` });
+    expect(row).toHaveTextContent('Reste 24 min');
+    expect(within(row).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '18');
+    // Le résumé est replié par défaut, le chevron l'ouvre.
+    expect(screen.queryByText('Récit d\'une traversée maritime.')).toBeNull();
+    const details = screen.getByRole('button', { name: `Détails de ${ep2.title}` });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    await user.click(details);
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Récit d\'une traversée maritime.')).toBeInTheDocument();
 
-    // Cliquer sur "Reprendre" lance l'épisode à 5:00 et 1.5× et ouvre le MiniAudioPlayer
-    await user.click(screen.getByRole('button', { name: `Reprendre ${ep2.title}` }));
-    expect(screen.getByTestId('active-audio-title')).toHaveTextContent(ep2.title);
-    expect(screen.getByTestId('active-audio-speed')).toHaveTextContent('1.5×');
+    // Toute la ligne reprend l'épisode à 5:00 et 1.5× et ouvre le MiniAudioPlayer
+    await user.click(row);
+    expect(screen.getByRole('button', { name: `Pause ${ep2.title}` })).toHaveAttribute('aria-current', 'true');
 
     const mini = screen.getByRole('complementary', { name: 'Mini-lecteur audio' });
     expect(mini).toHaveAttribute('data-tv-mode', 'false');
     expect(within(mini).getByText(ep2.title)).toBeInTheDocument();
+    expect(within(mini).getByText('1.5×')).toBeInTheDocument();
 
     // Vérifier le basculement vers tvMode=true (réglage Auto/TV/Mobile)
     rerender(
@@ -226,7 +235,75 @@ describe('Podcasts Livraison 1A — Analyse RSS, vitesse + position et changemen
 
     const mini = screen.getByRole('complementary', { name: 'Mini-lecteur audio' });
     expect(mini).toBeInTheDocument();
-    expect(within(mini).getByText(/1:05/)).toBeInTheDocument();
+    const bar = within(mini).getByRole('progressbar');
+    expect(bar).toHaveAttribute('aria-valuenow', '4');
+    expect(bar).toHaveAttribute('aria-valuetext', '1:05 sur 30:00');
     expect(within(mini).getByText('1.25×')).toBeInTheDocument();
+    // Temps restant lisible : durée audio restante (30:00 - 1:05), indépendante de la vitesse.
+    expect(within(mini).getByText('Reste 29 min')).toBeInTheDocument();
+  });
+});
+
+describe('Écouter — présentation sobre', () => {
+  beforeEach(() => {
+    clearPodcastStorageForTests();
+    AudioBridge.resetForTests();
+  });
+
+  afterEach(() => {
+    cleanup();
+    clearPodcastStorageForTests();
+    AudioBridge.resetForTests();
+  });
+
+  it('durées à la minute et dates courtes', () => {
+    expect(formatEpisodeLength(25 * 60_000)).toBe('25 min');
+    expect(formatEpisodeLength(65 * 60_000)).toBe('1 h 05');
+    expect(formatEpisodeLength(120 * 60_000)).toBe('2 h');
+    expect(formatEpisodeLength(10_000)).toBe('1 min');
+    const now = new Date(2026, 10, 7, 12);
+    expect(formatEpisodeDate(undefined, new Date(2026, 10, 7, 6).getTime(), now)).toBe('Aujourd’hui');
+    expect(formatEpisodeDate(undefined, new Date(2026, 10, 6, 23).getTime(), now)).toBe('Hier');
+    expect(formatEpisodeDate(undefined, new Date(2026, 9, 29).getTime(), now)).toBe('29 oct.');
+    expect(formatEpisodeDate(undefined, new Date(2025, 9, 29).getTime(), now)).toBe('29 oct. 2025');
+  });
+
+  it('sans abonnement : formulaire direct ; avec abonnements : replié derrière Ajouter', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<PodcastsPanel />);
+    expect(screen.getByRole('textbox', { name: 'Adresse RSS du podcast' })).toBeInTheDocument();
+    unmount();
+
+    const parsed = parsePodcastRss(SAMPLE_RSS, 'https://example.test/rss.xml');
+    saveSubscribedPodcast(parsed.feed, parsed.episodes);
+    render(<PodcastsPanel />);
+    expect(screen.queryByRole('textbox', { name: 'Adresse RSS du podcast' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Les Pieds sur terre', pressed: true })).toBeInTheDocument();
+    expect(screen.getByText('2 épisodes')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Ajouter un podcast' }));
+    expect(screen.getByRole('textbox', { name: 'Adresse RSS du podcast' })).toHaveFocus();
+  });
+
+  it('supprimer demande confirmation puis rend le focus à l’émission suivante (TV : actions libellées)', async () => {
+    const user = userEvent.setup();
+    const first = parsePodcastRss(SAMPLE_RSS, 'https://example.test/rss.xml');
+    const second = parsePodcastRss(SAMPLE_RSS.replace(/Les Pieds sur terre/g, 'Affaires sensibles'), 'https://example.test/autre.xml');
+    saveSubscribedPodcast(first.feed, first.episodes);
+    saveSubscribedPodcast(second.feed, second.episodes);
+    render(<PodcastsPanel tvMode />);
+    await user.click(screen.getByRole('button', { name: 'Les Pieds sur terre' }));
+
+    expect(screen.getByRole('button', { name: 'Actualiser Les Pieds sur terre' })).toHaveTextContent('Actualiser');
+    const remove = screen.getByRole('button', { name: 'Supprimer Les Pieds sur terre' });
+    expect(remove).toHaveTextContent('Supprimer');
+
+    await user.click(remove);
+    const confirm = screen.getByRole('button', { name: 'Confirmer la suppression de Les Pieds sur terre' });
+    expect(confirm).toHaveTextContent('Confirmer ?');
+    expect(screen.getByRole('button', { name: 'Les Pieds sur terre', pressed: true })).toBeInTheDocument();
+
+    await user.click(confirm);
+    expect(screen.queryByRole('button', { name: 'Les Pieds sur terre' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Affaires sensibles', pressed: true })).toHaveFocus();
   });
 });

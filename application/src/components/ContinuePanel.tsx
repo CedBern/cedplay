@@ -10,6 +10,7 @@ import type { Channel, PlaylistInfo } from '@/types/channel';
 import type { PodcastProgress } from '@/types/podcast';
 import { AudioBridge } from '@/utils/nativePlayer';
 import { onPodcastStorageChange, readAllEpisodeProgress } from '@/utils/podcastStorage';
+import { formatEpisodeLength } from '@/utils/podcastFormat';
 import { Bookmark, Check, Clock, Film, Headphones, Heart, MonitorPlay, Play, Tv, X } from 'lucide-react';
 
 interface ContinuePanelProps {
@@ -298,25 +299,26 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
               const percent = prog.durationMs > 0
                 ? Math.min(100, Math.max(0, Math.round((prog.positionMs / prog.durationMs) * 100)))
                 : null;
-              const minAt = Math.max(0, Math.floor(prog.positionMs / 60_000));
-              const secAt = Math.floor((prog.positionMs % 60_000) / 1000);
-              const posLabel = `${minAt}:${String(secAt).padStart(2, '0')}`;
+              const left = prog.durationMs > prog.positionMs ? `Reste ${formatEpisodeLength(prog.durationMs - prog.positionMs)}` : '';
               return (
                 <button
                   key={prog.episodeId}
                   type="button"
                   onClick={() => resumePodcast(prog)}
+                  aria-label={`Reprendre ${prog.title}`}
                   className="press flex min-h-[72px] items-center gap-3 rounded-2xl border border-neutral-900 bg-card p-3 text-left hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 >
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-secondary text-primary">
-                    <Headphones className="h-5 w-5" aria-hidden="true" />
-                  </span>
+                  {prog.artworkUrl ? (
+                    <img src={prog.artworkUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-11 w-11 shrink-0 rounded-xl bg-secondary object-cover" />
+                  ) : (
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-secondary text-primary">
+                      <Headphones className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                  )}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-semibold text-foreground">{prog.title}</span>
                     <span className="block truncate text-[12px] text-muted-foreground">
-                      {prog.podcastTitle ? `${prog.podcastTitle} · ` : ''}
-                      Reprendre à {posLabel}
-                      {prog.speed && prog.speed !== 1 ? ` · ${prog.speed}×` : ''}
+                      {[prog.podcastTitle, left].filter(Boolean).join(' · ')}
                     </span>
                     {percent !== null && (
                       <span className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-neutral-800">

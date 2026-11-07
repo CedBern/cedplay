@@ -312,6 +312,8 @@ html.tv-mode .tv-vod { transition: height 240ms cubic-bezier(.2, .8, .2, 1); }
 .remote-navigation .tv-nav-tab:focus, .remote-navigation .tv-chip:focus {
   outline: none !important; background-color: hsl(var(--foreground)) !important; color: hsl(var(--background)) !important;
 }
+/* Écouter : les lignes portent déjà leur sélection claire, sans contour orange en plus. */
+.remote-navigation [data-podcasts-panel][data-tv-mode="true"] button:focus { outline: none !important; }
 
 /* Fiche éclair du catalogue : « Regarder » en pilule claire, les autres actions en filet fin. */
 .tv-vod .tv-action { border-radius: 9999px; background-color: transparent; box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12); padding-left: 1rem; padding-right: 1rem; }
