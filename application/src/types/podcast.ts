@@ -17,6 +17,8 @@ export interface LinkResolutionResult {
   podcast?: PodcastSearchResult | undefined;
   warning?: string | undefined;
   error?: string | undefined;
+  /** Émissions possibles quand le lien ne désigne pas une seule émission sans ambiguïté. */
+  candidates?: PodcastSearchResult[] | undefined;
 }
 
 export interface PodcastFeed {

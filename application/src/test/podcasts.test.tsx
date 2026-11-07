@@ -436,11 +436,12 @@ describe('Écouter — présentation sobre', () => {
         expect(apple.podcast?.title).toBe('The Daily');
         expect(apple.feedUrl).toBe('https://feeds.simplecast.com/Sl5CSM3S');
 
-        // 3. Lien Spotify sans flux public externe : avertissement bienveillant
+        // 3. Lien Spotify introuvable dans les annuaires : constat neutre, sans conclure à une exclusivité
         const spotify = await resolvePodcastLink('https://open.spotify.com/show/xyz');
         expect(spotify.kind).toBe('spotify');
         expect(spotify.resolved).toBe(false);
-        expect(spotify.warning).toContain('Spotify');
+        expect(spotify.warning).toBe('Impossible de retrouver un flux public pour ce lien.');
+        expect(spotify.warning).not.toMatch(/exclusivit/i);
 
         // 4. Page web avec balise link rel="alternate" type="application/rss+xml"
         const web = await resolvePodcastLink('https://example.test/podcast-page');
@@ -511,6 +512,127 @@ describe('Écouter — présentation sobre', () => {
       } finally {
         globalThis.fetch = originalFetch;
       }
+    });
+
+    it('reconnaît un flux RSS à son contenu, même sans extension (Acast)', async () => {
+      const user = userEvent.setup();
+      const acast = 'https://feeds.acast.com/public/shows/68db9d2509b1c365e44318ca';
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url.startsWith(acast)) return Promise.resolve({ ok: true, text: () => Promise.resolve(`\uFEFF${SAMPLE_RSS}`) });
+        return Promise.reject(new Error('Unknown url'));
+      });
+
+      try {
+        const direct = await resolvePodcastLink(acast);
+        expect(direct.resolved).toBe(true);
+        expect(direct.feedUrl).toBe(acast);
+
+        render(<PodcastsPanel />);
+        await user.click(screen.getByRole('button', { name: /Coller un lien/i }));
+        await user.type(screen.getByRole('textbox', { name: 'Lien ou adresse RSS du podcast' }), acast);
+        await user.click(screen.getByRole('button', { name: 'Ajouter depuis ce lien' }));
+        expect(await screen.findByRole('button', { name: 'Les Pieds sur terre', pressed: true })).toBeInTheDocument();
+        expect(readPodcastFeeds().map(f => f.url)).toContain(acast);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('n’accepte pas une page HTML qui mentionne <rss> comme un flux', async () => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockImplementation(() =>
+        Promise.resolve({ ok: true, text: () => Promise.resolve('<!doctype html><html><body><pre>&lt;rss&gt;</pre><code><rss></code></body></html>') })
+      );
+      try {
+        const page = await resolvePodcastLink('https://example.test/tutoriel-rss');
+        expect(page.resolved).toBe(false);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    describe('lien Apple ou Spotify sans flux : vérification titre et auteur', () => {
+      const lookup = (title: string, author: string) => ({
+        ok: true,
+        json: () => Promise.resolve({ resultCount: 1, results: [{ collectionId: 1, collectionName: title, artistName: author }] }),
+      });
+      const directory = (entries: Array<{ title: string; author: string; url: string }>) => (url: string) => {
+        if (url.includes('itunes.apple.com/search')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ results: [] }) });
+        if (url.includes('gpodder.net')) return Promise.resolve({ ok: true, json: () => Promise.resolve(entries) });
+        return null;
+      };
+      let originalFetch: typeof fetch;
+      beforeEach(() => { originalFetch = globalThis.fetch; });
+      afterEach(() => { globalThis.fetch = originalFetch; });
+
+      it('n’abonne pas au premier résultat venu : titre différent → choix proposé', async () => {
+        const dir = directory([
+          { title: 'L’Entretien archéologique', author: 'France Culture', url: 'https://example.test/entretien.xml' },
+          { title: 'Les Pieds sur terre (rediffusions)', author: 'Quelqu’un', url: 'https://example.test/autre.xml' },
+        ]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('lookup') ? Promise.resolve(lookup('Les Pieds sur terre', 'France Culture')) : dir(url) ?? Promise.reject(new Error(url))
+        );
+        const r = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/les-pieds-sur-terre/id1234567');
+        expect(r.resolved).toBe(false);
+        expect(r.feedUrl).toBeUndefined();
+        // Seuls les titres proches sont proposés ; l'émission sans rapport est écartée.
+        expect(r.candidates?.map(c => c.title)).toEqual(['Les Pieds sur terre (rediffusions)']);
+      });
+
+      it('même titre mais autre producteur → choix proposé, pas d’abonnement', async () => {
+        const dir = directory([{ title: 'La Terre au carré', author: 'France Culture', url: 'https://example.test/faux.xml' }]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('lookup') ? Promise.resolve(lookup('La Terre au carré', 'France Inter')) : dir(url) ?? Promise.reject(new Error(url))
+        );
+        const r = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id7654321');
+        expect(r.resolved).toBe(false);
+        expect(r.candidates).toHaveLength(1);
+      });
+
+      it('titre (accents et apostrophes près) et auteur concordants → abonnement direct', async () => {
+        const dir = directory([
+          { title: 'Le Cours de l\'Histoire', author: 'France Culture', url: 'https://example.test/cours.xml' },
+          { title: 'Le Cours de l’histoire', author: 'Fan club', url: 'https://example.test/fan.xml' },
+        ]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) =>
+          url.includes('lookup') ? Promise.resolve(lookup('Le Cours de l’histoire', 'France Culture')) : dir(url) ?? Promise.reject(new Error(url))
+        );
+        const r = await resolvePodcastLink('https://podcasts.apple.com/fr/podcast/x/id1111111');
+        expect(r.resolved).toBe(true);
+        expect(r.feedUrl).toBe('https://example.test/cours.xml');
+      });
+
+      it('Spotify : deux émissions du même nom → choix proposé dans l’écran, puis abonnement à celle choisie', async () => {
+        const user = userEvent.setup();
+        const dir = directory([
+          { title: 'Transfert', author: 'Slate.fr Podcasts', url: 'https://example.test/transfert.xml' },
+          { title: 'Transfert', author: 'Radio Campus', url: 'https://example.test/transfert-campus.xml' },
+        ]);
+        globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+          if (url.includes('open.spotify.com')) {
+            return Promise.resolve({ ok: true, text: () => Promise.resolve('<meta property="og:title" content="Transfert | Podcast on Spotify">') });
+          }
+          if (url === 'https://example.test/transfert.xml') return Promise.resolve({ ok: true, text: () => Promise.resolve(SAMPLE_RSS) });
+          return dir(url) ?? Promise.reject(new Error(url));
+        });
+
+        render(<PodcastsPanel />);
+        await user.click(screen.getByRole('button', { name: /Coller un lien/i }));
+        await user.type(screen.getByRole('textbox', { name: 'Lien ou adresse RSS du podcast' }), 'https://open.spotify.com/show/abc');
+        await user.click(screen.getByRole('button', { name: 'Ajouter depuis ce lien' }));
+
+        const choices = await screen.findByRole('list', { name: 'Émissions possibles pour ce lien' });
+        expect(readPodcastFeeds()).toHaveLength(0);
+        const options = within(choices).getAllByRole('button', { name: /S'abonner à Transfert/ });
+        expect(options).toHaveLength(2);
+        expect(within(choices).getByText('Radio Campus')).toBeInTheDocument();
+
+        await user.click(options[0]!);
+        expect(await screen.findByRole('button', { name: 'Les Pieds sur terre', pressed: true })).toBeInTheDocument();
+        expect(readPodcastFeeds().map(f => f.url)).toEqual(['https://example.test/transfert.xml']);
+      });
     });
   });
 });

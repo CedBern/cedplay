@@ -241,7 +241,8 @@ export async function searchPodcasts(
     for (const r of itunesData.results) {
       const title = (r.collectionName || r.trackName || '').trim();
       if (!title) continue;
-      const key = title.toLowerCase();
+      // Titre + auteur : deux émissions homonymes de producteurs différents restent distinctes.
+      const key = `${normalizeName(title)}|${normalizeName(r.artistName || '')}`;
       if (seenTitles.has(key)) continue;
       seenTitles.add(key);
 
@@ -269,11 +270,15 @@ export async function searchPodcasts(
       const feedUrl = (r.url || '').trim();
       if (!feedUrl) continue;
       const urlKey = feedUrl.toLowerCase();
+      if (seenUrls.has(urlKey)) continue;
       const title = (r.title || '').trim();
-      const key = title.toLowerCase();
+      // Gpodder colle parfois l'adresse e-mail : « France Inter (podcast@radiofrance.com) ».
+      const author = (r.author || '').replace(/\s*\([^)]*@[^)]*\)/g, '').trim();
+      const sameShow = (it: PodcastSearchResult) =>
+        normalizeName(it.title) === normalizeName(title) && authorsCompatible(it.author, author);
 
-      // Si un résultat Apple sans feedUrl correspondait à ce titre, on lui associe le flux Gpodder
-      const matchingApple = items.find(it => it.title.trim().toLowerCase() === key && !it.feedUrl);
+      // Un résultat Apple sans flux reçoit celui de Gpodder seulement si titre ET auteur concordent.
+      const matchingApple = items.find(it => !it.feedUrl && sameShow(it));
       if (matchingApple) {
         matchingApple.feedUrl = feedUrl;
         if (!matchingApple.description && r.description) matchingApple.description = r.description.trim();
@@ -281,14 +286,13 @@ export async function searchPodcasts(
         continue;
       }
 
-      if (seenUrls.has(urlKey) || seenTitles.has(key)) continue;
-      seenTitles.add(key);
+      if (items.some(sameShow)) continue;
       seenUrls.add(urlKey);
 
       items.push({
         id: `gpodder-${feedUrl}`,
         title,
-        author: (r.author || '').trim(),
+        author,
         feedUrl,
         artworkUrl: r.scaled_logo_url || r.logo_url || '',
         description: (r.description || '').trim(),
@@ -305,6 +309,91 @@ export async function searchPodcasts(
   });
 
   return items;
+}
+
+const NO_PUBLIC_FEED = 'Impossible de retrouver un flux public pour ce lien.';
+
+/** Le texte reçu est-il un flux (RSS, Atom, RDF), quelle que soit l'adresse ? */
+export function looksLikeFeed(text: string): boolean {
+  const head = text.replace(/^\uFEFF/, '').slice(0, 4000);
+  const root = head.search(/<(rss|feed|rdf:RDF)[\s>]/i);
+  if (root === -1) return false;
+  const html = head.search(/<html[\s>]/i);
+  return html === -1 || root < html;
+}
+
+function normalizeName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Mots trop communs pour distinguer deux producteurs (France Culture / France Inter…).
+const GENERIC_AUTHOR_WORDS = new Set(['radio', 'france', 'podcast', 'podcasts', 'media', 'medias', 'studio', 'studios', 'les', 'the']);
+
+function authorsCompatible(a: string, b: string): boolean {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  if (!na || !nb || na.includes(nb) || nb.includes(na)) return true;
+  const words = (s: string) => s.split(' ').filter(w => w.length >= 3 && !GENERIC_AUTHOR_WORDS.has(w));
+  const wa = words(na);
+  const wb = new Set(words(nb));
+  // Sans mot distinctif d'un côté, l'auteur ne permet pas de trancher.
+  if (wa.length === 0 || wb.size === 0) return true;
+  return wa.some(w => wb.has(w));
+}
+
+/**
+ * Retrouve dans les annuaires le flux d'une émission connue par son titre (et son auteur).
+ * Ne choisit seul que si une seule émission porte exactement ce titre avec un auteur compatible ;
+ * sinon renvoie les émissions possibles pour que l'utilisateur tranche.
+ */
+async function findFeedForShow(
+  title: string,
+  author: string,
+  signal?: AbortSignal
+): Promise<{ match?: PodcastSearchResult; candidates: PodcastSearchResult[] }> {
+  const searchOpts: { signal?: AbortSignal; limit?: number } = { limit: 10 };
+  if (signal) searchOpts.signal = signal;
+  const list = await searchPodcasts(title, searchOpts);
+
+  const seen = new Set<string>();
+  const withFeed = list.filter(it => {
+    if (!it.feedUrl) return false;
+    const key = it.feedUrl.toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const wanted = normalizeName(title);
+  const sameTitle = withFeed.filter(it => normalizeName(it.title) === wanted);
+  const confirmed = sameTitle.filter(it => authorsCompatible(author, it.author));
+  if (confirmed.length === 1) return { match: confirmed[0], candidates: [] };
+
+  if (confirmed.length > 0) return { candidates: confirmed.slice(0, 6) };
+  if (sameTitle.length > 0) return { candidates: sameTitle.slice(0, 6) };
+
+  // Aucun titre identique : on ne propose que des titres proches (la moitié des mots significatifs).
+  const keywords = wanted.split(' ').filter(w => w.length >= 4);
+  if (keywords.length === 0) return { candidates: [] };
+  const closeness = (it: PodcastSearchResult) => {
+    const words = new Set(normalizeName(it.title).split(' '));
+    return keywords.filter(w => words.has(w)).length / keywords.length;
+  };
+  const near = withFeed
+    .map(it => ({ it, score: closeness(it) }))
+    .filter(x => x.score >= 0.5)
+    .sort((a, b) => b.score - a.score)
+    .map(x => x.it);
+  return { candidates: near.slice(0, 6) };
+}
+
+function isAppleHost(host: string): boolean {
+  return host === 'podcasts.apple.com' || host === 'itunes.apple.com';
 }
 
 /**
@@ -348,126 +437,107 @@ export async function resolvePodcastLink(
     };
   }
 
-  // 2. Détection Apple Podcasts
-  const appleIdMatch = normalized.match(/id(\d{6,12})/i);
-  if (normalized.includes('podcasts.apple.com') || appleIdMatch) {
-    const itunesId = appleIdMatch ? appleIdMatch[1] : '';
-    if (itunesId) {
-      const lookupUrl = `https://itunes.apple.com/lookup?id=${itunesId}&entity=podcast`;
-      const lookupData = await fetchJson<ItunesSearchResult>(lookupUrl, options?.signal);
-      const r = lookupData?.results?.[0];
-      if (r) {
-        let feedUrl = (r.feedUrl || '').trim();
-        const title = (r.collectionName || r.trackName || '').trim();
-        const author = (r.artistName || '').trim();
-        const artworkUrl = r.artworkUrl600 || r.artworkUrl100 || '';
+  // 2. Apple Podcasts : l'identifiant de l'émission est dans le chemin (…/id1200361736)
+  if (isAppleHost(parsed.hostname)) {
+    const itunesId = parsed.pathname.match(/\/id(\d{5,12})(?:\/|$)/i)?.[1] ?? parsed.searchParams.get('id') ?? '';
+    const lookupData = itunesId
+      ? await fetchJson<ItunesSearchResult>(`https://itunes.apple.com/lookup?id=${itunesId}&entity=podcast`, options?.signal)
+      : null;
+    const r = lookupData?.results?.[0];
+    if (!r) return { kind: 'apple', resolved: false, warning: NO_PUBLIC_FEED };
 
-        // Si Apple n'inclut pas feedUrl (ex. Radio France), chercher dans l'annuaire ouvert
-        if (!feedUrl && title) {
-          const searchOpts: { signal?: AbortSignal; limit?: number } = { limit: 5 };
-          if (options?.signal) searchOpts.signal = options.signal;
-          const list = await searchPodcasts(title, searchOpts);
-          const found = list.find(it => it.feedUrl);
-          if (found) feedUrl = found.feedUrl;
-        }
-
-        if (feedUrl) {
-          return {
-            kind: 'apple',
-            resolved: true,
-            feedUrl,
-            podcast: {
-              id: `apple-${itunesId}`,
-              title,
-              author,
-              feedUrl,
-              artworkUrl,
-              genre: r.primaryGenreName,
-              source: 'apple',
-            },
-          };
-        }
-
-        return {
-          kind: 'apple',
-          resolved: false,
-          warning: `L'émission « ${title} » a été trouvée sur Apple Podcasts mais ne diffuse pas de flux RSS ouvert public.`,
-        };
-      }
+    const title = (r.collectionName || r.trackName || '').trim();
+    const author = (r.artistName || '').trim();
+    const appleFeed = (r.feedUrl || '').trim();
+    if (appleFeed) {
+      return {
+        kind: 'apple',
+        resolved: true,
+        feedUrl: appleFeed,
+        podcast: {
+          id: `apple-${itunesId}`,
+          title,
+          author,
+          feedUrl: appleFeed,
+          artworkUrl: r.artworkUrl600 || r.artworkUrl100 || '',
+          genre: r.primaryGenreName,
+          source: 'apple',
+        },
+      };
     }
+
+    // Apple ne publie pas toujours le flux (ex. Radio France) : on le cherche par titre ET auteur.
+    if (title) {
+      const { match, candidates } = await findFeedForShow(title, author, options?.signal);
+      if (match) return { kind: 'apple', resolved: true, feedUrl: match.feedUrl, podcast: match };
+      if (candidates.length > 0) return { kind: 'apple', resolved: false, candidates };
+    }
+    return { kind: 'apple', resolved: false, warning: NO_PUBLIC_FEED };
   }
 
-  // 3. Détection Spotify (open.spotify.com/show/...)
-  if (normalized.includes('open.spotify.com/show/')) {
+  // 3. Spotify (open.spotify.com/show/…) : seul le titre est lisible sur la page
+  if (parsed.hostname === 'open.spotify.com' && parsed.pathname.startsWith('/show/')) {
     const html = await fetchHtmlText(normalized, options?.signal);
-    let showTitle = '';
-    if (html) {
-      const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
-        || html.match(/<title>([^<]+)<\/title>/i);
-      if (ogTitle && ogTitle[1]) {
-        showTitle = ogTitle[1].replace(/ \| Spotify$/i, '').replace(/ \| Podcast on Spotify$/i, '').trim();
-      }
-    }
-
+    const raw =
+      html?.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+      html?.match(/<title>([^<]+)<\/title>/i)?.[1] ||
+      '';
+    const showTitle = raw.replace(/\s*\|\s*(Podcast on )?Spotify$/i, '').trim();
     if (showTitle) {
-      const searchOpts: { signal?: AbortSignal; limit?: number } = { limit: 5 };
-      if (options?.signal) searchOpts.signal = options.signal;
-      const searchResults = await searchPodcasts(showTitle, searchOpts);
-      const matching = searchResults.find(it => it.feedUrl);
-      if (matching) {
-        return {
-          kind: 'spotify',
-          resolved: true,
-          feedUrl: matching.feedUrl,
-          podcast: matching,
-          warning:
-            'Émission identifiée depuis votre lien Spotify. Remarque : chez Spotify, le créateur doit avoir activé la distribution externe de son flux RSS pour être écouté dans CedPlay.',
-        };
-      }
+      const { match, candidates } = await findFeedForShow(showTitle, '', options?.signal);
+      if (match) return { kind: 'spotify', resolved: true, feedUrl: match.feedUrl, podcast: match };
+      if (candidates.length > 0) return { kind: 'spotify', resolved: false, candidates };
     }
+    return { kind: 'spotify', resolved: false, warning: NO_PUBLIC_FEED };
+  }
 
+  // 4. Autre adresse : un flux sans extension (feeds.acast.com/public/shows/…), ou une page qui en annonce un
+  const text = await fetchHtmlText(normalized, options?.signal);
+  if (!text) {
+    return { kind: 'web', resolved: false, error: 'Adresse injoignable. Vérifie le lien et la connexion.' };
+  }
+
+  if (looksLikeFeed(text)) {
     return {
-      kind: 'spotify',
-      resolved: false,
-      warning:
-        'Ce podcast Spotify est une exclusivité interne qui ne diffuse pas de flux RSS public. Chez Spotify, le créateur doit activer son flux pour permettre une écoute hors de l’application officielle.',
+      kind: 'feed',
+      resolved: true,
+      feedUrl: normalized,
+      podcast: {
+        id: `direct-${normalized}`,
+        title: 'Flux RSS direct',
+        author: '',
+        feedUrl: normalized,
+        artworkUrl: '',
+        source: 'direct',
+      },
     };
   }
 
-  // 4. Détection page web standard (Radio France, Arte Radio, blog, site officiel...)
-  const html = await fetchHtmlText(normalized, options?.signal);
-  if (html) {
-    const linkMatch =
-      html.match(/<link[^>]+type=["']application\/rss\+xml["'][^>]+href=["']([^"']+)["']/i) ||
-      html.match(/<link[^>]+href=["']([^"']+)["'][^>]+type=["']application\/rss\+xml["']/i) ||
-      html.match(/<link[^>]+type=["']application\/atom\+xml["'][^>]+href=["']([^"']+)["']/i);
+  const linkMatch =
+    text.match(/<link[^>]+type=["']application\/rss\+xml["'][^>]+href=["']([^"']+)["']/i) ||
+    text.match(/<link[^>]+href=["']([^"']+)["'][^>]+type=["']application\/rss\+xml["']/i) ||
+    text.match(/<link[^>]+type=["']application\/atom\+xml["'][^>]+href=["']([^"']+)["']/i);
 
-    if (linkMatch && linkMatch[1]) {
-      try {
-        const resolvedFeed = new URL(linkMatch[1], normalized).toString();
-        const ogTitle = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
-        const ogImage = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
-        return {
-          kind: 'web',
-          resolved: true,
+  if (linkMatch && linkMatch[1]) {
+    try {
+      const resolvedFeed = new URL(linkMatch[1], normalized).toString();
+      const ogTitle = text.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+      const ogImage = text.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+      return {
+        kind: 'web',
+        resolved: true,
+        feedUrl: resolvedFeed,
+        podcast: {
+          id: `web-${resolvedFeed}`,
+          title: ogTitle ? ogTitle[1].trim() : 'Podcast détecté sur le site',
+          author: '',
           feedUrl: resolvedFeed,
-          podcast: {
-            id: `web-${resolvedFeed}`,
-            title: ogTitle ? ogTitle[1].trim() : 'Podcast détecté sur le site',
-            author: '',
-            feedUrl: resolvedFeed,
-            artworkUrl: ogImage ? ogImage[1].trim() : '',
-            source: 'direct',
-          },
-        };
-      } catch { /* flux illisible : on tente la suite */ }
-    }
+          artworkUrl: ogImage ? ogImage[1].trim() : '',
+          source: 'direct',
+        },
+      };
+    } catch { /* adresse de flux illisible : on signale l'échec ci-dessous */ }
   }
 
-  return {
-    kind: 'web',
-    resolved: false,
-    error:
-      'Aucun flux RSS public n’a pu être détecté automatiquement sur cette page. Vous pouvez essayer d’ajouter directement son adresse RSS dans les options avancées.',
-  };
+  return { kind: 'web', resolved: false, error: 'Aucun flux trouvé à cette adresse.' };
 }

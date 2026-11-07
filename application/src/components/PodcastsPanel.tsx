@@ -100,11 +100,13 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
   const [linkInput, setLinkInput] = useState('');
   const [resolvingLink, setResolvingLink] = useState(false);
   const [addMsg, setAddMsg] = useState<string | null>(null);
+  const [linkCandidates, setLinkCandidates] = useState<PodcastSearchResult[]>([]);
   const [refreshingUrl, setRefreshingUrl] = useState<string | null>(null);
   const [confirmDeleteUrl, setConfirmDeleteUrl] = useState<string | null>(null);
   const [openDetailsId, setOpenDetailsId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
+  const candidatesRef = useRef<HTMLUListElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   // Quand le bouton pressé disparaît (suppression, abonnement), le focus va à une cible
   // connue : la télécommande ne doit pas se retrouver dans le vide.
@@ -192,6 +194,14 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     if (linkOpen) linkInputRef.current?.focus();
   }, [linkOpen]);
 
+  // Choix proposé après un lien : on l'amène à l'écran ; à la télécommande, la sélection s'y place.
+  useEffect(() => {
+    const list = candidatesRef.current;
+    if (linkCandidates.length === 0 || !list) return;
+    if (tvMode) list.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
+    list.scrollIntoView?.({ block: 'nearest' });
+  }, [linkCandidates, tvMode]);
+
   // La demande de confirmation retombe seule, et dès qu'on change d'émission.
   useEffect(() => {
     if (!confirmDeleteUrl) return;
@@ -221,6 +231,7 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     setLinkOpen(false);
     setLinkInput('');
     setAddMsg(null);
+    setLinkCandidates([]);
   };
 
   const subscribe = async (feedUrl: string) => {
@@ -255,10 +266,14 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     if (!trimmed) return;
     setResolvingLink(true);
     setAddMsg(null);
+    setLinkCandidates([]);
     try {
       const result = await resolvePodcastLink(trimmed);
       if (result.resolved && result.feedUrl) {
         await subscribe(result.feedUrl);
+      } else if (result.candidates?.length) {
+        // Plusieurs émissions possibles : on ne devine pas, l'utilisateur choisit.
+        setLinkCandidates(result.candidates);
       } else {
         setAddMsg(result.warning || result.error || 'Aucun podcast trouvé à cette adresse.');
       }
@@ -312,6 +327,39 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     : '';
   const plainFocus = tvMode ? tvFocus : 'focus-visible:ring-2 focus-visible:ring-primary';
 
+  const gridCols = tvMode ? 'grid-cols-4 xl:grid-cols-5' : 'grid-cols-3 sm:grid-cols-4';
+  const renderTile = (result: PodcastSearchResult) => {
+    const subscribed = subscribedKeys.has(feedKey(result.feedUrl));
+    const pending = subscribingUrl === result.feedUrl;
+    return (
+      <li key={result.id || result.feedUrl}>
+        <button
+          type="button"
+          onClick={() => (subscribed ? openSubscribed(result.feedUrl) : void subscribe(result.feedUrl))}
+          aria-label={subscribed ? `${result.title}, déjà suivi` : `S'abonner à ${result.title}`}
+          aria-busy={pending || undefined}
+          className={`group w-full space-y-1.5 rounded-2xl p-1 text-left transition-colors focus-visible:outline-none ${plainFocus}`}
+        >
+          <span className="relative block">
+            <Artwork src={result.artworkUrl} className="block aspect-square w-full rounded-xl" />
+            <span
+              aria-hidden="true"
+              className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-lg ${
+                subscribed ? 'bg-foreground text-background' : 'bg-primary text-primary-foreground'
+              }`}
+            >
+              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : subscribed ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            </span>
+          </span>
+          <span className="block px-0.5">
+            <span className="line-clamp-2 text-[13px] font-medium leading-snug">{result.title}</span>
+            {result.author && <span className="meta block truncate text-[11px] text-muted-foreground">{result.author}</span>}
+          </span>
+        </button>
+      </li>
+    );
+  };
+
   const trimmedQuery = searchQuery.trim();
   const addPanel = showForm && (
     <div className="space-y-3 text-left">
@@ -350,39 +398,9 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
         <ul
           data-testid="podcast-search-results"
           aria-label={trimmedQuery ? 'Résultats de recherche' : 'Suggestions de podcasts'}
-          className={`grid gap-x-3 gap-y-4 ${tvMode ? 'grid-cols-4 xl:grid-cols-5' : 'grid-cols-3 sm:grid-cols-4'}`}
+          className={`grid gap-x-3 gap-y-4 ${gridCols}`}
         >
-          {searchResults.map(result => {
-            const subscribed = subscribedKeys.has(feedKey(result.feedUrl));
-            const pending = subscribingUrl === result.feedUrl;
-            return (
-              <li key={result.id || result.feedUrl}>
-                <button
-                  type="button"
-                  onClick={() => (subscribed ? openSubscribed(result.feedUrl) : void subscribe(result.feedUrl))}
-                  aria-label={subscribed ? `${result.title}, déjà suivi` : `S'abonner à ${result.title}`}
-                  aria-busy={pending || undefined}
-                  className={`group w-full space-y-1.5 rounded-2xl p-1 text-left transition-colors focus-visible:outline-none ${plainFocus}`}
-                >
-                  <span className="relative block">
-                    <Artwork src={result.artworkUrl} className="block aspect-square w-full rounded-xl" />
-                    <span
-                      aria-hidden="true"
-                      className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-lg ${
-                        subscribed ? 'bg-foreground text-background' : 'bg-primary text-primary-foreground'
-                      }`}
-                    >
-                      {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : subscribed ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                    </span>
-                  </span>
-                  <span className="block px-0.5">
-                    <span className="line-clamp-2 text-[13px] font-medium leading-snug">{result.title}</span>
-                    {result.author && <span className="meta block truncate text-[11px] text-muted-foreground">{result.author}</span>}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
+          {searchResults.map(renderTile)}
         </ul>
       )}
 
@@ -413,8 +431,16 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
             </Button>
           </form>
         )}
+        {linkOpen && linkCandidates.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <h3 className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">Laquelle ?</h3>
+            <ul ref={candidatesRef} aria-label="Émissions possibles pour ce lien" className={`grid gap-x-3 gap-y-4 ${gridCols}`}>
+              {linkCandidates.map(renderTile)}
+            </ul>
+          </div>
+        )}
       </div>
-      {addMsg && <p role="alert" className="px-1 text-xs text-red-400">{addMsg}</p>}
+      {addMsg &&<p role="alert" className="px-1 text-xs text-red-400">{addMsg}</p>}
     </div>
   );
 
