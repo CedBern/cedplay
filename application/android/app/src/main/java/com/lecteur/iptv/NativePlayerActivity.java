@@ -661,9 +661,10 @@ public class NativePlayerActivity extends AppCompatActivity {
         });
 
         if (vod && !tvUi) {
+            // Le contrôleur Media3 décide seul de son masquage (délai, fin de ses menus) :
+            // la barre du haut et l'état interne le suivent, pour que le toucher suivant
+            // rouvre bien les deux (lecture, progression, Options).
             playerView.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
-                // Le contrôleur Media3 se masque aussi tout seul (et après ses menus).
-                // La prochaine pression doit rouvrir ses réglages, dont la vitesse.
                 isControlsVisible = visibility == View.VISIBLE;
                 topBar.animate().cancel();
                 topBar.setAlpha(1.0f);
@@ -1004,8 +1005,14 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
     }
 
+    /** Téléphone, films et séries : les commandes sont celles du contrôleur Media3. */
+    private boolean phoneVod() { return vod && !tvUi && playerView != null; }
+
     private void toggleControls() {
-        if (isControlsVisible) {
+        // Le toucher est capté par nos gestes : le contrôleur Media3 ne le voit pas. Son état
+        // réel (et non un indicateur interne qui a pu vieillir) décide d'ouvrir ou de fermer.
+        boolean shown = phoneVod() ? playerView.isControllerFullyVisible() : isControlsVisible;
+        if (shown) {
             hideControls();
         } else {
             showControls();
@@ -1014,6 +1021,12 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void showControls() {
         if (pipActive) return;
+        if (phoneVod()) {
+            // L'écouteur du contrôleur affiche la barre du haut et met l'état à jour.
+            playerView.showController();
+            refreshControls();
+            return;
+        }
         boolean wasOpen = isControlsVisible && !infoOnly;
         infoOnly = false;
         isControlsVisible = true;
@@ -1058,6 +1071,10 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void hideControls() {
+        if (phoneVod()) {
+            playerView.hideController();
+            return;
+        }
         isControlsVisible = false;
         infoOnly = false;
         if (tvBand != null) tvBand.closeList(false);
