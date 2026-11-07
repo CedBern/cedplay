@@ -93,7 +93,7 @@ export interface VodResumeRequest {
   item?: VodWatchlistItem | undefined;
 }
 
-export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResumeHandled, tvMode = false, onSearch }: { playlist: PlaylistInfo; kind: 'movie' | 'series'; tmdbApiKey?: string | undefined; resumeRequest?: VodResumeRequest | undefined; onResumeHandled?: (() => void) | undefined; /** Rendu télécommande (3 colonnes) au lieu de la mise en page mobile. */ tvMode?: boolean | undefined; onSearch?: (() => void) | undefined }) {
+export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResumeHandled, tvMode = false, onSearch, onShowLocal }: { playlist: PlaylistInfo; kind: 'movie' | 'series'; tmdbApiKey?: string | undefined; resumeRequest?: VodResumeRequest | undefined; onResumeHandled?: (() => void) | undefined; /** Rendu télécommande (3 colonnes) au lieu de la mise en page mobile. */ tvMode?: boolean | undefined; onSearch?: (() => void) | undefined; /** TV, films : ouvrir la bibliothèque USB/SD depuis la colonne de gauche. */ onShowLocal?: (() => void) | undefined }) {
   const account = useMemo(() => getXtreamAccount(playlist), [playlist]);
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   const [category, setCategory] = useState<string | null>(null);
@@ -558,6 +558,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       onPlay={kind === 'movie' ? playItem : undefined}
       onRefresh={handleRefresh}
       onSearch={onSearch}
+      onShowLocal={onShowLocal}
       progressLabel={progressLabel}
     />
     {ficheDialog}

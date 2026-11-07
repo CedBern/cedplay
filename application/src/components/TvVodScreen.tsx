@@ -1,10 +1,10 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Bookmark, BookmarkCheck, ChevronDown, Info, Play, RefreshCw, Search } from 'lucide-react';
+import { Bookmark, BookmarkCheck, ChevronDown, HardDrive, Info, Play, RefreshCw, Search } from 'lucide-react';
 import type { CatalogCategory, CatalogItem } from '@/utils/xtreamCatalog';
 
 type Column = 'cat' | 'grid' | 'info';
 type CatItem =
-  | { kind: 'action'; id: 'search' | 'watchlist' | 'refresh'; label: string }
+  | { kind: 'action'; id: 'search' | 'watchlist' | 'refresh' | 'local'; label: string }
   | { kind: 'category'; id: string; label: string };
 type Cell = { kind: 'poster'; item: CatalogItem } | { kind: 'more' };
 type InfoAction = { id: string; label: string; icon: React.ReactNode; run: () => void };
@@ -55,6 +55,8 @@ export interface TvVodScreenProps {
   onPlay?: ((item: CatalogItem) => void) | undefined;
   onRefresh: () => void;
   onSearch?: (() => void) | undefined;
+  /** Films : bibliothèque USB/SD, proposée comme une action de la colonne de gauche. */
+  onShowLocal?: (() => void) | undefined;
   progressLabel: (id: string) => string;
 }
 
@@ -106,6 +108,7 @@ const CategoryButton = memo(function CategoryButton({ item, index, selected, wat
   const icon = item.kind === 'action'
     ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" />
       : item.id === 'watchlist' ? (watchlistActive ? <BookmarkCheck className="h-4 w-4 text-primary" aria-hidden="true" /> : <Bookmark className="h-4 w-4" aria-hidden="true" />)
+      : item.id === 'local' ? <HardDrive className="h-4 w-4" aria-hidden="true" />
       : <RefreshCw className="h-4 w-4" aria-hidden="true" />)
     : null;
   return (
@@ -187,7 +190,7 @@ const InfoPanel = memo(function InfoPanel({ highlighted, kind, hasCells, infoAct
 export function TvVodScreen({
   kind, playlistId, categories, category, onSelectCategory, items, loading, error, onRetry,
   hasMore, onLoadMore, showWatchlistOnly, onToggleWatchlistOnly, watchlistCount, watchlistIds,
-  onToggleWatchlistItem, onOpen, onPlay, onRefresh, onSearch, progressLabel,
+  onToggleWatchlistItem, onOpen, onPlay, onRefresh, onSearch, onShowLocal, progressLabel,
 }: TvVodScreenProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const catRef = useRef<HTMLDivElement>(null);
@@ -204,10 +207,11 @@ export function TvVodScreen({
     if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
     list.push({ kind: 'action', id: 'watchlist', label: 'Ma Liste' });
     list.push({ kind: 'action', id: 'refresh', label: 'Actualiser' });
+    if (onShowLocal) list.push({ kind: 'action', id: 'local', label: 'USB / SD' });
     list.push({ kind: 'category', id: '', label: 'Toutes les catégories' });
     for (const c of categories) list.push({ kind: 'category', id: c.id, label: c.name });
     return list;
-  }, [onSearch, categories]);
+  }, [onSearch, onShowLocal, categories]);
 
   const cells = useMemo<Cell[]>(() => {
     const list: Cell[] = items.map(item => ({ kind: 'poster' as const, item }));
@@ -271,10 +275,14 @@ export function TvVodScreen({
   useEffect(() => { setInfoIndex(i => Math.min(i, Math.max(0, infoActions.length - 1))); }, [infoActions.length]);
 
   // Hauteur : tout l'espace restant sous les rubriques, sans défilement de page.
+  // Mesurée en-tête déplié ; l'en-tête replié (télécommande) ajoute sa hauteur par la
+  // variable CSS --tv-vod-extra, animée en même temps que lui.
   const [height, setHeight] = useState<number | null>(null);
   useLayoutEffect(() => {
     const measure = () => {
-      const top = rootRef.current?.getBoundingClientRect().top ?? 0;
+      const root = document.documentElement;
+      const shift = root.classList.contains('tv-chrome-hidden') ? parseFloat(getComputedStyle(root).getPropertyValue('--tv-header-shift')) || 0 : 0;
+      const top = (rootRef.current?.getBoundingClientRect().top ?? 0) + shift;
       setHeight(Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - 12)));
     };
     measure();
@@ -375,7 +383,13 @@ export function TvVodScreen({
     if (key === 'ArrowDown') handled = column === 'cat' ? moveCat(1) || true : column === 'grid' ? moveRow(COLS) || true : moveInfo(1) || true;
     else if (key === 'ArrowUp') {
       // Haut sur le premier élément : la navigation générale remonte aux rubriques.
-      handled = column === 'cat' ? moveCat(-1) : column === 'grid' ? moveRow(-COLS) : moveInfo(-1);
+      // Première rangée : Haut quitte la grille au lieu de glisser vers la première affiche.
+      handled = column === 'cat' ? moveCat(-1) : column === 'grid' ? (row >= COLS && moveRow(-COLS)) : moveInfo(-1);
+      if (!handled) {
+        // Toujours la rubrique active, même si l'en-tête replié est encore hors de l'écran.
+        const tab = document.querySelector<HTMLElement>('[data-main-navigation] [role="tab"][aria-selected="true"]');
+        if (tab) { tab.focus({ preventScroll: true }); handled = true; }
+      }
     } else if (key === 'ArrowRight') {
       if (column === 'cat') handled = go('grid') || true;
       // Droite avance dans la ligne ; en bord de ligne ET en bout de liste (ligne
@@ -454,13 +468,14 @@ export function TvVodScreen({
     if (item.kind === 'action') {
       if (item.id === 'search') onSearch?.();
       else if (item.id === 'watchlist') onToggleWatchlistOnly();
+      else if (item.id === 'local') onShowLocal?.();
       else onRefresh();
       return;
     }
     setCatIndex(index);
     if (item.id !== category) { movedRef.current = true; onSelectCategory(item.id); setRow(0); }
     requestFocus(); setColumn('grid');
-  }, [catItems, category, onSearch, onToggleWatchlistOnly, onRefresh, onSelectCategory, requestFocus]);
+  }, [catItems, category, onSearch, onToggleWatchlistOnly, onRefresh, onShowLocal, onSelectCategory, requestFocus]);
 
   return (
     <div
@@ -469,7 +484,7 @@ export function TvVodScreen({
       data-tv-vod
       data-tv-column={column}
       className="tv-vod grid gap-3 text-foreground"
-      style={height ? { height } : undefined}
+      style={height ? { height: `calc(${height}px + var(--tv-vod-extra, 0px))` } : undefined}
       onKeyDown={onKeyDown}
       onFocusCapture={onFocusCapture}
     >

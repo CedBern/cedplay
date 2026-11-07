@@ -319,6 +319,9 @@ export class StorageManager {
         ...(p.tvPreviewMode !== undefined ? { tvPreviewMode: p.tvPreviewMode } : {}),
         ...(p.startOnLastChannel !== undefined ? { startOnLastChannel: p.startOnLastChannel } : {}),
         ...(p.playlistRefreshHours !== undefined ? { playlistRefreshHours: p.playlistRefreshHours } : {}),
+        ...(p.playerBuffer !== undefined ? { playerBuffer: p.playerBuffer } : {}),
+        ...(p.playerDecoder !== undefined ? { playerDecoder: p.playerDecoder } : {}),
+        ...(p.playerAfr !== undefined ? { playerAfr: p.playerAfr } : {}),
         ...(p.__version !== undefined ? { __version: p.__version } : {})
       };
       return this.migrateIfNeeded(base);
@@ -353,6 +356,13 @@ export class StorageManager {
       tvPreviewMode: s.tvPreviewMode === 'manual' || s.tvPreviewMode === 'off' || s.tvPreviewMode === 'auto' ? s.tvPreviewMode : 'auto',
       startOnLastChannel: coerceBool(s.startOnLastChannel, false),
       playlistRefreshHours: typeof s.playlistRefreshHours === 'number' && Number.isInteger(s.playlistRefreshHours) && s.playlistRefreshHours >= 0 && s.playlistRefreshHours <= 168 ? s.playlistRefreshHours : 24,
+      ...(s.playerBuffer === 'small' || s.playerBuffer === 'normal' || s.playerBuffer === 'large' || s.playerBuffer === 'max'
+        ? { playerBuffer: s.playerBuffer }
+        : (base.playerBuffer !== undefined ? { playerBuffer: base.playerBuffer } : {})),
+      ...(s.playerDecoder === 'hardware' || s.playerDecoder === 'software'
+        ? { playerDecoder: s.playerDecoder }
+        : (base.playerDecoder !== undefined ? { playerDecoder: base.playerDecoder } : {})),
+      playerAfr: coerceBool(s.playerAfr, base.playerAfr as boolean),
       __version: 10
     };
     return this.migrateIfNeeded(safe);

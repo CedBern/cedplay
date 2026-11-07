@@ -100,6 +100,28 @@ export function IPTVPlayer() {
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
+  // TV : l'en-tête se replie quand la télécommande entre dans le catalogue (Films, Séries)
+  // et revient dès que le focus le rejoint (Haut depuis la première rangée).
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!tvMode) return;
+    const onFocusIn = (event: FocusEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      // Fiche, menu ou dialogue ouverts par-dessus : l'écran dessous ne bouge pas.
+      if (!target || target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      const hide = root.classList.contains('remote-navigation') && !!target.closest('[data-tv-vod]');
+      if (hide === root.classList.contains('tv-chrome-hidden')) return;
+      if (hide) root.style.setProperty('--tv-header-shift', `${Math.max(0, Math.round(headerRef.current?.getBoundingClientRect().bottom ?? 0))}px`);
+      root.classList.toggle('tv-chrome-hidden', hide);
+    };
+    document.addEventListener('focusin', onFocusIn);
+    return () => { document.removeEventListener('focusin', onFocusIn); root.classList.remove('tv-chrome-hidden'); };
+  }, [tvMode]);
+  // Sortie du catalogue sans passage du focus par l'en-tête (Retour) : il réapparaît.
+  useEffect(() => {
+    if (activeTab !== 'movies' && activeTab !== 'series') document.documentElement.classList.remove('tv-chrome-hidden');
+  }, [activeTab]);
   useEffect(() => {
     if (activeTab === 'player') webPlayerSection.current?.scrollIntoView({ block: 'start' });
   }, [activeTab, currentChannel?.id]);
@@ -670,7 +692,8 @@ export function IPTVPlayer() {
   }, [loadingInitial, refreshPlaylistId, refreshHours]);
 
   const navigate = (section: NavSection) => {
-    if (section === 'vod') setActiveTab(current => (current === 'movies' || current === 'series' ? current : lastVodTab));
+    if (section === 'movies' || section === 'series') setActiveTab(section);
+    else if (section === 'vod') setActiveTab(current => (current === 'movies' || current === 'series' ? current : lastVodTab));
     else setActiveTab(section);
   };
   const openMore = (destination: MoreDestination) => {
@@ -782,6 +805,67 @@ export function IPTVPlayer() {
     );
   }
 
+  // En-tête : sur TV, une seule ligne (logo, rubriques, liste, recherche) — repliable.
+  const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
+          <BrandMark className="h-8 w-8 sm:h-9 sm:w-9" />
+          <span>CedPlay</span>
+        </h1>
+        {tvMode && <MainNavigation tv onNavigate={navigate} />}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant={tvMode ? 'ghost' : 'outline'} size="sm" className={tvMode ? 'tv-chip ml-auto h-10 min-w-0 gap-1.5 rounded-full px-3.5 text-[14px] font-normal text-muted-foreground' : 'min-h-11 min-w-0 border-neutral-800 text-white hover:bg-neutral-900 px-3 gap-1.5'} title={currentPlaylist.name} aria-label="Changer de liste">
+              <span className={`truncate ${tvMode ? 'max-w-[180px]' : 'max-w-[200px] sm:max-w-[240px]'}`}>{currentPlaylist.name}</span>
+              <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 opacity-70" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-72 max-h-[70vh] overflow-y-auto">
+            <DropdownMenuLabel>Changer de liste</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={currentPlaylist.id} onValueChange={(id) => {
+              const pl = allPlaylists.find(p => p.id === id);
+              if (pl && pl.id !== currentPlaylist.id) void openPlaylist(pl);
+            }}>
+              {allPlaylists.map(pl => (
+                <DropdownMenuRadioItem key={pl.id} value={pl.id}>
+                  <span className="truncate flex-1">{pl.name}</span>
+                  <span className="ml-auto pl-2 text-xs text-muted-foreground shrink-0">{pl.channels.length}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
+            {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
+            <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
+          <Badge variant="outline" className="hidden sm:inline-flex border-neutral-800 text-amber-300 text-xs shrink-0">
+            {currentPlaylist.channels.length}/{currentPlaylist.totalChannelsBeforeDedup}
+          </Badge>
+        )}
+      </div>
+      
+      <div className="flex items-center justify-end gap-1.5 shrink-0">
+        {/* TV : la connexion Xtream reste dans le menu de la liste, l'en-tête garde une seule ligne. */}
+        {!tvMode && <Button variant="outline" size="sm" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setXtreamOpen(true)} aria-label="Connexion Xtream">Xtream</Button>}
+        {tvMode ? <Button variant="ghost" size="sm" onClick={() => setSearchOpen(true)} className="tv-chip h-10 w-10 rounded-full p-0 text-muted-foreground" aria-label="Recherche unifiée" title="Recherche unifiée">
+          <Search aria-hidden="true" className="h-[18px] w-[18px]" />
+        </Button> : <Button 
+          variant="outline" 
+          size="sm"
+          onClick={() => setSearchOpen(true)}
+          className="border-neutral-800 text-white hover:bg-neutral-900 h-11 w-11 p-0 sm:w-auto sm:px-3.5 text-sm"
+          aria-label="Recherche unifiée"
+          title="Recherche unifiée (Ctrl+K)"
+        >
+          <Search aria-hidden="true" className="h-4 w-4 sm:mr-1.5" />
+          <span className="hidden sm:inline">Recherche</span>
+        </Button>}
+      </div>
+    </header>
+  );
+
   return (
     <div className={`min-h-screen bg-background pt-[env(safe-area-inset-top)] ${webSession && activeTab !== 'player' ? 'pb-[calc(320px+env(safe-area-inset-bottom))] sm:pb-[calc(260px+env(safe-area-inset-bottom))]' : 'pb-[calc(84px+env(safe-area-inset-bottom))] sm:pb-[env(safe-area-inset-bottom)]'}`}>
       {openingChannel && <div role="status" aria-live="polite" className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
@@ -791,69 +875,15 @@ export function IPTVPlayer() {
         </div>
       </div>}
       <div className="app-shell container mx-auto p-2 sm:p-4">
-        {/* Header */}
-        <header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between gap-2 border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
-              <BrandMark className="h-8 w-8 sm:h-9 sm:w-9" />
-              <span>CedPlay</span>
-            </h1>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="min-h-11 min-w-0 border-neutral-800 text-white hover:bg-neutral-900 px-3 gap-1.5" title={currentPlaylist.name} aria-label="Changer de liste">
-                  <span className="truncate max-w-[200px] sm:max-w-[240px]">{currentPlaylist.name}</span>
-                  <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 opacity-70" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-72 max-h-[70vh] overflow-y-auto">
-                <DropdownMenuLabel>Changer de liste</DropdownMenuLabel>
-                <DropdownMenuRadioGroup value={currentPlaylist.id} onValueChange={(id) => {
-                  const pl = allPlaylists.find(p => p.id === id);
-                  if (pl && pl.id !== currentPlaylist.id) void openPlaylist(pl);
-                }}>
-                  {allPlaylists.map(pl => (
-                    <DropdownMenuRadioItem key={pl.id} value={pl.id}>
-                      <span className="truncate flex-1">{pl.name}</span>
-                      <span className="ml-auto pl-2 text-xs text-muted-foreground shrink-0">{pl.channels.length}</span>
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
-                {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
-                <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
-              <Badge variant="outline" className="hidden sm:inline-flex border-neutral-800 text-amber-300 text-xs shrink-0">
-                {currentPlaylist.channels.length}/{currentPlaylist.totalChannelsBeforeDedup}
-              </Badge>
-            )}
-          </div>
-          
-          <div className="flex items-center justify-end gap-1.5 shrink-0">
-            <Button variant="outline" size="sm" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setXtreamOpen(true)} aria-label="Connexion Xtream">Xtream</Button>
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => setSearchOpen(true)}
-              className="border-neutral-800 text-white hover:bg-neutral-900 h-11 w-11 p-0 sm:w-auto sm:px-3.5 text-sm"
-              aria-label="Recherche unifiée"
-              title="Recherche unifiée (Ctrl+K)"
-            >
-              <Search aria-hidden="true" className="h-4 w-4 sm:mr-1.5" />
-              <span className="hidden sm:inline">Recherche</span>
-            </Button>
-          </div>
-        </header>
 
         {/* Main Content */}
-        <Tabs activationMode="manual" value={navSectionFor(activeTab)} onValueChange={value => navigate(value as NavSection)} className="space-y-4">
-          <MainNavigation onNavigate={navigate} />
+        {!tvMode && appHeader}
+        <Tabs activationMode="manual" value={navSectionFor(activeTab, tvMode)} onValueChange={value => navigate(value as NavSection)} className="space-y-4">
+          {tvMode ? appHeader : <MainNavigation onNavigate={navigate} />}
 
           <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} /></Suspense></TabsContent>
-          <TabsContent value="vod" className="screen-enter space-y-4">
-            <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
+          <TabsContent value={tvMode ? (activeTab === 'series' ? 'series' : 'movies') : 'vod'} className="screen-enter space-y-4">
+            {!tvMode && <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
               {(['movies', 'series'] as const).map(kind => <button
                 key={kind}
                 type="button"
@@ -861,7 +891,7 @@ export function IPTVPlayer() {
                 onClick={() => setActiveTab(kind)}
                 className={`min-h-10 rounded-full px-5 text-sm font-medium transition-colors ${activeTab === kind ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
               >{kind === 'movies' ? 'Films' : 'Séries'}</button>)}
-            </div>
+            </div>}
             {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={() => setSearchOpen(true)} /></Suspense></div>}
             {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={() => setSearchOpen(true)} /></Suspense></div>}
           </TabsContent>

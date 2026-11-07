@@ -6,7 +6,7 @@ import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, ListChecks, 
 import type { FavoriteList } from '@/utils/favoriteLists';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import type { Channel, ChannelGroup } from '@/types/channel';
-import type { EPGData } from '@/types/epg';
+import type { EPGData, EPGProgram } from '@/types/epg';
 import { getCurrentProgram, getUpcomingProgram, getProgramProgress, formatTime } from '@/utils/epgXmltv';
 import { getPlayHistory, saveFavoritesToDB } from '@/utils/idb';
 import { NativePlayerBridge, type PreviewState } from '@/utils/nativePlayer';
@@ -20,6 +20,46 @@ const ROW_HEIGHT = 56;
 const PAGE = 8;
 /** Temps d'arrêt sur une chaîne avant de lancer son aperçu (évite d'ouvrir un flux à chaque appui). */
 const PREVIEW_DELAY = 600;
+
+interface ChannelRowProps {
+  channel: Channel;
+  index: number;
+  /** Décalage vertical calculé par le virtualiseur. */
+  start: number;
+  selected: boolean;
+  playing: boolean;
+  program: EPGProgram | null;
+  favorite: boolean;
+  onPlay: (channel: Channel) => void;
+  onFocus: (index: number) => void;
+}
+
+/** Ligne mémoïsée : à chaque appui de défilement, seules les lignes dont l'état change se re-rendent. */
+const ChannelRow = React.memo(function ChannelRow({ channel, index, start, selected, playing, program, favorite, onPlay, onFocus }: ChannelRowProps) {
+  return <button
+    type="button"
+    aria-current={playing ? 'true' : undefined}
+    aria-label={`${index + 1}. ${channel.name}${program ? `, ${program.title}` : ''}`}
+    data-tv-item
+    data-tv-row={index}
+    data-channel-row-id={channel.id}
+    tabIndex={selected ? 0 : -1}
+    onFocus={() => onFocus(index)}
+    onClick={() => onPlay(channel)}
+    className={`tv-row absolute left-0 right-0 flex items-center gap-3 rounded-xl px-3 text-left ${selected ? 'is-selected' : ''} ${playing ? 'is-playing' : ''}`}
+    style={{ top: start, height: ROW_HEIGHT - 4 }}
+  >
+    <span className="w-8 shrink-0 text-right font-mono text-[13px] tabular-nums opacity-60">{index + 1}</span>
+    <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
+    <span className="min-w-0 flex-1">
+      <span className="block truncate text-[15px] font-medium leading-5">{channel.name}</span>
+      {program && <span className="block truncate text-xs leading-4 opacity-70">{program.title}</span>}
+    </span>
+    {favorite && <Heart className="h-3.5 w-3.5 shrink-0 fill-current opacity-80" aria-label="Favori" />}
+    {channel.quality && <span className="shrink-0 rounded border border-current/30 px-1.5 font-mono text-[10px] leading-4 opacity-70">{channel.quality}</span>}
+    {playing && <span className="h-2 w-2 shrink-0 rounded-full bg-live" aria-label="En cours" />}
+  </button>;
+});
 
 export interface TvLiveScreenProps {
   playlistId: string;
@@ -371,13 +411,15 @@ export function TvLiveScreen({
     }
   };
   // Le focus réel peut changer à la souris : garder la colonne cohérente.
-  const syncColumn = (col: Column, index: number) => {
+  // Callback stable : la mémoïsation des lignes doit survivre aux re-rendus de l'écran.
+  const syncColumn = useCallback((col: Column, index: number) => {
     if (redirecting.current) return;
     setColumn(col);
     if (col === 'cat') setCatIndex(index);
     else if (col === 'list') setRow(index);
     else setInfoIndex(index);
-  };
+  }, []);
+  const handleRowFocus = useCallback((index: number) => syncColumn('list', index), [syncColumn]);
 
   // ── Aperçu vidéo ─────────────────────────────────────────────────────
   // Actif quand le focus est dans la liste ou l'aperçu : pas en parcourant les catégories,
@@ -495,32 +537,18 @@ export function TvLiveScreen({
               {visibleRows.map(v => {
                 const channel = channels[v.index];
                 if (!channel) return null;
-                const playing = currentChannel?.id === channel.id;
-                const program = epgData ? getCurrentProgram(channel.id, epgData, now) : null;
-                return <button
+                return <ChannelRow
                   key={v.key}
-                  type="button"
-                  aria-current={playing ? 'true' : undefined}
-                  aria-label={`${v.index + 1}. ${channel.name}${program ? `, ${program.title}` : ''}`}
-                  data-tv-item
-                  data-tv-row={v.index}
-                  data-channel-row-id={channel.id}
-                  tabIndex={column === 'list' && v.index === row ? 0 : -1}
-                  onFocus={() => syncColumn('list', v.index)}
-                  onClick={() => onPlay(channel)}
-                  className={`tv-row absolute left-0 right-0 flex items-center gap-3 rounded-xl px-3 text-left ${v.index === row ? 'is-selected' : ''} ${playing ? 'is-playing' : ''}`}
-                  style={{ top: v.start, height: ROW_HEIGHT - 4 }}
-                >
-                  <span className="w-8 shrink-0 text-right font-mono text-[13px] tabular-nums opacity-60">{v.index + 1}</span>
-                  <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] font-medium leading-5">{channel.name}</span>
-                    {program && <span className="block truncate text-xs leading-4 opacity-70">{program.title}</span>}
-                  </span>
-                  {favoriteSet.has(channel.id) && <Heart className="h-3.5 w-3.5 shrink-0 fill-current opacity-80" aria-label="Favori" />}
-                  {channel.quality && <span className="shrink-0 rounded border border-current/30 px-1.5 font-mono text-[10px] leading-4 opacity-70">{channel.quality}</span>}
-                  {playing && <span className="h-2 w-2 shrink-0 rounded-full bg-live" aria-label="En cours" />}
-                </button>;
+                  channel={channel}
+                  index={v.index}
+                  start={v.start}
+                  selected={column === 'list' && v.index === row}
+                  playing={currentChannel?.id === channel.id}
+                  program={epgData ? getCurrentProgram(channel.id, epgData, now) : null}
+                  favorite={favoriteSet.has(channel.id)}
+                  onPlay={onPlay}
+                  onFocus={handleRowFocus}
+                />;
               })}
             </div>
           )}

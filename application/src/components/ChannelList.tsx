@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +26,331 @@ import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { createSearchIndex, searchChannels } from '@/utils/channelSearch';
 import { focusRemote } from '@/utils/remoteNavigation';
 import type { FavoriteList } from '@/utils/favoriteLists';
+
+/** Surligne les occurrences de la recherche dans un nom (fonction pure, partagée par toutes les cartes). */
+const highlight = (text: string, rawQuery: string): React.ReactNode => {
+  if (!rawQuery.trim()) return text;
+  const tokens = rawQuery.split(/\s+/).filter(Boolean).sort((a,b)=>b.length-a.length);
+  if (!tokens.length) return text;
+  const parts: React.ReactNode[] = [];
+  const lower = text.toLowerCase();
+  let indexOffset = 0;
+  while (indexOffset < text.length) {
+    let bestIdx = -1; let bestLen = 0; let bestToken = '';
+    for (const t of tokens) {
+      const idx = lower.indexOf(t.toLowerCase(), indexOffset);
+      if (idx !== -1 && (bestIdx === -1 || idx < bestIdx || (idx === bestIdx && t.length > bestLen))) {
+        bestIdx = idx; bestLen = t.length; bestToken = t;
+      }
+    }
+    if (bestIdx === -1) {
+      parts.push(text.slice(indexOffset));
+      break;
+    }
+    if (bestIdx > indexOffset) parts.push(text.slice(indexOffset, bestIdx));
+    parts.push(<mark key={indexOffset+':'+bestToken} className="bg-yellow-500/60 text-black rounded px-0.5">{text.substr(bestIdx, bestLen)}</mark>);
+    indexOffset = bestIdx + bestLen;
+    if (indexOffset >= text.length) break;
+  }
+  return parts;
+};
+
+/** Horloge de la liste : les cartes sont mémoïsées et ne suivent plus les re-rendus du parent,
+ * la zone EPG (programme en cours, progression) doit donc s'actualiser d'elle-même. */
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+  return now;
+}
+
+interface ChannelCardProps {
+  channel: Channel;
+  compactMode: boolean;
+  showVariants: boolean;
+  selectedGroup: string;
+  isPlaying: boolean;
+  isSelected: boolean;
+  isFavorite: boolean;
+  favoriteNumber: number | undefined;
+  searchTerm: string;
+  epgData: EPGData | undefined;
+  /** Horloge partagée de la liste : fait passer la carte à l'émission suivante sans re-rendu du parent. */
+  now: Date;
+  groups: ChannelGroup[];
+  favorites: string[];
+  onChannelSelect: (channel: Channel) => void;
+  onNativeChannelSelect: ((channel: Channel) => void) | undefined;
+  onMosaic: ((channel: Channel) => void) | undefined;
+  onRecord: ((channel: Channel) => void) | undefined;
+  onEditChannel: ((channel: Channel) => void) | undefined;
+  toggleFavorite: (channel: Channel, event: React.MouseEvent) => void;
+}
+
+/** Carte mémoïsée : au défilement, seules les lignes qui entrent dans la fenêtre se montent,
+ * les autres ne sont plus re-rendues à chaque image. L'horloge `now` (30 s) reste le seul
+ * re-rendu périodique, pour la zone EPG. */
+const ChannelCard = React.memo(function ChannelCard({
+  channel, compactMode, showVariants, selectedGroup, isPlaying, isSelected, isFavorite,
+  favoriteNumber, searchTerm, epgData, now, groups, favorites,
+  onChannelSelect, onNativeChannelSelect, onMosaic, onRecord, onEditChannel, toggleFavorite,
+}: ChannelCardProps) {
+  const variantList = showVariants ? channel.variants || [] : [];
+  const exportChannel = () => {
+    try {
+      const variantsAll = [channel, ...(channel.variants || [])];
+      const groupsMap: ChannelGroup[] = [{ name: channel.group || 'Single', channels: variantsAll }];
+      const pl: PlaylistInfo = {
+        id: 'single_'+channel.id,
+        name: channel.name,
+        channels: variantsAll,
+        groups: groupsMap,
+        totalChannelsBeforeDedup: variantsAll.length
+      } as PlaylistInfo;
+      downloadPlaylistAdvanced(pl, favorites, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
+      toast.success('Channel exported');
+    } catch {
+      toast.error('Export impossible');
+    }
+  };
+  const copyUrl = () => {
+    const url = channel.url;
+    if (!url) { toast.error('No URL'); return; }
+    navigator.clipboard.writeText(url).then(()=> toast.success('URL copied')).catch(()=>toast.error('Copy failed'));
+  };
+  return (
+    <div className="space-y-1" data-channel-id={channel.id}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <Card
+            className={`cursor-pointer rounded-2xl border-transparent shadow-none transition-colors ${
+              isPlaying
+                ? 'bg-secondary shadow-[inset_3px_0_0_hsl(var(--primary))]'
+                : isSelected
+                  ? 'legacy-channel-selection bg-accent/60 ring-1 ring-muted-foreground/60'
+                  : 'bg-transparent hover:bg-accent/60'
+            }`}
+            onClick={() => onChannelSelect(channel)}
+          >
+            <CardContent className={`channel-row-content ${compactMode ? 'p-2' : 'px-3 py-3'}`}>
+              <div className={`flex items-center ${compactMode ? 'space-x-2' : 'space-x-4'}`}>
+                {selectedGroup === 'favorites' && favoriteNumber !== undefined && <span className="w-5 shrink-0 text-right font-mono text-[13px] text-primary" aria-label={`Favori numéro ${favoriteNumber}`}>{favoriteNumber}</span>}
+                {selectedGroup !== 'favorites' && channel.chno && <span className="w-8 shrink-0 text-right font-mono text-[12px] text-muted-foreground" aria-label={`Chaîne numéro ${channel.chno}`}>{channel.chno}</span>}
+                {/* Channel Logo */}
+                <ChannelLogo src={channel.logo ?? null} name={channel.name} compact={compactMode} />
+
+                {/* Channel Info */}
+                <div className="flex-1 min-w-0">
+                  <h3 className={`font-semibold tracking-tight truncate flex items-center gap-2 ${compactMode ? 'text-sm' : 'text-[15px]'} ${isPlaying ? 'text-primary' : ''}`}>
+                    <span className="truncate">{highlight(channel.name, searchTerm)}</span>
+                    {channel.quality && (
+                      <Badge
+                        variant={channel.quality === '4K' || channel.quality === 'UHD' ? 'default' : 'outline'}
+                        className={`font-mono text-[10px] px-1.5 py-0 leading-4 tracking-wide ${compactMode ? 'scale-90' : ''} ${channel.quality === '4K' || channel.quality === 'UHD' ? 'border-transparent bg-primary text-primary-foreground' : 'border-neutral-700 bg-transparent text-muted-foreground'}`}
+                      >
+                        {channel.quality}
+                      </Badge>
+                    )}
+                    {variantList.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px] px-1 py-0" title={`${variantList.length} variant(s) hidden`}>
+                        +{variantList.length}
+                      </Badge>
+                    )}
+                  </h3>
+                  {compactMode && epgData && (() => {
+                    const currentProgram = getCurrentProgram(channel.id, epgData, now);
+                    const upcomingProgram = getUpcomingProgram(channel.id, epgData, now);
+                    return (
+                      <div className="mt-0.5 text-[10px] truncate text-muted-foreground">
+                        {currentProgram ? (
+                          <span>{currentProgram.title}</span>
+                        ) : upcomingProgram ? (
+                          <span>Next: {upcomingProgram.title}</span>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
+                  {!compactMode && epgData && (() => {
+                    const currentProgram = getCurrentProgram(channel.id, epgData, now);
+                    const upcomingProgram = getUpcomingProgram(channel.id, epgData, now);
+                    return (
+                      <div className="mt-1 space-y-1">
+                        {currentProgram ? (
+                          <div className="text-xs">
+                            <div className="flex items-center gap-1 text-[13px] text-muted-foreground">
+                              <span className="truncate">{currentProgram.title}</span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="font-mono tabular-nums text-[11px] text-neutral-500">
+                                {formatTime(currentProgram.startTime)}–{formatTime(currentProgram.endTime)}
+                              </span>
+                              <Progress
+                                value={getProgramProgress(currentProgram, now)}
+                                className="h-0.5 flex-1 bg-neutral-800"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={`${upcomingProgram ? '' : 'channel-empty-program '}text-xs text-muted-foreground`}>
+                            {upcomingProgram ? (
+                              <span>Next: {upcomingProgram.title} at {formatTime(upcomingProgram.startTime)}</span>
+                            ) : (
+                              <span>Aucune information de programme</span>
+                            )}
+                          </div>
+                        )}
+                        {channel.group && (
+                          <Badge variant="outline" className="border-neutral-800 text-[11px] font-normal text-neutral-500">
+                            {channel.group}
+                          </Badge>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {!compactMode && !epgData && channel.group && (
+                    <Badge variant="outline" className="mt-1 border-neutral-800 text-[11px] font-normal text-neutral-500">
+                      {channel.group}
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div data-channel-actions className={`flex items-center ${compactMode ? 'space-x-1' : 'space-x-2'}`}>
+                  {NativePlayerBridge.isAvailable() && (
+                    <Button
+                      variant="ghost"
+                      size={compactMode ? 'icon' : 'sm'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onNativeChannelSelect) onNativeChannelSelect(channel);
+                        else void NativePlayerBridge.open(channel.url, channel.name, buildNativeZap(groups.flatMap(g => g.channels), channel));
+                      }}
+                      className="p-1 text-primary hover:text-primary hover:bg-primary/15"
+                      title="Ouvrir dans le lecteur Android (ExoPlayer)"
+                      aria-label={`Lire ${channel.name} dans le lecteur Android`}
+                    >
+                      <Zap className="h-4 w-4 fill-primary/30" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size={compactMode ? 'icon' : 'sm'}
+                    onClick={(e) => toggleFavorite(channel, e)}
+                    className="p-1"
+                    title={isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                    aria-label={isFavorite ? `Retirer ${channel.name} des favoris` : `Ajouter ${channel.name} aux favoris`}
+                  >
+                    <Heart className={`h-4 w-4 ${isFavorite ? 'fill-current text-primary' : 'text-muted-foreground'}`} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size={compactMode ? 'icon' : 'sm'}
+                    onClick={(e) => { e.stopPropagation(); onChannelSelect(channel); }}
+                    className="p-1"
+                    title="Lecture"
+                    data-channel-play
+                    aria-label={`Lire ${channel.name}`}
+                  >
+                    <Play className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-56">
+          <ContextMenuItem onSelect={() => onChannelSelect(channel)}><Play className="h-4 w-4 mr-2 inline" aria-hidden="true" />Lecture</ContextMenuItem>
+          {(onMosaic || onRecord) && (
+            <>
+              {onMosaic && <ContextMenuItem onSelect={() => onMosaic(channel)}><Grid2X2 className="h-4 w-4 mr-2 inline" aria-hidden="true" />Mosaïque</ContextMenuItem>}
+              {onRecord && <ContextMenuItem onSelect={() => onRecord(channel)}><CircleDot className="h-4 w-4 mr-2 inline" aria-hidden="true" />Enregistrer</ContextMenuItem>}
+              <ContextMenuSeparator />
+            </>
+          )}
+          {NativePlayerBridge.isAvailable() && (
+            <>
+              <ContextMenuItem onSelect={() => onNativeChannelSelect ? onNativeChannelSelect(channel) : void NativePlayerBridge.open(channel.url, channel.name, buildNativeZap(groups.flatMap(g => g.channels), channel))}>
+                <Zap className="h-4 w-4 mr-2 inline" aria-hidden="true" />Lecteur natif (ExoPlayer)
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void NativePlayerBridge.openExternal(channel.url, channel.name)}>
+                <PlayCircle className="h-4 w-4 mr-2 inline" aria-hidden="true" />Ouvrir dans VLC
+              </ContextMenuItem>
+            </>
+          )}
+          <ContextMenuItem onSelect={(e) => {
+            e.preventDefault();
+            const synthetic = { stopPropagation: () => {/* noop */} } as unknown as React.MouseEvent;
+            toggleFavorite(channel, synthetic);
+          }}>{isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}</ContextMenuItem>
+          {onEditChannel && <ContextMenuItem onSelect={() => onEditChannel(channel)}><Pencil className="h-4 w-4 mr-2 inline" aria-hidden="true" />Modifier la chaîne…</ContextMenuItem>}
+          <ContextMenuItem onSelect={copyUrl}>Copier l'URL</ContextMenuItem>
+          {channel.variants?.length ? (
+            <>
+              <ContextMenuItem onSelect={() => {
+                const urls = [channel.url, ...channel.variants!.map(v=>v.url)].filter(Boolean).join('\n');
+                navigator.clipboard.writeText(urls).then(()=>toast.success('URL des variantes copiées')).catch(()=>toast.error('Copie impossible'));
+              }}>Copier toutes les URL</ContextMenuItem>
+              <ContextMenuItem onSelect={() => {
+                try {
+                  const variantsOnly: PlaylistInfo = {
+                    id: 'variants_'+channel.id,
+                    name: channel.name + ' Variants',
+                    channels: channel.variants!,
+                    groups: [{ name: channel.group || 'Variants', channels: channel.variants! }],
+                    totalChannelsBeforeDedup: channel.variants!.length
+                  } as PlaylistInfo;
+                  downloadPlaylistAdvanced(variantsOnly, favorites, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
+                  toast.success('Variantes exportées');
+                } catch { toast.error('Export impossible'); }
+              }}>Exporter les variantes</ContextMenuItem>
+              <ContextMenuItem onSelect={exportChannel}>Exporter la chaîne + variantes</ContextMenuItem>
+            </>
+          ) : (
+            <ContextMenuItem onSelect={exportChannel}>Exporter la chaîne</ContextMenuItem>
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled className="text-[10px] opacity-70">ID: {channel.id.slice(0,10)}</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {variantList.length > 0 && showVariants && (
+        <div className="ml-6 border-l border-border pl-4 space-y-1">
+          {variantList.map(v => (
+            <div
+              key={v.id}
+              className="flex items-center justify-between text-xs rounded bg-muted/30 px-2 py-1 hover:bg-muted/50 cursor-pointer"
+              onClick={() => onChannelSelect(v)}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="truncate">{highlight(v.name, searchTerm)}</span>
+                {v.quality && (
+                  <Badge variant="outline" className="text-[9px]">{v.quality}</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={(e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); toggleFavorite(v, e); }}
+                  className="text-muted-foreground hover:text-foreground"
+                  title={favorites.includes(v.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                  aria-label={favorites.includes(v.id) ? `Retirer ${v.name} des favoris` : `Ajouter ${v.name} aux favoris`}
+                >
+                  {favorites.includes(v.id) ? '♥' : '♡'}
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onChannelSelect(v); }}
+                  className="text-primary"
+                  title={`Lire ${v.name}`}
+                  aria-label={`Lire ${v.name}`}
+                >▶</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
 
   interface ChannelListProps {
       playlistId?: string;
@@ -76,6 +401,7 @@ import type { FavoriteList } from '@/utils/favoriteLists';
       favoriteLists,
       customGroupOrder = false
     }: ChannelListProps) {
+  const now = useNow();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
       const [favorites, setFavorites] = useState<string[]>([]);
@@ -171,34 +497,6 @@ import type { FavoriteList } from '@/utils/favoriteLists';
       }, [parentalLocked, lockedGroupSet, selectedGroup]);
 
       const searchIndex = useMemo(() => createSearchIndex(allChannels), [allChannels]);
-
-      const highlight = (text: string, rawQuery: string) => {
-        if (!rawQuery.trim()) return text;
-        const tokens = rawQuery.split(/\s+/).filter(Boolean).sort((a,b)=>b.length-a.length);
-        if (!tokens.length) return text;
-      const remaining = text; // not mutated; we use indexOffset instead
-        const parts: React.ReactNode[] = [];
-        const lower = text.toLowerCase();
-        let indexOffset = 0;
-        while (remaining) {
-          let bestIdx = -1; let bestLen = 0; let bestToken = '';
-          for (const t of tokens) {
-            const idx = lower.indexOf(t.toLowerCase(), indexOffset);
-            if (idx !== -1 && (bestIdx === -1 || idx < bestIdx || (idx === bestIdx && t.length > bestLen))) {
-              bestIdx = idx; bestLen = t.length; bestToken = t;
-            }
-          }
-          if (bestIdx === -1) {
-            parts.push(text.slice(indexOffset));
-            break;
-          }
-          if (bestIdx > indexOffset) parts.push(text.slice(indexOffset, bestIdx));
-          parts.push(<mark key={indexOffset+':'+bestToken} className="bg-yellow-500/60 text-black rounded px-0.5">{text.substr(bestIdx, bestLen)}</mark>);
-          indexOffset = bestIdx + bestLen;
-          if (indexOffset >= text.length) break;
-        }
-        return parts;
-      };
 
       // Numéros des favoris de cette liste (1 = premier favori) : touches de télécommande.
       const favoriteNumbers = useMemo(() => {
@@ -312,7 +610,7 @@ import type { FavoriteList } from '@/utils/favoriteLists';
         count: shouldVirtualize ? channelsToRender.length : 0,
         getScrollElement: () => parentRef.current,
         estimateSize: () => (compactMode ? 54 : 96),
-        overscan: 12,
+        overscan: 8,
         gap: 8,
         // Garder le bouton courant monté pendant que la fenêtre de lignes se déplace.
         rangeExtractor: range => [...new Set([...defaultRangeExtractor(range), ...[focusedRow, requestedRow].filter((i): i is number => i !== null && i >= 0 && i < channelsToRender.length)])].sort((a, b) => a - b),
@@ -352,269 +650,14 @@ import type { FavoriteList } from '@/utils/favoriteLists';
         restoreRowFocus();
       };
 
-      const renderChannelCard = (channel: Channel, index: number) => {
-        const variantList = showVariants ? channel.variants || [] : [];
-        const exportChannel = () => {
-          try {
-            const variantsAll = [channel, ...(channel.variants || [])];
-            const groupsMap: ChannelGroup[] = [{ name: channel.group || 'Single', channels: variantsAll }];
-            const pl: PlaylistInfo = {
-              id: 'single_'+channel.id,
-              name: channel.name,
-              channels: variantsAll,
-              groups: groupsMap,
-              totalChannelsBeforeDedup: variantsAll.length
-            } as PlaylistInfo;
-            downloadPlaylistAdvanced(pl, favorites, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
-            toast.success('Channel exported');
-          } catch {
-            toast.error('Export impossible');
-          }
-        };
-        const copyUrl = () => {
-          const url = channel.url;
-          if (!url) { toast.error('No URL'); return; }
-          navigator.clipboard.writeText(url).then(()=> toast.success('URL copied')).catch(()=>toast.error('Copy failed'));
-        };
-        return (
-          <div key={channel.id} className="space-y-1" data-channel-id={channel.id} onFocusCapture={() => setFocusedRow(index)} onKeyDown={e => moveRowFocus(e, index)}>
-            <ContextMenu>
-              <ContextMenuTrigger asChild>
-                <Card
-                  className={`cursor-pointer rounded-2xl border-transparent shadow-none transition-colors ${
-                    currentChannel?.id === channel.id 
-                      ? 'bg-secondary shadow-[inset_3px_0_0_hsl(var(--primary))]' 
-                      : keyboardNavigationEnabled && selectedIndex === index
-                        ? 'legacy-channel-selection bg-accent/60 ring-1 ring-muted-foreground/60'
-                        : 'bg-transparent hover:bg-accent/60'
-                  }`}
-                  onClick={() => onChannelSelect(channel)}
-                >
-                  <CardContent className={`channel-row-content ${compactMode ? 'p-2' : 'px-3 py-3'}`}>
-                    <div className={`flex items-center ${compactMode ? 'space-x-2' : 'space-x-4'}`}>
-                  {selectedGroup === 'favorites' && favoriteNumbers.has(channel.id) && <span className="w-5 shrink-0 text-right font-mono text-[13px] text-primary" aria-label={`Favori numéro ${favoriteNumbers.get(channel.id)}`}>{favoriteNumbers.get(channel.id)}</span>}
-                  {selectedGroup !== 'favorites' && channel.chno && <span className="w-8 shrink-0 text-right font-mono text-[12px] text-muted-foreground" aria-label={`Chaîne numéro ${channel.chno}`}>{channel.chno}</span>}
-                  {/* Channel Logo */}
-                  <ChannelLogo src={channel.logo ?? null} name={channel.name} compact={compactMode} />
-
-                  {/* Channel Info */}
-                  <div className="flex-1 min-w-0">
-                    <h3 className={`font-semibold tracking-tight truncate flex items-center gap-2 ${compactMode ? 'text-sm' : 'text-[15px]'} ${currentChannel?.id === channel.id ? 'text-primary' : ''}`}>
-                      <span className="truncate">{highlight(channel.name, searchTerm)}</span>
-                      {channel.quality && (
-                        <Badge 
-                          variant={channel.quality === '4K' || channel.quality === 'UHD' ? 'default' : 'outline'} 
-                          className={`font-mono text-[10px] px-1.5 py-0 leading-4 tracking-wide ${compactMode ? 'scale-90' : ''} ${channel.quality === '4K' || channel.quality === 'UHD' ? 'border-transparent bg-primary text-primary-foreground' : 'border-neutral-700 bg-transparent text-muted-foreground'}`}
-                        >
-                          {channel.quality}
-                        </Badge>
-                      )}
-                      {variantList.length > 0 && (
-                        <Badge variant="secondary" className="text-[10px] px-1 py-0" title={`${variantList.length} variant(s) hidden`}>
-                          +{variantList.length}
-                        </Badge>
-                      )}
-                    </h3>
-                    {compactMode && epgData && (() => {
-                      const currentProgram = getCurrentProgram(channel.id, epgData);
-                      const upcomingProgram = getUpcomingProgram(channel.id, epgData);
-                      return (
-                        <div className="mt-0.5 text-[10px] truncate text-muted-foreground">
-                          {currentProgram ? (
-                            <span>{currentProgram.title}</span>
-                          ) : upcomingProgram ? (
-                            <span>Next: {upcomingProgram.title}</span>
-                          ) : null}
-                        </div>
-                      );
-                    })()}
-                    {!compactMode && epgData && (() => {
-                      const currentProgram = getCurrentProgram(channel.id, epgData);
-                      const upcomingProgram = getUpcomingProgram(channel.id, epgData);
-                      return (
-                        <div className="mt-1 space-y-1">
-                          {currentProgram ? (
-                            <div className="text-xs">
-                              <div className="flex items-center gap-1 text-[13px] text-muted-foreground">
-                                <span className="truncate">{currentProgram.title}</span>
-                              </div>
-                              <div className="flex items-center gap-2 mt-1">
-                                <span className="font-mono tabular-nums text-[11px] text-neutral-500">
-                                  {formatTime(currentProgram.startTime)}–{formatTime(currentProgram.endTime)}
-                                </span>
-                                <Progress 
-                                  value={getProgramProgress(currentProgram)} 
-                                  className="h-0.5 flex-1 bg-neutral-800"
-                                />
-                              </div>
-                            </div>
-                          ) : (
-                            <div className={`${upcomingProgram ? '' : 'channel-empty-program '}text-xs text-muted-foreground`}>
-                              {upcomingProgram ? (
-                                <span>Next: {upcomingProgram.title} at {formatTime(upcomingProgram.startTime)}</span>
-                              ) : (
-                                <span>Aucune information de programme</span>
-                              )}
-                            </div>
-                          )}
-                          {channel.group && (
-                            <Badge variant="outline" className="border-neutral-800 text-[11px] font-normal text-neutral-500">
-                              {channel.group}
-                            </Badge>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    {!compactMode && !epgData && channel.group && (
-                      <Badge variant="outline" className="mt-1 border-neutral-800 text-[11px] font-normal text-neutral-500">
-                        {channel.group}
-                      </Badge>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div data-channel-actions className={`flex items-center ${compactMode ? 'space-x-1' : 'space-x-2'}`}>
-                    {NativePlayerBridge.isAvailable() && (
-                      <Button
-                        variant="ghost"
-                        size={compactMode ? 'icon' : 'sm'}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (onNativeChannelSelect) onNativeChannelSelect(channel);
-                          else void NativePlayerBridge.open(channel.url, channel.name, buildNativeZap(groups.flatMap(g => g.channels), channel));
-                        }}
-                        className="p-1 text-primary hover:text-primary hover:bg-primary/15"
-                        title="Ouvrir dans le lecteur Android (ExoPlayer)"
-                        aria-label={`Lire ${channel.name} dans le lecteur Android`}
-                      >
-                        <Zap className="h-4 w-4 fill-primary/30" />
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size={compactMode ? 'icon' : 'sm'}
-                      onClick={(e) => toggleFavorite(channel, e)}
-                      className="p-1"
-                      title={favorites.includes(channel.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}
-                      aria-label={favorites.includes(channel.id) ? `Retirer ${channel.name} des favoris` : `Ajouter ${channel.name} aux favoris`}
-                    >
-                      <Heart className={`h-4 w-4 ${favorites.includes(channel.id) ? 'fill-current text-primary' : 'text-muted-foreground'}`} />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size={compactMode ? 'icon' : 'sm'}
-                      onClick={(e) => { e.stopPropagation(); onChannelSelect(channel); }}
-                      className="p-1"
-                      title="Lecture"
-                      data-channel-play
-                      aria-label={`Lire ${channel.name}`}
-                    >
-                      <Play className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-                  </CardContent>
-                </Card>
-              </ContextMenuTrigger>
-              <ContextMenuContent className="w-56">
-                <ContextMenuItem onSelect={() => onChannelSelect(channel)}><Play className="h-4 w-4 mr-2 inline" aria-hidden="true" />Lecture</ContextMenuItem>
-                {(onMosaic || onRecord) && (
-                  <>
-                    {onMosaic && <ContextMenuItem onSelect={() => onMosaic(channel)}><Grid2X2 className="h-4 w-4 mr-2 inline" aria-hidden="true" />Mosaïque</ContextMenuItem>}
-                    {onRecord && <ContextMenuItem onSelect={() => onRecord(channel)}><CircleDot className="h-4 w-4 mr-2 inline" aria-hidden="true" />Enregistrer</ContextMenuItem>}
-                    <ContextMenuSeparator />
-                  </>
-                )}
-                {NativePlayerBridge.isAvailable() && (
-                  <>
-                    <ContextMenuItem onSelect={() => onNativeChannelSelect ? onNativeChannelSelect(channel) : void NativePlayerBridge.open(channel.url, channel.name, buildNativeZap(groups.flatMap(g => g.channels), channel))}>
-                      <Zap className="h-4 w-4 mr-2 inline" aria-hidden="true" />Lecteur natif (ExoPlayer)
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={() => void NativePlayerBridge.openExternal(channel.url, channel.name)}>
-                      <PlayCircle className="h-4 w-4 mr-2 inline" aria-hidden="true" />Ouvrir dans VLC
-                    </ContextMenuItem>
-                  </>
-                )}
-                <ContextMenuItem onSelect={(e) => { 
-                  e.preventDefault();
-                  const synthetic = { stopPropagation: () => {/* noop */} } as unknown as React.MouseEvent; 
-                  toggleFavorite(channel, synthetic);
-                }}>{favorites.includes(channel.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}</ContextMenuItem>
-                {onEditChannel && <ContextMenuItem onSelect={() => onEditChannel(channel)}><Pencil className="h-4 w-4 mr-2 inline" aria-hidden="true" />Modifier la chaîne…</ContextMenuItem>}
-                <ContextMenuItem onSelect={copyUrl}>Copier l’URL</ContextMenuItem>
-                {channel.variants?.length ? (
-                  <>
-                    <ContextMenuItem onSelect={() => {
-                      const urls = [channel.url, ...channel.variants!.map(v=>v.url)].filter(Boolean).join('\n');
-                      navigator.clipboard.writeText(urls).then(()=>toast.success('URL des variantes copiées')).catch(()=>toast.error('Copie impossible'));
-                    }}>Copier toutes les URL</ContextMenuItem>
-                    <ContextMenuItem onSelect={() => {
-                      try {
-                        const variantsOnly: PlaylistInfo = {
-                          id: 'variants_'+channel.id,
-                          name: channel.name + ' Variants',
-                          channels: channel.variants!,
-                          groups: [{ name: channel.group || 'Variants', channels: channel.variants! }],
-                          totalChannelsBeforeDedup: channel.variants!.length
-                        } as PlaylistInfo;
-                        downloadPlaylistAdvanced(variantsOnly, favorites, { includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true });
-                        toast.success('Variantes exportées');
-                      } catch { toast.error('Export impossible'); }
-                    }}>Exporter les variantes</ContextMenuItem>
-                    <ContextMenuItem onSelect={exportChannel}>Exporter la chaîne + variantes</ContextMenuItem>
-                  </>
-                ) : (
-                  <ContextMenuItem onSelect={exportChannel}>Exporter la chaîne</ContextMenuItem>
-                )}
-                <ContextMenuSeparator />
-                <ContextMenuItem disabled className="text-[10px] opacity-70">ID: {channel.id.slice(0,10)}</ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
-            {variantList.length > 0 && showVariants && (
-              <div className="ml-6 border-l border-border pl-4 space-y-1">
-                {variantList.map(v => (
-                  <div
-                    key={v.id}
-                    className="flex items-center justify-between text-xs rounded bg-muted/30 px-2 py-1 hover:bg-muted/50 cursor-pointer"
-                    onClick={() => onChannelSelect(v)}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="truncate">{highlight(v.name, searchTerm)}</span>
-                      {v.quality && (
-                        <Badge variant="outline" className="text-[9px]">{v.quality}</Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={(e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); toggleFavorite(v, e); }}
-                        className="text-muted-foreground hover:text-foreground"
-                        title={favorites.includes(v.id) ? 'Retirer des favoris' : 'Ajouter aux favoris'}
-                        aria-label={favorites.includes(v.id) ? `Retirer ${v.name} des favoris` : `Ajouter ${v.name} aux favoris`}
-                      >
-                        {favorites.includes(v.id) ? '♥' : '♡'}
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onChannelSelect(v); }}
-                        className="text-primary"
-                        title={`Lire ${v.name}`}
-                        aria-label={`Lire ${v.name}`}
-                      >▶</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      };
-
       const { selectedIndex } = useKeyboardNavigation(
         channelsToRender,
         onChannelSelect,
         keyboardNavigationEnabled
       );
 
-      const toggleFavorite = async (channel: Channel, event: React.MouseEvent) => {
+      // Callback stable (dépend uniquement de `favorites`) : la mémoïsation des cartes en dépend.
+      const toggleFavorite = useCallback(async (channel: Channel, event: React.MouseEvent) => {
         event.stopPropagation();
         let next: string[];
         if (favorites.includes(channel.id)) {
@@ -625,7 +668,7 @@ import type { FavoriteList } from '@/utils/favoriteLists';
         setFavorites(next);
         await saveFavoritesToDB(next);
         window.dispatchEvent(new Event('favorites-updated'));
-      };
+      }, [favorites]);
 
       const groupNames = useMemo(() => {
         const lists = (favoriteLists ?? []).map(l => `fav:${l.id}`);
@@ -773,9 +816,31 @@ import type { FavoriteList } from '@/utils/favoriteLists';
                           {debouncedSearch ? 'Aucune chaîne ne correspond à cette recherche.' : 'Aucune chaîne dans cette sélection.'}
                         </p>
                       </div>
-                    ) : (
-                      channelsToRender.map(renderChannelCard)
-                    )}
+                    ) : channelsToRender.map((channel, index) => (
+                      <div key={channel.id} onFocusCapture={() => setFocusedRow(index)} onKeyDown={e => moveRowFocus(e, index)}>
+                        <ChannelCard
+                          channel={channel}
+                          compactMode={compactMode}
+                          showVariants={showVariants}
+                          selectedGroup={selectedGroup}
+                          isPlaying={currentChannel?.id === channel.id}
+                          isSelected={keyboardNavigationEnabled && selectedIndex === index}
+                          isFavorite={favorites.includes(channel.id)}
+                          favoriteNumber={favoriteNumbers.get(channel.id)}
+                          searchTerm={searchTerm}
+                          epgData={epgData}
+                          now={now}
+                          groups={groups}
+                          favorites={favorites}
+                          onChannelSelect={onChannelSelect}
+                          onNativeChannelSelect={onNativeChannelSelect}
+                          onMosaic={onMosaic}
+                          onRecord={onRecord}
+                          onEditChannel={onEditChannel}
+                          toggleFavorite={toggleFavorite}
+                        />
+                      </div>
+                    ))}
                   </div>
                 </ScrollArea>
               )}
@@ -806,8 +871,30 @@ import type { FavoriteList } from '@/utils/favoriteLists';
                             data-index={virtualRow.index}
                             className="absolute top-0 left-0 w-full"
                             style={{ transform: `translateY(${virtualRow.start}px)` }}
+                            onFocusCapture={() => setFocusedRow(virtualRow.index)}
+                            onKeyDown={e => moveRowFocus(e, virtualRow.index)}
                           >
-                            {renderChannelCard(channel, virtualRow.index)}
+                            <ChannelCard
+                              channel={channel}
+                              compactMode={compactMode}
+                              showVariants={showVariants}
+                              selectedGroup={selectedGroup}
+                              isPlaying={currentChannel?.id === channel.id}
+                              isSelected={keyboardNavigationEnabled && selectedIndex === virtualRow.index}
+                              isFavorite={favorites.includes(channel.id)}
+                              favoriteNumber={favoriteNumbers.get(channel.id)}
+                              searchTerm={searchTerm}
+                              epgData={epgData}
+                              now={now}
+                              groups={groups}
+                              favorites={favorites}
+                              onChannelSelect={onChannelSelect}
+                              onNativeChannelSelect={onNativeChannelSelect}
+                              onMosaic={onMosaic}
+                              onRecord={onRecord}
+                              onEditChannel={onEditChannel}
+                              toggleFavorite={toggleFavorite}
+                            />
                           </div>
                         );
                       })}

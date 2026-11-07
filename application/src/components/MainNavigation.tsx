@@ -1,30 +1,57 @@
-import { Clapperboard, House, LayoutGrid, Tv2 } from 'lucide-react';
+import { Clapperboard, Film, House, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-export type NavSection = 'continue' | 'channels' | 'vod' | 'more';
+export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' | 'more';
 
-const sections: { value: NavSection; label: string; Icon: typeof House }[] = [
+type Section = { value: NavSection; label: string; Icon: typeof House };
+
+const sections: Section[] = [
   { value: 'continue', label: 'Accueil', Icon: House },
   { value: 'channels', label: 'Direct', Icon: Tv2 },
   { value: 'vod', label: 'Films & séries', Icon: Clapperboard },
   { value: 'more', label: 'Plus', Icon: LayoutGrid },
 ];
 
+/** TV : Films et Séries sont deux rubriques, sans sélecteur intermédiaire sous l'en-tête. */
+const tvSections: Section[] = [
+  { value: 'continue', label: 'Accueil', Icon: House },
+  { value: 'channels', label: 'Direct', Icon: Tv2 },
+  { value: 'movies', label: 'Films', Icon: Film },
+  { value: 'series', label: 'Séries', Icon: MonitorPlay },
+  { value: 'more', label: 'Plus', Icon: LayoutGrid },
+];
+
 /** Onglet de navigation correspondant à un écran de l'application. */
-export function navSectionFor(screen: string): NavSection | '' {
+export function navSectionFor(screen: string, tv = false): NavSection | '' {
   if (screen === 'player' || screen === 'channels') return 'channels';
-  if (screen === 'movies' || screen === 'series') return 'vod';
+  if (screen === 'movies' || screen === 'series') return tv ? screen : 'vod';
   if (screen === 'more' || screen === 'replay' || screen === 'streaming' || screen === 'loader') return 'more';
   if (screen === 'continue') return 'continue';
   return '';
 }
 
 /**
- * Navigation principale « Salle obscure » : quatre rubriques.
+ * Navigation principale « Salle obscure ».
  * - Mobile : barre fixe en bas d'écran, onglet actif en ambre avec un trait en haut.
  * - À partir de sm : barre en pilule sous l'en-tête, onglet actif sur fond élevé.
+ * - TV : rubriques en texte dans la ligne d'en-tête, l'active soulignée d'un trait orange.
  */
-export function MainNavigation({ onNavigate }: { onNavigate: (section: NavSection) => void }) {
+export function MainNavigation({ onNavigate, tv = false }: { onNavigate: (section: NavSection) => void; tv?: boolean }) {
+  if (tv) return <TabsList
+    aria-label="Rubriques"
+    data-main-navigation
+    className="tv-nav !mt-0 flex h-auto min-w-0 gap-0.5 bg-transparent p-0 text-muted-foreground"
+  >
+    {tvSections.map(({ value, label, Icon }) => <TabsTrigger
+      key={value}
+      value={value}
+      onClick={() => onNavigate(value)}
+      className="tv-nav-tab relative h-10 gap-2 rounded-full bg-transparent px-3.5 text-[15px] font-medium text-muted-foreground shadow-none ring-offset-0 transition-colors duration-200 hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+    >
+      <Icon aria-hidden="true" className="h-[17px] w-[17px] shrink-0 stroke-[1.8]" />
+      <span>{label}</span>
+    </TabsTrigger>)}
+  </TabsList>;
   return <TabsList
     aria-label="Rubriques"
     data-main-navigation

@@ -269,8 +269,7 @@ export function getUpcomingProgram(channelId: string, epgData: EPGData, now: Dat
   return next >= 0 ? programs[next] : null;
 }
 
-export function getProgramProgress(program: EPGProgram): number {
-  const now = new Date();
+export function getProgramProgress(program: EPGProgram, now: Date = new Date()): number {
   const totalDuration = program.endTime.getTime() - program.startTime.getTime();
   const elapsed = now.getTime() - program.startTime.getTime();
   return Math.max(0, Math.min(100, (elapsed / totalDuration) * 100));

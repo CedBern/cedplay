@@ -94,6 +94,31 @@ it('haut en tête de grille rend la main à la navigation générale', () => {
   expect(event.defaultPrevented).toBe(false);
 });
 
+it('haut en tête de grille rejoint la rubrique active, même en-tête replié hors écran', () => {
+  const nav = document.createElement('div');
+  nav.setAttribute('data-main-navigation', '');
+  nav.innerHTML = '<button role="tab" aria-selected="false">Direct</button><button role="tab" aria-selected="true">Films</button>';
+  document.body.appendChild(nav);
+  try {
+    setup();
+    key('ArrowRight');
+    key('ArrowUp');
+    expect(active()).toHaveTextContent('Films');
+  } finally { nav.remove(); }
+});
+
+it('films : la ligne « USB / SD » de la colonne de gauche ouvre la bibliothèque locale', () => {
+  const onShowLocal = vi.fn();
+  setup({ onShowLocal });
+  fireEvent.click(screen.getByRole('button', { name: 'USB / SD' }));
+  expect(onShowLocal).toHaveBeenCalledTimes(1);
+});
+
+it('séries : pas de ligne « USB / SD »', () => {
+  setup({ kind: 'series', onPlay: undefined });
+  expect(screen.queryByRole('button', { name: 'USB / SD' })).toBeNull();
+});
+
 it('saut de page atteint la cellule « Afficher davantage » qui charge la suite', () => {
   const { onLoadMore } = setup();
   key('PageDown');

@@ -281,3 +281,34 @@ html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .
 @media (hover: hover) { .tv-live [data-tv-item]:hover:not(:focus), .tv-vod [data-tv-item]:hover:not(:focus) { background-color: hsl(var(--accent) / 0.7); } }
 /* La page ne défile pas sous l'écran TV : tout tient dans la hauteur de l'écran. */
 html.tv-mode:has([data-tv-live], [data-tv-vod]) body { overflow: hidden; }
+
+/* ── En-tête TV : une seule ligne, repliée pendant la navigation dans Films et Séries ── */
+html.tv-mode [data-app-header] { transition: margin-top 240ms cubic-bezier(.2, .8, .2, 1), opacity 200ms ease; }
+html.tv-chrome-hidden [data-app-header] { position: relative; margin-top: calc(-1 * var(--tv-header-shift, 0px)); opacity: 0; pointer-events: none; }
+/* La grille gagne exactement la hauteur rendue par l'en-tête, au même rythme. */
+html.tv-chrome-hidden [data-tv-vod] { --tv-vod-extra: var(--tv-header-shift, 0px); }
+html.tv-mode .tv-vod { transition: height 240ms cubic-bezier(.2, .8, .2, 1); }
+@media (prefers-reduced-motion: reduce) { html.tv-mode [data-app-header], html.tv-mode .tv-vod { transition: none; } }
+
+/* Rubriques TV : texte et icône, l'active soulignée d'un trait orange. */
+.tv-nav-tab::after {
+  content: ''; position: absolute; left: 50%; bottom: 3px; width: 18px; height: 2px; margin-left: -9px;
+  border-radius: 2px; background: hsl(var(--primary)); transform: scaleX(0); transition: transform 200ms ease;
+}
+.tv-nav-tab[data-state="active"]::after { transform: scaleX(1); }
+.tv-nav-tab[data-state="active"] svg { color: hsl(var(--primary)); }
+/* Boutons discrets de l'en-tête TV (liste, recherche, source) : sans cadre, une pastille au survol. */
+.tv-chip { border: 0; background: transparent; }
+.tv-chip.is-current { background-color: hsl(var(--secondary)); }
+@media (hover: hover) { .tv-chip:hover, .tv-nav-tab:hover { background-color: hsl(var(--foreground) / 0.06); } }
+/* Télécommande : même repère que dans les écrans, une pastille pleine plutôt qu'un cadre. */
+.remote-navigation .tv-nav-tab:focus, .remote-navigation .tv-chip:focus {
+  outline: none !important; background-color: hsl(var(--primary)) !important; color: hsl(var(--primary-foreground)) !important;
+}
+.remote-navigation .tv-nav-tab:focus svg { color: inherit; }
+.remote-navigation .tv-nav-tab:focus::after { background: hsl(var(--primary-foreground)); }
+
+/* Fiche éclair du catalogue : « Regarder » en pilule claire, les autres actions en filet fin. */
+.tv-vod .tv-action { border-radius: 9999px; background-color: transparent; box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12); padding-left: 1rem; padding-right: 1rem; }
+.tv-vod .tv-action.is-primary { background-color: hsl(var(--foreground)); color: hsl(var(--background)); box-shadow: none; font-weight: 600; }
+.tv-vod .tv-action.is-primary svg { fill: currentColor; }
