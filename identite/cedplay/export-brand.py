@@ -32,8 +32,12 @@ def svg_parts(mono=None):
         out += f'<path {attrs}/>'
     return out
 
+# Sur la tuile, le dessin est agrandi (x1,22) et recentré : il occupe 82 % du carré, comme les grandes applis TV.
+TILE_SCALE = 1.22
+CY = MARK['contentCenterY']
+big = f'<g transform="translate({54 - 54 * TILE_SCALE:.2f} {54 - CY * TILE_SCALE:.2f}) scale({TILE_SCALE})">{svg_parts()}</g>'
 tile = f'<rect width="108" height="108" rx="{R}" fill="{BG}"/>'
-icon = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">{tile}{svg_parts()}</svg>'
+icon = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">{tile}{big}</svg>'
 for path in [HERE / 'cedplay-icon.svg', APP / 'public/cedplay-icon.svg', APP / 'public/favicon.svg']:
     write(path, icon)
 write(HERE / 'cedplay-mark-mono.svg', f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">{svg_parts("#000000")}</svg>')
@@ -41,9 +45,9 @@ write(HERE / 'cedplay-mark-mono.svg', f'<svg xmlns="http://www.w3.org/2000/svg" 
 name = (f'<text x="145" y="79" fill="{MARK["line"]}" font-family="Sora, Segoe UI, sans-serif" font-size="56" font-weight="700" letter-spacing="-1">'
         f'{MARK["nameStart"]}<tspan fill="{MARK["accent"]}">{MARK["nameEnd"]}</tspan></text>'
         f'<text x="147" y="110" fill="{MARK["muted"]}" font-family="Sora, Segoe UI, sans-serif" font-size="19">{MARK["tagline"]}</text>')
-write(HERE / 'cedplay-logo.svg', f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 140"><rect width="520" height="140" rx="20" fill="{BG}"/><g transform="translate(16 16)">{tile}{svg_parts()}</g>{name}</svg>')
+write(HERE / 'cedplay-logo.svg', f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 140"><rect width="520" height="140" rx="20" fill="{BG}"/><g transform="translate(16 16)">{tile}{big}</g>{name}</svg>')
 name_light = name.replace(f'fill="{MARK["line"]}"', 'fill="#111113"').replace(f'fill="{MARK["accent"]}"', f'fill="{MARK["accentOnLight"]}"').replace(f'fill="{MARK["muted"]}"', 'fill="#55555C"')
-write(HERE / 'cedplay-logo-clair.svg', f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 140"><rect width="520" height="140" rx="20" fill="#F5F5F2"/><g transform="translate(16 16)">{tile}{svg_parts()}</g>{name_light}</svg>')
+write(HERE / 'cedplay-logo-clair.svg', f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 140"><rect width="520" height="140" rx="20" fill="#F5F5F2"/><g transform="translate(16 16)">{tile}{big}</g>{name_light}</svg>')
 
 def vector(size, transform='', monochrome=False):
     rendered = ''
@@ -62,7 +66,8 @@ def vector(size, transform='', monochrome=False):
         rendered += f'<path {attrs}/>'
     return f'<?xml version="1.0" encoding="utf-8"?><vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="{size}dp" android:height="{size}dp" android:viewportWidth="108" android:viewportHeight="108"><group {transform}>{rendered}</group></vector>'
 
-foreground = 'android:scaleX="0.72" android:scaleY="0.72" android:translateX="15.12" android:translateY="15.12"'
+# Premier plan adaptatif : x0,8, la plus grande taille qui tient encore dans le masque rond.
+foreground = f'android:scaleX="0.8" android:scaleY="0.8" android:translateX="{54 - 54 * 0.8:.2f}" android:translateY="{54 - CY * 0.8:.2f}"'
 write(RES / 'drawable/cedplay_foreground.xml', vector(108, foreground))
 write(RES / 'drawable/cedplay_splash_icon.xml', vector(288, 'android:scaleX="0.6" android:scaleY="0.6" android:translateX="21.6" android:translateY="21.6"'))
 write(RES / 'drawable/ic_stat_cedplay.xml', vector(24, 'android:scaleX="0.86" android:scaleY="0.86" android:translateX="7.56" android:translateY="7.56"', True))
@@ -90,14 +95,6 @@ if start >= 0:
     start += len('<meta name="theme-color" content="')
     end = text.find('"', start)
     index.write_text(text[:start] + BG + text[end:], encoding='utf-8')
-
-# Les noms visibles changent ; les identifiants, sauvegardes et contrats réseau restent compatibles.
-for filename in ['NativePlayerActivity.java', 'NativePlayerPlugin.java']:
-    path = APP / 'android/app/src/main/java/com/lecteur/iptv' / filename
-    text = path.read_text(encoding='utf-8').replace('"Lecteur IPTV"', 'getString(R.string.app_name)' if filename.endswith('Activity.java') else 'getContext().getString(R.string.app_name)')
-    # Le tag de session n'est pas un identifiant persistant.
-    text = text.replace('new MediaSession(this, "LecteurIPTV")', 'new MediaSession(this, "CedPlay")')
-    write(path, text.rstrip())
 
 for filename in ['Lancer le lecteur.cmd', "Construire l'APK.cmd"]:
     path = ROOT / filename

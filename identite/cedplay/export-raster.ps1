@@ -1,4 +1,4 @@
-# Rasterisation du dessin vectoriel natif (mark.json) vers le web et Android.
+﻿# Rasterisation du dessin vectoriel natif (mark.json) vers le web et Android.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $brand = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'mark.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -35,7 +35,9 @@ function Draw-Mark($g, [single]$x, [single]$y, [single]$size, [single]$inset = 1
     $state = $g.Save()
     $g.TranslateTransform($x,$y)
     $g.ScaleTransform(($size/108),($size/108))
-    $g.TranslateTransform((108*(1-$inset)/2),(108*(1-$inset)/2))
+    # Agrandi ou réduit : le centre réel du dessin (le pied le décale vers le bas) revient au centre.
+    $ty = if ($inset -eq 1) { 0 } else { 54 - [single]$brand.contentCenterY*$inset }
+    $g.TranslateTransform((108*(1-$inset)/2),$ty)
     $g.ScaleTransform($inset,$inset)
     foreach ($part in $brand.parts) {
         $p = New-MarkPath $part.d
@@ -72,13 +74,35 @@ function Export-Png([string]$target, [int]$width, [int]$height, [string]$kind = 
     $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
     $g.Clear([System.Drawing.Color]::Transparent)
-    if ($kind -eq 'foreground') { Draw-Mark $g 0 0 $width 0.72 }
+    if ($kind -eq 'foreground') { Draw-Mark $g 0 0 $width 0.8 }
     elseif ($kind -eq 'splash') {
         $g.Clear((Get-Color 'background'))
         $size = [single]([Math]::Min($width,$height)*0.32)
         Draw-Mark $g (($width-$size)/2) (($height-$size)/2) $size
     }
-    elseif ($kind -in @('banner','social')) {
+    elseif ($kind -eq 'banner') {
+        # Bannière TV : dessin plein hauteur, « Ced » / « Play » sur deux lignes qui remplissent le cadre.
+        $g.Clear((Get-Color 'background'))
+        $k = [single]($width/320)
+        $drawn = [single](136*$k)          # le dessin sans marges internes (80 unités sur 108)
+        Draw-Mark $g ([single]((10-14*136/80)*$k)) ([single]((22-16*136/80)*$k)) ([single]($drawn*108/80))
+        $format = [System.Drawing.StringFormat]::GenericTypographic
+        $family = [System.Drawing.FontFamily]::new('Segoe UI Black')
+        $style = [System.Drawing.FontStyle]::Regular
+        $size = [single](64*$k)
+        $probe = [System.Drawing.Font]::new($family,$size,$style,[System.Drawing.GraphicsUnit]::Pixel)
+        $wide = [Math]::Max($g.MeasureString($brand.nameStart,$probe,[System.Drawing.PointF]::new(0,0),$format).Width, $g.MeasureString($brand.nameEnd,$probe,[System.Drawing.PointF]::new(0,0),$format).Width)
+        $probe.Dispose()
+        $room = [single](152*$k)
+        if ($wide -gt $room) { $size = [single]($size*$room/$wide) }
+        $font = [System.Drawing.Font]::new($family,$size,$style,[System.Drawing.GraphicsUnit]::Pixel)
+        $ascent = [single]($size*$family.GetCellAscent($style)/$family.GetEmHeight($style))
+        $line = [System.Drawing.SolidBrush]::new((Get-Color 'line')); $accent = [System.Drawing.SolidBrush]::new((Get-Color 'accent'))
+        $g.DrawString($brand.nameStart,$font,$line,[single](158*$k),[single](84*$k-$ascent),$format)
+        $g.DrawString($brand.nameEnd,$font,$accent,[single](158*$k),[single](148*$k-$ascent),$format)
+        $font.Dispose(); $family.Dispose(); $line.Dispose(); $accent.Dispose()
+    }
+    elseif ($kind -eq 'social') {
         $g.Clear((Get-Color 'background'))
         $size = [single]($height*0.64)
         Draw-Mark $g ($width*0.07) (($height-$size)/2) $size
@@ -94,7 +118,8 @@ function Export-Png([string]$target, [int]$width, [int]$height, [string]$kind = 
         }
         $brush = [System.Drawing.SolidBrush]::new((Get-Color 'background'))
         $g.FillPath($brush,$outline)
-        if ($kind -eq 'round') { Draw-Mark $g 0 0 $width 0.84 } else { Draw-Mark $g 0 0 $width }
+        # Dessin agrandi sur la tuile (82 % du carré) ; un peu moins dans le rond pour ne pas couper les coins.
+        if ($kind -eq 'round') { Draw-Mark $g 0 0 $width 1.1 } else { Draw-Mark $g 0 0 $width 1.22 }
         $brush.Dispose(); $outline.Dispose()
     }
     $g.Dispose()
@@ -106,6 +131,9 @@ Export-Png (Join-Path $PSScriptRoot 'cedplay-icon-1024.png') 1024 1024
 Export-Png (Join-Path $public 'apple-touch-icon.png') 180 180
 Export-Png (Join-Path $public 'cedplay-social.png') 1200 630 'social'
 Export-Png (Join-Path $res 'drawable/tv_banner.png') 320 180 'banner'
+# Les TV sont en xhdpi : sans cette version, Android agrandit la bannière 320 x 180 et la rend floue.
+New-Item -ItemType Directory -Force (Join-Path $res 'drawable-xhdpi') | Out-Null
+Export-Png (Join-Path $res 'drawable-xhdpi/tv_banner.png') 640 360 'banner'
 foreach ($density in @(@('mdpi',48,108),@('hdpi',72,162),@('xhdpi',96,216),@('xxhdpi',144,324),@('xxxhdpi',192,432))) {
     $dir = Join-Path $res "mipmap-$($density[0])"
     Export-Png (Join-Path $dir 'ic_launcher.png') $density[1] $density[1]
