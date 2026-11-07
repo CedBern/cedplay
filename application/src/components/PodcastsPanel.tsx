@@ -1,9 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Check, ChevronDown, Headphones, Loader2, Pause, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Headphones, Link2, Loader2, Pause, Play, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { AudioPlaybackState, PodcastEpisode, PodcastFeed, PodcastProgress } from '@/types/podcast';
+import type { AudioPlaybackState, PodcastEpisode, PodcastFeed, PodcastProgress, PodcastSearchResult } from '@/types/podcast';
 import { fetchPodcastFeed } from '@/utils/podcastFetcher';
 import {
   onPodcastStorageChange,
@@ -15,6 +15,7 @@ import {
 } from '@/utils/podcastStorage';
 import { AudioBridge } from '@/utils/nativePlayer';
 import { formatEpisodeDate, formatEpisodeLength } from '@/utils/podcastFormat';
+import { DEFAULT_PODCAST_SUGGESTIONS, resolvePodcastLink, searchPodcasts } from '@/utils/podcastSearch';
 
 function Artwork({ src, className }: { src?: string | undefined; className: string }) {
   const [failed, setFailed] = useState(false);
@@ -26,6 +27,11 @@ function Artwork({ src, className }: { src?: string | undefined; className: stri
       <Headphones className="h-1/3 w-1/3" aria-hidden="true" />
     </span>
   );
+}
+
+/** Même flux malgré http/https, majuscules ou barre finale. */
+function feedKey(url: string): string {
+  return url.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
 }
 
 const RING_RADIUS = 18;
@@ -76,23 +82,32 @@ export interface PodcastsPanelProps {
  * ligne lance, reprend ou met en pause. Le résumé reste à portée : chevron sur téléphone,
  * affiché sous le titre de la ligne sélectionnée sur TV. Les commandes fines (±15/30 s,
  * vitesse) vivent dans le mini-lecteur, visible sur tous les écrans.
+ *
+ * Ajouter = chercher un nom → reconnaître la pochette → s'abonner. Sans saisie, des
+ * suggestions (utile à la télécommande). Lien Apple / Spotify / site ou RSS en recours.
  */
 export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
   const [feeds, setFeeds] = useState<PodcastFeed[]>(() => readPodcastFeeds());
   const [selectedFeedUrl, setSelectedFeedUrl] = useState<string | null>(() => readPodcastFeeds()[0]?.url ?? null);
   const [progressMap, setProgressMap] = useState<Record<string, PodcastProgress>>(() => readAllEpisodeProgress());
   const [audioState, setAudioState] = useState<AudioPlaybackState>(() => AudioBridge.getState());
-  const [rssInput, setRssInput] = useState('');
-  const [adding, setAdding] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<PodcastSearchResult[]>(DEFAULT_PODCAST_SUGGESTIONS);
+  const [searching, setSearching] = useState(false);
+  const [subscribingUrl, setSubscribingUrl] = useState<string | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkInput, setLinkInput] = useState('');
+  const [resolvingLink, setResolvingLink] = useState(false);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
   const [refreshingUrl, setRefreshingUrl] = useState<string | null>(null);
   const [confirmDeleteUrl, setConfirmDeleteUrl] = useState<string | null>(null);
   const [openDetailsId, setOpenDetailsId] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const linkInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  // Après une suppression, le focus va à l'émission suivante (ou au champ si plus rien) :
-  // le bouton pressé disparaît, la télécommande ne doit pas se retrouver dans le vide.
+  // Quand le bouton pressé disparaît (suppression, abonnement), le focus va à une cible
+  // connue : la télécommande ne doit pas se retrouver dans le vide.
   const pendingFocusRef = useRef<{ feedUrl: string } | 'input' | null>(null);
   const listId = useId();
 
@@ -130,6 +145,32 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     };
   }, []);
 
+  // Recherche au fil de la frappe (350 ms), la requête précédente est abandonnée.
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setSearching(false);
+      setSearchResults(DEFAULT_PODCAST_SUGGESTIONS);
+      return;
+    }
+    setSearching(true);
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const results = await searchPodcasts(trimmed, { signal: controller.signal, limit: 16 });
+        if (!controller.signal.aborted) setSearchResults(results.filter(r => r.feedUrl));
+      } catch {
+        if (!controller.signal.aborted) setSearchResults([]);
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchQuery]);
+
   const selectedFeed = useMemo(
     () => feeds.find(f => f.url === selectedFeedUrl) ?? feeds[0] ?? null,
     [feeds, selectedFeedUrl]
@@ -141,10 +182,15 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     [selectedFeed]
   );
 
+  const subscribedKeys = useMemo(() => new Set(feeds.map(f => feedKey(f.url))), [feeds]);
+
   const showForm = feeds.length === 0 || formOpen;
   useEffect(() => {
     if (formOpen) inputRef.current?.focus();
   }, [formOpen]);
+  useEffect(() => {
+    if (linkOpen) linkInputRef.current?.focus();
+  }, [linkOpen]);
 
   // La demande de confirmation retombe seule, et dès qu'on change d'émission.
   useEffect(() => {
@@ -167,25 +213,59 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     }
     const buttons = panelRef.current?.querySelectorAll<HTMLElement>('[data-feed-url]') ?? [];
     Array.from(buttons).find(el => el.dataset.feedUrl === target.feedUrl)?.focus();
-  }, [feeds]);
+  }, [feeds, formOpen]);
 
-  const handleAddFeed = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = rssInput.trim();
-    if (!trimmed) return;
-    setAdding(true);
-    setErrorMsg(null);
+  const closeForm = () => {
+    setFormOpen(false);
+    setSearchQuery('');
+    setLinkOpen(false);
+    setLinkInput('');
+    setAddMsg(null);
+  };
+
+  const subscribe = async (feedUrl: string) => {
+    if (subscribingUrl) return;
+    setSubscribingUrl(feedUrl);
+    setAddMsg(null);
     try {
-      const { feed, episodes: parsedEpisodes } = await fetchPodcastFeed(trimmed);
+      const { feed, episodes: parsedEpisodes } = await fetchPodcastFeed(feedUrl);
+      pendingFocusRef.current = { feedUrl: feed.url };
       saveSubscribedPodcast(feed, parsedEpisodes);
       setSelectedFeedUrl(feed.url);
-      setRssInput('');
-      setFormOpen(false);
+      closeForm();
       toast.success(`${feed.title} ajouté`);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Impossible d’ajouter ce flux RSS.');
+      setAddMsg(err instanceof Error ? err.message : 'Impossible de charger ce podcast.');
     } finally {
-      setAdding(false);
+      setSubscribingUrl(null);
+    }
+  };
+
+  const openSubscribed = (feedUrl: string) => {
+    const feed = feeds.find(f => feedKey(f.url) === feedKey(feedUrl));
+    if (!feed) return;
+    pendingFocusRef.current = { feedUrl: feed.url };
+    setSelectedFeedUrl(feed.url);
+    closeForm();
+  };
+
+  const handleLinkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = linkInput.trim();
+    if (!trimmed) return;
+    setResolvingLink(true);
+    setAddMsg(null);
+    try {
+      const result = await resolvePodcastLink(trimmed);
+      if (result.resolved && result.feedUrl) {
+        await subscribe(result.feedUrl);
+      } else {
+        setAddMsg(result.warning || result.error || 'Aucun podcast trouvé à cette adresse.');
+      }
+    } catch {
+      setAddMsg('Impossible d’analyser ce lien.');
+    } finally {
+      setResolvingLink(false);
     }
   };
 
@@ -230,38 +310,130 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
   const tvFocus = tvMode
     ? 'focus-visible:bg-foreground focus-visible:text-background [&:focus-visible_.meta]:text-background/70'
     : '';
+  const plainFocus = tvMode ? tvFocus : 'focus-visible:ring-2 focus-visible:ring-primary';
 
-  const addForm = showForm && (
-    <form onSubmit={e => void handleAddFeed(e)} className="space-y-2">
-      <div className="flex items-center gap-2">
+  const trimmedQuery = searchQuery.trim();
+  const addPanel = showForm && (
+    <div className="space-y-3 text-left">
+      <form role="search" onSubmit={e => e.preventDefault()} className="relative">
+        <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <Input
           ref={inputRef}
-          type="url"
-          value={rssInput}
-          onChange={e => setRssInput(e.target.value)}
-          placeholder="Adresse RSS du podcast"
-          aria-label="Adresse RSS du podcast"
-          className="min-h-11 flex-1 rounded-full border-transparent bg-secondary px-4"
+          type="search"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          placeholder="Nom d’un podcast"
+          aria-label="Rechercher un podcast"
+          enterKeyHint="search"
+          className="min-h-11 rounded-full border-transparent bg-secondary pl-10 pr-10 [&::-webkit-search-cancel-button]:hidden"
         />
-        <Button type="submit" disabled={adding || !rssInput.trim()} aria-label="Ajouter le podcast" className="min-h-11 rounded-full px-4">
-          {adding ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : 'Ajouter'}
-        </Button>
+        {searching ? (
+          <Loader2 className="absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" aria-label="Recherche en cours" />
+        ) : searchQuery && (
+          <button
+            type="button"
+            onClick={() => { setSearchQuery(''); inputRef.current?.focus(); }}
+            aria-label="Effacer la recherche"
+            className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        )}
+      </form>
+
+      <h3 className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {trimmedQuery ? 'Résultats' : 'Suggestions'}
+      </h3>
+      {trimmedQuery && !searching && searchResults.length === 0 ? (
+        <p className="px-1 text-sm text-muted-foreground">Aucun podcast trouvé.</p>
+      ) : (
+        <ul
+          data-testid="podcast-search-results"
+          aria-label={trimmedQuery ? 'Résultats de recherche' : 'Suggestions de podcasts'}
+          className={`grid gap-x-3 gap-y-4 ${tvMode ? 'grid-cols-4 xl:grid-cols-5' : 'grid-cols-3 sm:grid-cols-4'}`}
+        >
+          {searchResults.map(result => {
+            const subscribed = subscribedKeys.has(feedKey(result.feedUrl));
+            const pending = subscribingUrl === result.feedUrl;
+            return (
+              <li key={result.id || result.feedUrl}>
+                <button
+                  type="button"
+                  onClick={() => (subscribed ? openSubscribed(result.feedUrl) : void subscribe(result.feedUrl))}
+                  aria-label={subscribed ? `${result.title}, déjà suivi` : `S'abonner à ${result.title}`}
+                  aria-busy={pending || undefined}
+                  className={`group w-full space-y-1.5 rounded-2xl p-1 text-left transition-colors focus-visible:outline-none ${plainFocus}`}
+                >
+                  <span className="relative block">
+                    <Artwork src={result.artworkUrl} className="block aspect-square w-full rounded-xl" />
+                    <span
+                      aria-hidden="true"
+                      className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-lg ${
+                        subscribed ? 'bg-foreground text-background' : 'bg-primary text-primary-foreground'
+                      }`}
+                    >
+                      {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : subscribed ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                    </span>
+                  </span>
+                  <span className="block px-0.5">
+                    <span className="line-clamp-2 text-[13px] font-medium leading-snug">{result.title}</span>
+                    {result.author && <span className="meta block truncate text-[11px] text-muted-foreground">{result.author}</span>}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <div className="space-y-2 pt-1">
+        <button
+          type="button"
+          onClick={() => { setLinkOpen(open => !open); setAddMsg(null); }}
+          aria-expanded={linkOpen}
+          className={`flex items-center gap-2 rounded-full px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none ${plainFocus}`}
+        >
+          <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+          Introuvable ? Coller un lien
+        </button>
+        {linkOpen && (
+          <form onSubmit={e => void handleLinkSubmit(e)} className="flex items-center gap-2">
+            <Input
+              ref={linkInputRef}
+              type="text"
+              inputMode="url"
+              value={linkInput}
+              onChange={e => setLinkInput(e.target.value)}
+              placeholder="Lien Apple, Spotify, site ou RSS"
+              aria-label="Lien ou adresse RSS du podcast"
+              className="min-h-11 flex-1 rounded-full border-transparent bg-secondary px-4"
+            />
+            <Button type="submit" disabled={resolvingLink || !linkInput.trim()} aria-label="Ajouter depuis ce lien" className="min-h-11 rounded-full px-4">
+              {resolvingLink ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : 'Ajouter'}
+            </Button>
+          </form>
+        )}
       </div>
-      {errorMsg && <p role="alert" className="px-1 text-xs text-red-400">{errorMsg}</p>}
-    </form>
+      {addMsg && <p role="alert" className="px-1 text-xs text-red-400">{addMsg}</p>}
+    </div>
   );
 
   if (feeds.length === 0) {
     return (
-      <div ref={panelRef} className="mx-auto max-w-md space-y-5 py-10 text-center" data-podcasts-panel data-tv-mode={tvMode ? 'true' : 'false'}>
-        <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-secondary text-primary">
-          <Headphones className="h-7 w-7" aria-hidden="true" />
-        </span>
-        <div className="space-y-1">
+      <div
+        ref={panelRef}
+        className={`mx-auto space-y-5 py-8 ${tvMode ? 'max-w-4xl' : 'max-w-xl'} ${audioState.active ? 'pb-24' : ''}`}
+        data-podcasts-panel
+        data-tv-mode={tvMode ? 'true' : 'false'}
+      >
+        <div className="space-y-1 text-center">
+          <span className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-secondary text-primary">
+            <Headphones className="h-6 w-6" aria-hidden="true" />
+          </span>
           <h2 className="text-lg font-semibold">Aucun podcast</h2>
-          <p className="text-sm text-muted-foreground">Colle l’adresse RSS d’une émission.</p>
+          <p className="text-sm text-muted-foreground">Cherche une émission par son nom.</p>
         </div>
-        {addForm}
+        {addPanel}
       </div>
     );
   }
@@ -336,7 +508,7 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
                 onClick={() => void handleEpisodePlayToggle(episode)}
                 aria-label={`${action} ${episode.title}`}
                 aria-current={isCurrent ? 'true' : undefined}
-                className={`group flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-3 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline-none ${tvMode ? tvFocus : 'focus-visible:ring-2 focus-visible:ring-primary'}`}
+                className={`group flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-3 text-left transition-colors hover:bg-white/[0.03] focus-visible:outline-none ${plainFocus}`}
               >
                 <span className="min-w-0 flex-1">
                   <span className={`line-clamp-2 text-[15px] font-medium leading-snug ${completed ? 'opacity-60' : isCurrent ? 'text-primary' : ''}`}>
@@ -391,7 +563,7 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
       type="button"
       variant="ghost"
       size="sm"
-      onClick={() => { setFormOpen(open => !open); setErrorMsg(null); }}
+      onClick={() => (formOpen ? closeForm() : setFormOpen(true))}
       aria-expanded={formOpen}
       aria-label={formOpen ? 'Fermer l’ajout de podcast' : 'Ajouter un podcast'}
       className={`h-9 gap-1.5 rounded-full px-3 text-sm text-muted-foreground hover:text-foreground ${tvFocus}`}
@@ -409,21 +581,21 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
   );
 
   if (tvMode) {
+    // TV : la recherche prend la colonne de droite, assez large pour une grille de pochettes.
     return (
       <div ref={panelRef} className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-8 pb-24" data-podcasts-panel data-tv-mode="true">
         <section aria-label="Mes émissions" className="space-y-3">
           {sectionTitle}
-          {addForm}
           <div className="space-y-1">
             {feeds.map(feed => {
-              const active = selectedFeed?.url === feed.url;
+              const active = !formOpen && selectedFeed?.url === feed.url;
               return (
                 <button
                   key={feed.url}
                   type="button"
                   data-feed-url={feed.url}
                   aria-pressed={active}
-                  onClick={() => setSelectedFeedUrl(feed.url)}
+                  onClick={() => { setSelectedFeedUrl(feed.url); if (formOpen) closeForm(); }}
                   className={`flex w-full items-center gap-3 rounded-xl p-2 text-left transition-colors focus-visible:outline-none ${tvFocus} ${
                     active ? 'bg-white/[0.06] shadow-[inset_3px_0_0_hsl(var(--primary))]' : 'hover:bg-white/[0.03]'
                   }`}
@@ -435,10 +607,14 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
             })}
           </div>
         </section>
-        <section aria-label="Épisodes de l’émission" className="space-y-2">
-          {feedHeader}
-          {episodeList}
-        </section>
+        {formOpen ? (
+          <section aria-label="Ajouter un podcast">{addPanel}</section>
+        ) : (
+          <section aria-label="Épisodes de l’émission" className="space-y-2">
+            {feedHeader}
+            {episodeList}
+          </section>
+        )}
       </div>
     );
   }
@@ -447,35 +623,39 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
     <div ref={panelRef} className={`space-y-5 ${audioState.active ? 'pb-20' : ''}`} data-podcasts-panel data-tv-mode="false">
       <section aria-label="Mes émissions" className="space-y-3">
         {sectionTitle}
-        {addForm}
-        <div className="-mx-2 flex snap-x gap-3 overflow-x-auto px-2 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {feeds.map(feed => {
-            const active = selectedFeed?.url === feed.url;
-            return (
-              <button
-                key={feed.url}
-                type="button"
-                data-feed-url={feed.url}
-                aria-pressed={active}
-                onClick={() => setSelectedFeedUrl(feed.url)}
-                className="press w-[84px] shrink-0 snap-start space-y-1.5 pt-1 text-left focus-visible:outline-none"
-              >
-                <Artwork
-                  src={feed.artworkUrl}
-                  className={`block h-[84px] w-[84px] rounded-2xl transition-[box-shadow,opacity] ${
-                    active ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : 'opacity-60'
-                  }`}
-                />
-                <span className={`block truncate text-xs ${active ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{feed.title}</span>
-              </button>
-            );
-          })}
-        </div>
+        {addPanel}
+        {!formOpen && (
+          <div className="-mx-2 flex snap-x gap-3 overflow-x-auto px-2 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {feeds.map(feed => {
+              const active = selectedFeed?.url === feed.url;
+              return (
+                <button
+                  key={feed.url}
+                  type="button"
+                  data-feed-url={feed.url}
+                  aria-pressed={active}
+                  onClick={() => setSelectedFeedUrl(feed.url)}
+                  className="press w-[84px] shrink-0 snap-start space-y-1.5 pt-1 text-left focus-visible:outline-none"
+                >
+                  <Artwork
+                    src={feed.artworkUrl}
+                    className={`block h-[84px] w-[84px] rounded-2xl transition-[box-shadow,opacity] ${
+                      active ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : 'opacity-60'
+                    }`}
+                  />
+                  <span className={`block truncate text-xs ${active ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>{feed.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </section>
-      <section aria-label="Épisodes de l’émission" className="space-y-1">
-        {feedHeader}
-        {episodeList}
-      </section>
+      {!formOpen && (
+        <section aria-label="Épisodes de l’émission" className="space-y-1">
+          {feedHeader}
+          {episodeList}
+        </section>
+      )}
     </div>
   );
 }

@@ -1,3 +1,24 @@
+export interface PodcastSearchResult {
+  id: string;
+  title: string;
+  author: string;
+  feedUrl: string;
+  artworkUrl: string;
+  description?: string | undefined;
+  genre?: string | undefined;
+  episodeCount?: number | undefined;
+  source: 'apple' | 'gpodder' | 'direct' | 'suggestion';
+}
+
+export interface LinkResolutionResult {
+  kind: 'feed' | 'apple' | 'spotify' | 'web';
+  resolved: boolean;
+  feedUrl?: string | undefined;
+  podcast?: PodcastSearchResult | undefined;
+  warning?: string | undefined;
+  error?: string | undefined;
+}
+
 export interface PodcastFeed {
   url: string;
   title: string;
