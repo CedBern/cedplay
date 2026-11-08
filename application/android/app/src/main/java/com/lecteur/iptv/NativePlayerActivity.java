@@ -19,6 +19,11 @@ import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkInfo;
+import android.net.NetworkRequest;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -344,6 +349,33 @@ public class NativePlayerActivity extends AppCompatActivity {
             if (player != null && streamUrl != null && !isFinishing()) prepareMedia(streamUrl);
         }
     };
+    private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
+    private String reconnectFailureMessage = "Le flux s'est arrêté.";
+    private long reconnectStartedAtMs;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback connectivityCallback;
+    private boolean networkConnected = true;
+    private final LiveReconnectController liveReconnect = new LiveReconnectController(
+        SystemClock::elapsedRealtime,
+        new LiveReconnectController.Scheduler() {
+            @Override public void postDelayed(Runnable task, long delayMs) { reconnectHandler.postDelayed(task, delayMs); }
+            @Override public void removeCallbacks(Runnable task) { reconnectHandler.removeCallbacks(task); }
+        },
+        new LiveReconnectController.Listener() {
+            @Override public void onRetry(int attempt) {
+                if (!canRecoverLive()) { cancelLiveReconnect("inactive"); return; }
+                android.util.Log.i("IPTV-Playback", "live_reconnect_attempt attempt=" + attempt
+                    + " elapsed_ms=" + (SystemClock.elapsedRealtime() - reconnectStartedAtMs));
+                pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false;
+                if (player != null) prepareMedia(streamUrl); else initPlayer(streamUrl);
+            }
+            @Override public void onExhausted() {
+                android.util.Log.i("IPTV-Playback", "live_reconnect_exhausted elapsed_ms="
+                    + (SystemClock.elapsedRealtime() - reconnectStartedAtMs));
+                releasePlayer();
+                if ((resumed || isInPipMode()) && !isFinishing() && !casting) showError(reconnectFailureMessage);
+            }
+        });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -1076,6 +1108,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         cancelPendingZap();
         if (channelUrls == null || channelTitles == null || channelIndex < 0) return;
         if (next < 0 || next >= channelUrls.size() || next == channelIndex) return;
+        cancelLiveReconnect("zap");
         if (recording) stopRecording();
         // Sauver la progression sous l'ancienne identité avant toute modification de mediaId.
         // Le faire après mediaId écraserait la position de l'épisode suivant.
@@ -2005,11 +2038,8 @@ public class NativePlayerActivity extends AppCompatActivity {
                     }
                     // Un direct ne finit pas : le serveur a coupé (souvent après une longue pause).
                     if (!vod && !casting && playerView != null) {
-                        playerView.post(() -> {
-                            if (isBehindLive()) { reconnectLive(true); return; }
-                            if (autoRetriesLeft > 0) { autoRetriesLeft--; reconnectLive(false); }
-                            else showError("Le flux s'est arrêté.");
-                        });
+                        if (pausedAtMs > 0) liveLostWhilePaused = true;
+                        else if (canRecoverLive()) queueLiveReconnect("Le flux s'est arrêté.");
                     }
                 }
                 updateMediaSessionState();
@@ -2017,8 +2047,26 @@ public class NativePlayerActivity extends AppCompatActivity {
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying && !vod && liveReconnect.isRecovering()) {
+                    android.util.Log.i("IPTV-Playback", "live_reconnect_success elapsed_ms="
+                        + (SystemClock.elapsedRealtime() - reconnectStartedAtMs));
+                    liveReconnect.onPlaying();
+                }
                 updateMediaSessionState();
                 refreshControls();
+            }
+
+            @Override public void onPlayWhenReadyChanged(boolean ready, int reason) {
+                if (vod || player == null || ready != player.getPlayWhenReady()) return;
+                playWhenReady = ready;
+                if (!ready) {
+                    if (pausedAtMs == 0) pausedAtMs = SystemClock.elapsedRealtime();
+                    if (liveReconnect.isRecovering()) liveLostWhilePaused = true;
+                    cancelLiveReconnect("paused");
+                } else if (pausedAtMs > 0) {
+                    liveDelayMs += SystemClock.elapsedRealtime() - pausedAtMs;
+                    pausedAtMs = 0;
+                }
             }
 
             @Override
@@ -2035,11 +2083,15 @@ public class NativePlayerActivity extends AppCompatActivity {
                 loadingBar.setVisibility(View.GONE);
                 // Direct en pause ou en retard : le flux n'a pas gardé la pause. Reprise au direct,
                 // tout de suite si l'on regardait, au prochain « Lecture » si l'image est arrêtée.
-                if (!vod && pausedAtMs > 0) { liveLostWhilePaused = true; refreshControls(); return; }
-                if (!vod && liveDelayMs >= LIVE_DELAY_SHOWN_MS) { playerView.post(() -> reconnectLive(true)); return; }
+                if (!vod && pausedAtMs > 0) { cancelLiveReconnect("paused"); liveLostWhilePaused = true; refreshControls(); return; }
                 String cause = describeError(error);
+                if (!vod && isTransientError(error) && canRecoverLive()) {
+                    queueLiveReconnect(cause);
+                    return;
+                }
+                if (!vod) cancelLiveReconnect("permanent_error");
                 // Coupure réseau ou serveur surchargé : quelques reprises espacées avant d'abandonner.
-                if (autoRetriesLeft > 0 && isTransientError(error)) {
+                if (vod && autoRetriesLeft > 0 && isTransientError(error)) {
                     autoRetriesLeft--;
                     Toast.makeText(NativePlayerActivity.this,
                         "Nouvelle tentative (" + (AUTO_RETRY_MAX - autoRetriesLeft) + "/" + AUTO_RETRY_MAX + ")…", Toast.LENGTH_SHORT).show();
@@ -2107,6 +2159,10 @@ public class NativePlayerActivity extends AppCompatActivity {
         Stalker.resolveAsync(this, url, resolved -> {
             if (request != mediaRequest || player == null || isFinishing()) return;
             if (resolved == null) {
+                if (liveReconnect.isRecovering() && canRecoverLive()) {
+                    queueLiveReconnect("Le portail n’a pas donné de lien de lecture pour cette chaîne.");
+                    return;
+                }
                 loadingBar.setVisibility(View.GONE);
                 showError("Le portail n’a pas donné de lien de lecture pour cette chaîne.");
                 return;
@@ -2169,15 +2225,13 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     /** Coupures passagères qui valent une reprise automatique : réseau, dépassement de temps, serveur 5xx. */
     private boolean isTransientError(PlaybackException error) {
+        int status = httpStatusOf(error);
+        if (status != 0) return LiveReconnectController.isRetryableHttpStatus(status);
         int code = error.errorCode;
         if (code == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
             || code == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
             || code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW
             || code == PlaybackException.ERROR_CODE_TIMEOUT) return true;
-        if (code == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS) {
-            int status = httpStatusOf(error);
-            return status >= 500 && status < 600;
-        }
         return false;
     }
 
@@ -2241,11 +2295,87 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (hasFocus) hideSystemUI();
     }
 
+    private boolean canRecoverLive() {
+        return !vod && !casting && streamUrl != null && playWhenReady && pausedAtMs == 0
+            && player != null && player.getPlayWhenReady()
+            && (resumed || isInPipMode()) && !isFinishing() && !isDestroyed();
+    }
+
+    private void queueLiveReconnect(String cause) {
+        if (!canRecoverLive()) { cancelLiveReconnect("inactive"); return; }
+        boolean firstFailure = !liveReconnect.isRecovering();
+        if (firstFailure) reconnectStartedAtMs = SystemClock.elapsedRealtime();
+        reconnectFailureMessage = cause;
+        if (!liveReconnect.onFailure()) return;
+        loadingBar.setVisibility(View.VISIBLE);
+        android.util.Log.i("IPTV-Playback", "live_reconnect_wait elapsed_ms="
+            + (SystemClock.elapsedRealtime() - reconnectStartedAtMs) + " window_ms=180000");
+        if (firstFailure) Toast.makeText(this, "Connexion interrompue · reprise automatique…", Toast.LENGTH_SHORT).show();
+    }
+
+    private void cancelLiveReconnect(String reason) {
+        if (liveReconnect.isRecovering()) android.util.Log.i("IPTV-Playback", "live_reconnect_cancel reason=" + reason);
+        liveReconnect.cancel();
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean activeNetworkConnected() {
+        if (connectivityManager == null) return true;
+        NetworkInfo info = connectivityManager.getActiveNetworkInfo();
+        return info != null && info.isConnected();
+    }
+
+    private void postConnectivityChanged(ConnectivityManager.NetworkCallback source) {
+        reconnectHandler.post(() -> {
+            if (connectivityCallback != source) return;
+            boolean connected = activeNetworkConnected();
+            if (connected == networkConnected) return;
+            networkConnected = connected;
+            android.util.Log.i("IPTV-Playback", "live_reconnect_network connected=" + connected);
+            liveReconnect.onNetworkChanged(connected);
+        });
+    }
+
+    private void startConnectivityMonitoring() {
+        if (vod || connectivityCallback != null) return;
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        try {
+            networkConnected = activeNetworkConnected();
+            liveReconnect.onNetworkChanged(networkConnected);
+            connectivityCallback = new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(Network network) { postConnectivityChanged(this); }
+                @Override public void onLost(Network network) { postConnectivityChanged(this); }
+                @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) { postConnectivityChanged(this); }
+            };
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                connectivityManager.registerDefaultNetworkCallback(connectivityCallback);
+            } else {
+                // API 22/23 : observer les interfaces, puis relire la connexion active pour ignorer
+                // l'arrivée d'une interface secondaire lorsque le direct est déjà connecté.
+                connectivityManager.registerNetworkCallback(new NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), connectivityCallback);
+            }
+        } catch (RuntimeException unavailable) {
+            connectivityCallback = null;
+            android.util.Log.w("IPTV-Playback", "live_reconnect_network_monitor unavailable=" + unavailable.getClass().getSimpleName());
+        }
+    }
+
+    private void stopConnectivityMonitoring() {
+        ConnectivityManager.NetworkCallback callback = connectivityCallback;
+        connectivityCallback = null;
+        if (callback != null && connectivityManager != null) {
+            try { connectivityManager.unregisterNetworkCallback(callback); } catch (RuntimeException ignored) {}
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         resumed = true;
         hideSystemUI();
+        startConnectivityMonitoring();
         if (casting) return; // la lecture continue sur le Chromecast
         if (streamUrl != null && playerView != null && player == null) initPlayer(streamUrl);
     }
@@ -2262,6 +2392,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         resumed = false;
         // En petite fenêtre, l'activity est en pause mais la vidéo doit continuer.
         if (isInPipMode()) return;
+        stopConnectivityMonitoring();
+        cancelLiveReconnect("background");
         cancelNextEpisode();
         // Pendant un cast, le lecteur local est déjà arrêté et le téléviseur prend le relais.
         if (casting) return;
@@ -2272,6 +2404,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        stopConnectivityMonitoring();
         // Fenêtre PiP fermée par l'utilisateur : on quitte le lecteur.
         if (pipActive) { pipActive = false; releasePlayer(); finish(); return; }
         releasePlayer();
@@ -2280,6 +2413,9 @@ public class NativePlayerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopConnectivityMonitoring();
+        cancelLiveReconnect("destroy");
+        reconnectHandler.removeCallbacksAndMessages(null);
         numberHandler.removeCallbacksAndMessages(null);
         zapHandler.removeCallbacksAndMessages(null);
         cancelPendingZap();
@@ -2329,6 +2465,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     @Override public void finish() {
+        cancelLiveReconnect("finish");
         // Fin de session : une coupure encore en cours doit figurer au bilan (résultat et
         // résumé logcat), les exports intermédiaires ne l'ayant volontairement pas arrêtée.
         rebuffer.close();
@@ -2406,6 +2543,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
         castSessionListener = new SessionManagerListener<Session>() {
             @Override public void onSessionStarted(Session session, String sessionId) {
+                cancelLiveReconnect("cast");
                 casting = true;
                 if (recording) stopRecording();
                 releasePlayer();
@@ -2847,6 +2985,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void releasePlayer() {
+        cancelLiveReconnect("release");
         // Lecteur libéré (arrière-plan, erreur, destruction) : une interruption ouverte ne peut
         // plus se terminer normalement ; la clôturer pour ne pas gonfler une session ultérieure.
         rebuffer.close();
@@ -3093,6 +3232,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (player == null || casting) return;
         if (pause == isPaused()) return;
         if (pause) {
+            if (!vod && liveReconnect.isRecovering()) liveLostWhilePaused = true;
+            cancelLiveReconnect("paused");
             player.setPlayWhenReady(false);
             playWhenReady = false;
             if (!vod) pausedAtMs = SystemClock.elapsedRealtime();
@@ -3140,6 +3281,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         // onPause : ne pas recréer un lecteur fantôme en arrière-plan. En PiP l'activité
         // reste visible et le lecteur n'a pas été libéré — la reprise y est légitime.
         if ((!resumed && !isInPipMode()) || isFinishing() || isDestroyed()) return;
+        cancelLiveReconnect("manual");
         pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false;
         playWhenReady = true;
         progressHandler.removeCallbacks(autoRetryRunnable);
