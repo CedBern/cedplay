@@ -1007,14 +1007,15 @@ public class NativePlayerActivity extends AppCompatActivity {
             } catch (Exception ignored) {
                 return; // la fenêtre reste en place
             }
-            runOnUiThread(() -> publishFullList(urls, titles, groups, numbers, windowStart, started));
+            final HashMap<String, Integer> builtIndex = ChannelNumberInput.buildNumberIndex(numbers);
+            runOnUiThread(() -> publishFullList(urls, titles, groups, numbers, builtIndex, windowStart, started));
         });
     }
 
     /** Publie sur le thread UI les listes lues hors thread : mêmes gardes et mêmes
      *  transpositions que adoptFullList, mais à partir de l'état courant — un zap P+/P−
      *  peut avoir eu lieu pendant la lecture du fichier. */
-    private void publishFullList(ArrayList<String> urls, ArrayList<String> titles, ArrayList<String> groups, ArrayList<String> numbers, int windowStart, long started) {
+    private void publishFullList(ArrayList<String> urls, ArrayList<String> titles, ArrayList<String> groups, ArrayList<String> numbers, HashMap<String, Integer> builtIndex, int windowStart, long started) {
         if (isFinishing() || isDestroyed() || channelUrls == null || channelTitles == null || channelIndex < 0) return;
         if (urls.isEmpty() || windowStart + channelUrls.size() > urls.size()) return;
         // Indices de la fenêtre → indices de la liste complète, à partir de l'état courant.
@@ -1034,7 +1035,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         channelIndex = current; previousIndex = previous; channelTotal = urls.size();
         if (pendingZapTarget >= 0) pendingZapTarget = windowStart + pendingZapTarget;
         programLineCache.clear();
-        rebuildNumberIndex();
+        numberIndex.clear();
+        if (builtIndex != null) numberIndex.putAll(builtIndex);
         fullListAdopted = true;
         android.util.Log.i("IPTV-Playback", "zap_full_list channels=" + urls.size() + " load_ms=" + (SystemClock.elapsedRealtime() - started));
     }
@@ -2615,11 +2617,7 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     /** « 007 » et « 7 » désignent la même chaîne. */
     static String normalizeNumber(String value) {
-        if (value == null) return "";
-        String trimmed = value.trim();
-        if (!trimmed.matches("\\d+")) return trimmed;
-        String stripped = trimmed.replaceFirst("^0+", "");
-        return stripped.isEmpty() ? "0" : stripped;
+        return ChannelNumberInput.normalizeNumber(value);
     }
 
     private String numberAt(int index) {
@@ -2632,10 +2630,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void rebuildNumberIndex() {
         numberIndex.clear();
         if (channelNumbers == null) return;
-        for (int i = 0; i < channelNumbers.size(); i++) {
-            String normalized = normalizeNumber(channelNumbers.get(i));
-            if (!normalized.isEmpty()) numberIndex.putIfAbsent(normalized, i);
-        }
+        numberIndex.putAll(ChannelNumberInput.buildNumberIndex(channelNumbers));
     }
 
     private int indexOfNumber(String typed) {
