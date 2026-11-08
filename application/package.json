@@ -1,6 +1,6 @@
 {
   "name": "cedplay",
-  "version": "1.12.7",
+  "version": "1.12.8",
   "packageManager": "pnpm@8.10.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5178 --strictPort",

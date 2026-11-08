@@ -1,5 +1,12 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Lot B de l'audit — démarrage et robustesse, 8 novembre 2026
+
+- Corrige les cinq P1 de robustesse : plus d'écran de chargement éternel si IndexedDB est bloquée, plus de gel du fil principal après un timeout du worker EPG, plafonds et encodage des imports, mémoire du guide réduite, import Xtream borné et annulable.
+- Modifiés : `idb.ts` (`blocked`/`blocking`/`terminated`, ouverture bornée à 10 s, échec non mémorisé), `storage.ts` (lecture des réglages bornée à 8 s avec repli synchrone), `epgWorker.ts` (repli synchrone réservé aux guides ≤ 4 M caractères), `epgXmltv.ts` (fenêtre temporelle pendant l'analyse, marge ±48 h), `useEPG.ts` (sources secondaires parsées seulement pour les chaînes sans programme), `textImport.ts` (nouveau : BOM, `encoding=`, repli windows-1252, plafonds 64 Mo / 120 M caractères), `PlaylistLoader.tsx`, `corsProxy.ts`, `m3uParser.ts`, `epg.ts`, `userAgent.ts` (délai 20 s), `xtreamCatalog.ts` (délai + erreur d'identifiants distincte), `xtreamLive.ts` (signal d'annulation), `XtreamLoginDialog.tsx` (annulation à la fermeture).
+- Vérifié : `tsc` app+node 0 erreur, `eslint ./src` complet 0 erreur / 18 avertissements, **709/709 tests** sur 110 fichiers (23 nouveaux depuis le lot A), `vite build` OK (chunk principal 636,9 kB / 193,9 kB gzip), `dist/` 2,7 Mo. Le lot B n'est ni commité ni empaqueté : la version 1.12.7 / code 55 a été posée par la session Plateformes, et l'APK 1.12.7 installée sur la Hisense contient le lot A mais pas le lot B.
+- Non vérifié : guide réel de plus de 4 M caractères, liste M3U Latin-1 réelle, fermeture du dialogue Xtream pendant un import muet sur appareil. Les guides complémentaires sont encore tous téléchargés ; seule leur analyse est conditionnée aux trous de la source principale.
+
 ## Lot A de l'audit — contrôle parental VOD et quota IndexedDB, 8 novembre 2026
 
 - Corrige les deux P0 de l'audit : le contrôle parental couvre désormais le catalogue VOD/séries Xtream, la recherche globale, « Continuer » et les favoris publiés au lanceur Android TV ; le cache EPG est plafonné et purgé, et un échec d'écriture IndexedDB n'est plus présenté comme une panne réseau.
@@ -726,3 +733,13 @@ Points ouverts pour continuer :
 Sur le téléphone : Prime/Max/Arte semblent **non installées** (le navigateur s'est ouvert) — installer les apps ou me redonner la main adb pour confirmer ; « connexion non privée » sur www.max.com est un incident TLS du réseau du téléphone (depuis le PC, le TLS de max.com est sain).
 
 **Vérification.** 686/686 tests (vitest), tsc app+node 0, ESLint 0 erreur (18 avertissements), vite build 8,9 s, cap sync, assembleRelease OK. APK **CedPlay-1.12.7.apk** (4 605 463 octets, SHA-256 `99bf1cc43b1880e12f99c37a…`, aapt code 55) installée sur la Hisense (dumpsys code 55 / 1.12.7) ; **Motorola débranché** — à installer dès qu'il est reconnecté (`adb install -r CedPlay-1.12.7.apk`).
+
+## Plateformes : L'Équipe ajoutée et 1.12.8 — 8 novembre 2026
+
+**Demande.** « téléphone branché et oui pour l'equipe » — ajout de L'Équipe aux plateformes de streaming et installation sur le téléphone à la reconnexion.
+
+**Ajout.** Plateforme `lequipe` dans `streamingPlatforms.ts` (Sport & Directs, gratuit avec option Premium) avec paquet Android **`lequipe.fr`** — identifiant inhabituel mais officiel (éditeur « L'Equipe 24 / 24 », vérifié Play Store le 8 novembre 2026) ; URL https://www.lequipe.fr, ouverture dans l'app (App Link sur lequipe.fr si l'app la gère, sinon accueil via `allowAppHome`). Logo vectoriel dédié dans `PlatformLogo.tsx` (pastille rouge #E30613, « L'ÉQUIPE » blanc italique), cohérent avec les tuiles existantes ; tuile visible dans Replay → Plateformes (filtre Sport) et dans la recherche globale.
+
+**Vérification.** 709/709 tests Web (inclut le Lot B de l'autre session en cours), tsc app+node 0, ESLint 0 erreur (18 avertissements), vite build 8,7 s, cap sync, assembleRelease OK. APK **CedPlay-1.12.8.apk** (4 607 473 octets, SHA-256 `f3fafbdfdf6c5cc8aa08a2f2…`, aapt `versionCode='56' versionName='1.12.8'`) installée sur la Hisense (dumpsys code 56 / 1.12.8). **Le téléphone n'apparaît pas en adb** (ni avant ni après redémarrage du serveur adb) : vérifier l'autorisation « Débogage USB » sur le Motorola, puis `adb install -r CedPlay-1.12.8.apk`. Comme pour la 1.12.7, l'APK embarque le travail non commité de la session concurrente (ici son Lot B, tests verts).
+
+**Version.** 1.12.8 / code 56 prise par cette livraison — la suivante sera **1.12.9 / code 57** (fiche CedPlay.md harmonisée).
