@@ -582,3 +582,12 @@ Points ouverts pour continuer :
 - Test isolé insuffisant repéré : capture globale des flèches en conflit avec le dialogue. Reproduction rouge avec useRemoteNavigation monté, correction data-remote-self puis test vert, y compris accès au bouton depuis le milieu de 289 sources.
 - Vérifié : 587/587 tests (90 fichiers), tsc app+node OK, ESLint complet 0 erreur/18 avertissements ; web/Capacitor/assembleRelease et même signature. 364 sources inchangées et 74 fichiers web conformes. APK 1.11.17 / code 46 : 4587575 octets, SHA-256 e8981e0c84b583a2f9058fb4b2b6736d039e884b2916e1d3b7f1d77531d13428.
 - Pas d'installation ni de recette physique ou mesure de géométrie. Radios et chapitres/transcriptions non ajoutés dans ce lot. Rapport : preuves/catalogue-gratuit-2026-11-07/RAPPORT.md. Aucun push.
+
+
+## Lot D et Replay consolidés — 7 novembre 2026
+
+- Demande utilisateur « FAIS LE » : reprise du lot bloqué dans le worktree, commit puis réintégration sur la base 1.11.17. Lot D `f8805d1`, Replay `47808dd` (travail Claude `5fce9d7`), tests finaux `5af2c18` ; branche consolidate/v1.11.4, aucun push.
+- Mosaïques protégées au chargement/lancement et saisie sur OK (nom et recherche) ; rappels Android après autorisation avec erreurs de plugin encaissées et reprise au premier plan ; dispositions remappées à la restauration, registre natif non exporté/restauré. Sous-titres HLS et épisode suivant du lecteur web intégrés. Refonte Replay avec horloge, heure de Paris, focus et sauvegarde de Mes plateformes.
+- Vérifié : 630/630 tests (94 fichiers), 19 tests Java ; tsc app+node et ESLint complet 0 erreur/18 avertissements existants ; build web/Capacitor/assembleRelease OK. 22 tests finaux mosaïque/rappels relancés après correction du typage du mock.
+- APK CedPlay-1.12.0.apk / code 48 : 4604701 octets ; SHA-256 5b24de883b164475bc68ecf3ea72b1380931282247ba957863a6baf2d6ac9aa2. Même certificat habituel, 73 fichiers web conformes et 326 sources inchangées. Ancienne 1.12.0/code 47 conservée dans les preuves.
+- Aucun essai appareil, installation, mesure de fluidité ou test privé/VPN. Recette restante : notification refus/accord/appui à froid, mosaïque protégée, Replay réel et télécommande, sous-titres/enchaînement web. Rapport : preuves/lot-d-replay-1.12.0-2026-11-07/RAPPORT.md.
