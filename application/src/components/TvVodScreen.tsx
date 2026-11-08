@@ -1,6 +1,8 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Bookmark, BookmarkCheck, ChevronDown, HardDrive, Info, Play, RefreshCw, Search } from 'lucide-react';
 import type { CatalogCategory, CatalogItem } from '@/utils/xtreamCatalog';
+import { VodPoster } from '@/components/VodPoster';
+import { prefetchPosters } from '@/utils/vodPosterCache';
 
 type Column = 'cat' | 'grid' | 'info';
 type CatItem =
@@ -75,9 +77,7 @@ const PosterCell = memo(function PosterCell({ item, index, selected, focusable, 
       className={`tv-row poster press text-left rounded-xl overflow-hidden bg-card border border-neutral-900 ${selected ? 'is-selected' : ''}`}
     >
       <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center">
-        {item.poster
-          ? <img src={item.poster} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
-          : <span className="text-3xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}
+        <VodPoster src={item.poster} kind={kind} />
         {watchlisted && <div className="absolute top-1.5 right-1.5 bg-primary text-primary-foreground rounded-full p-1 z-10" title="Dans ma liste"><Bookmark className="h-3 w-3 fill-current" /></div>}
       </div>
       <div className="p-2"><p className="text-xs line-clamp-2">{item.name}</p>{item.rating && <p className="text-xs text-neutral-400">★ {item.rating}</p>}</div>
@@ -145,10 +145,8 @@ const InfoPanel = memo(function InfoPanel({ highlighted, kind, hasCells, infoAct
     <>
       {highlighted ? <>
         <div className="flex min-w-0 items-start gap-3">
-          <div className="w-20 shrink-0 aspect-[2/3] overflow-hidden rounded-lg bg-neutral-900 flex items-center justify-center">
-            {highlighted.poster
-              ? <img src={highlighted.poster} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
-              : <span className="text-2xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}
+          <div className="relative w-20 shrink-0 aspect-[2/3] overflow-hidden rounded-lg bg-neutral-900 flex items-center justify-center">
+            <VodPoster src={highlighted.poster} kind={kind} fallbackIconSize="text-2xl" />
           </div>
           <div className="min-w-0">
             <h3 className="line-clamp-3 text-lg font-semibold leading-6">{highlighted.name}</h3>
@@ -236,6 +234,14 @@ export function TvVodScreen({
   }, [catItems, category, column]);
   useEffect(() => { setCatIndex(i => Math.min(i, Math.max(0, catItems.length - 1))); }, [catItems.length]);
   useEffect(() => { setRow(r => Math.min(r, Math.max(0, cells.length - 1))); }, [cells.length]);
+
+  // Préchargement intelligent des affiches : rangée actuelle + 3 rangées suivantes en mémoire.
+  useEffect(() => {
+    if (!items.length) return;
+    const posters = items.slice(row, row + 20).map(item => item.poster);
+    prefetchPosters(posters, 20);
+  }, [items, row]);
+
 
   // Restauration de position : l'affiche surlignée de la dernière visite, si elle est encore là.
   const initialPosition = useMemo(() => storedVodPosition(playlistId, kind), [playlistId, kind]);

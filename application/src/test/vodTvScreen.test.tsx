@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TvVodScreen, type TvVodScreenProps } from '@/components/TvVodScreen';
+import { clearVodCategoryCache } from '@/utils/vodPosterCache';
 import { VodLibrary } from '@/components/VodLibrary';
 import type { CatalogItem } from '@/utils/xtreamCatalog';
 import type { PlaylistInfo } from '@/types/channel';
@@ -224,6 +225,7 @@ const playlist: PlaylistInfo = { id: 'test', name: 'Test', channels: [], groups:
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearVodCategoryCache();
   localStorage.clear();
   mocks.getPlayHistory.mockResolvedValue([]);
   mocks.pushPlayHistory.mockResolvedValue(undefined);

@@ -656,3 +656,25 @@ Points ouverts pour continuer :
 - APK `CedPlay-1.12.4.apk` et `CedPlay.apk` à la racine (4 601 149 octets, SHA-256 `85725238e030cb4f3300915db193692b0766ce2f3069ecf4421b65ec0dd1b9f4`, code 52 / 1.12.4 vérifiés par aapt). Commit fonctionnel `c84c95e` puis commit version `5fa1b21` et commit bannière TV `d9c37f8` ; travail concurrent et fichiers non suivis préservés.
 - Installation `adb install -r` réussie sans désinstallation ni perte de données sur les deux appareils connectés : Hisense HiSmartTV A4 (`192.168.100.2:5555`) et Motorola Edge 70 (`ZY22MBQQW7`), tous deux confirmés en versionCode 52 / versionName 1.12.4 par dumpsys.
 - Vérification visuelle sur la TV Hisense : en-tête allégé de Claude actif sur l'Accueil, passage sur Direct avec groupes français immédiatement en tête de liste (`FR CINEMA`, etc.), chaînes généralistes et thématiques ordonnées avec respect de la TNT Arcom (ex. TF1 Séries Films n° 20 en tête de `FR CINEMA`), aperçu vidéo en direct et lecture plein écran fluides et opérationnels.
+
+## VOD : affiches synchronisées, défilement fluide et cache de catégories — 1.12.5 / code 53, 8 novembre 2026
+
+- Retour utilisateur : défilement des listes de séries et films trop long à charger ; affiches ne se chargeant pas en même temps sur une même ligne (pop-in décalé et asynchrone non qualitatif).
+- Diagnostic :
+  1. `loading="lazy"` dans les conteneurs virtuels/défilants TV provoquait des chargements asynchrones et décalés sur une même rangée au moment où les cellules entraient dans la vue.
+  2. Chaque changement de catégorie VOD déclenchait un aller-retour réseau systématique vers le serveur Xtream (« Chargement du catalogue… ») même pour une catégorie consultée quelques secondes plus tôt.
+  3. L'absence de cache mémoire et de préchargement des rangées suivantes laissait des silhouettes vides pendant les déplacements rapides à la télécommande.
+- Correctifs apportés :
+  1. `vodPosterCache.ts` : cache mémoire global des affiches chargées (`loadedPosterUrls`) et défaillantes (`failedPosterUrls`), préchargement proactif par `new Image().src` (`prefetchPosters`), et cache mémoire des catalogues de catégories (`categoryCatalogCache`) avec TTL de 10 minutes et invalidation lors du rafraîchissement manuel.
+  2. `VodPoster.tsx` : composant d'affiche unifié pour le web et la TV avec détection synchrone du cache mémoire (affichage immédiat sans clignotement), squelette animé doux (`animate-pulse bg-neutral-800/60`), transition d'opacité fluide (`transition-opacity duration-300 ease-out`), décodage asynchrone hors thread UI (`decoding="async"`), et repli gracieux avec titre centré sur fond neutre.
+  3. `TvVodScreen.tsx` : intégration de `VodPoster` dans la grille TV (`PosterCell`) et le panneau d'informations latéral (`InfoPanel`) ; préchargement automatique en tâche de fond des 20 éléments suivants au fur et à mesure du défilement dans la rangée.
+  4. `VodLibrary.tsx` : intégration de `VodPoster` dans la grille mobile et le rail "Pour toi" ; mémorisation instantanée des listes par catégorie dans `categoryCatalogCache` pour un basculement immédiat (0 ms) entre catégories déjà explorées.
+- Vérifications locales :
+  - 667/667 tests Vitest (101 fichiers, dont 6 nouveaux tests dédiés dans `vodPoster.test.tsx`), TypeScript app+node 0 erreur, ESLint complet 0 erreur (18 avertissements préexistants inchangés).
+  - Compilation web Vite (8,99 s) et copie Capacitor (`cap copy android`).
+  - Compilation Android (`testReleaseUnitTest` + `assembleRelease` OK, 21 tests Java).
+- APK `CedPlay-1.12.5.apk` et `CedPlay.apk` à la racine : 4 601 529 octets, SHA-256 `260C3B7AE8E75EA28D23A70B88BF211F827F989B7DBC846F1A1D828B698B41D4`, code 53 / 1.12.5 vérifiés par aapt.
+- Installation et validation physique :
+  - `adb install -r` réussi sans désinstallation ni perte de données sur les deux appareils connectés : Hisense HiSmartTV A4 (`192.168.100.2:5555`) et Motorola Edge 70 (`ZY22MBQQW7`).
+  - Vérification physique sur la Hisense TV : ouverture de CedPlay sur l'Accueil, basculement vers l'onglet Films, défilement vers le bas dans la grille (`input keyevent 20`) avec affichage synchrone et complet de toutes les affiches de chaque rangée sans pop-in décalé, panneau d'informations latéral immédiatement illustré, et changement instantané de catégorie vers `(V|FR) IMDb Top 50` avec chargement immédiat de toutes les affiches visibles.
+

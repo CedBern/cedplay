@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TvVodScreen, storedVodPosition } from '@/components/TvVodScreen';
+import { VodPoster } from '@/components/VodPoster';
 import type { PlaylistInfo } from '@/types/channel';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import { getPlaybackUrl } from '@/hooks/useVideoPlayer';
@@ -19,6 +20,8 @@ import { PlatformLogo } from '@/components/PlatformLogo';
 import { matchStreamingPlatformOrNetwork } from '@/utils/platformLogos';
 import { StorageManager } from '@/utils/storage';
 import { toast } from 'sonner';
+
+import { categoryCatalogCache } from '@/utils/vodPosterCache';
 
 const fullCatalogCache = new Map<string, { fetchedAt: number; items: CatalogItem[] }>();
 
@@ -231,13 +234,25 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, [account, kind, reload, tvMode, playlist.id]);
   useEffect(() => {
     if (!account || category === null) return;
+    const cacheKey = `${playlist.id}:${account.server}:${kind}:${category}`;
+    const cached = categoryCatalogCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) {
+      setItems(cached.items); setLoading(false); setError(''); setLimit(60); setSearch('');
+      return;
+    }
     const controller = new AbortController(); setLoading(true); setError(''); setItems([]); setLimit(60); setSearch('');
     void catalogRequest(account, kind === 'movie' ? 'get_vod_streams' : 'get_series', category ? { category_id: category } : {}, controller.signal)
-      .then(data => parseCatalog(data, kind)).then(values => { if (!controller.signal.aborted) setItems(values); })
+      .then(data => parseCatalog(data, kind)).then(values => {
+        if (!controller.signal.aborted) {
+          categoryCatalogCache.set(cacheKey, { fetchedAt: Date.now(), items: values });
+          while (categoryCatalogCache.size > 20) categoryCatalogCache.delete(categoryCatalogCache.keys().next().value!);
+          setItems(values);
+        }
+      })
       .catch(e => { if (!controller.signal.aborted) setError(e.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [account, category, kind]);
+  }, [account, category, kind, playlist.id, reload]);
   useEffect(() => {
     setCurrentSub(null); setSubtitleEpisodeId(null);
     setDetails(null); setDetailError(''); setSeason('');
@@ -508,7 +523,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
 
   // Mode TV : actions de l'écran télécommande (TvVodScreen) ; fiches et lecture restent partagées.
   const handleSelectCategory = useCallback((id: string) => { setCategory(id); setShowWatchlistOnly(false); }, []);
-  const handleRefresh = useCallback(() => { fullCatalogCache.delete(catalogCacheKey); setAllMovies([]); setReload(v => v + 1); }, [catalogCacheKey]);
+  const handleRefresh = useCallback(() => { fullCatalogCache.delete(catalogCacheKey); categoryCatalogCache.clear(); setAllMovies([]); setReload(v => v + 1); }, [catalogCacheKey]);
   // « Afficher davantage » étend la limite EFFECTIVE : après une restauration au-delà
   // de 60 titres (affiche mémorisée au titre 85 ⇒ 120 affichés), la limite de base est
   // déjà dépassée et « +60 » depuis elle ne montrerait rien de plus.
@@ -659,7 +674,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       <h3 className="text-[17px] font-semibold tracking-tight text-foreground">Pour toi, d'après tes visionnages</h3>
       <div className="rail flex snap-x gap-3 overflow-x-auto pb-1">
         {recommendations.map(({ item }) => <button key={item.id} onClick={() => setSelected(item)} className="poster press w-28 shrink-0 snap-start text-left rounded-xl overflow-hidden bg-card border border-neutral-900" title={item.name}>
-          <div className="aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center">{item.poster ? <img src={item.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} /> : <span className="text-3xl" aria-hidden="true">🎬</span>}</div>
+          <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center"><VodPoster src={item.poster} kind="movie" /></div>
           <div className="p-1.5"><p className="text-[11px] leading-tight line-clamp-2">{item.name}</p>{item.rating && <p className="text-[10px] text-neutral-400">★ {item.rating}</p>}</div>
         </button>)}
       </div>
@@ -695,7 +710,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     {error && <div role="alert" className="space-y-2 text-amber-300"><p>{error}</p><Button variant="secondary" onClick={() => setReload(v => v + 1)}>Réessayer</Button></div>}
     {!loading && !error && <p className="text-sm text-neutral-400">{filtered.length ? `${filtered.length} titres` : 'Aucun titre dans cette sélection.'}</p>}
     <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3">{filtered.slice(0, limit).map(item => <button key={item.id} onClick={() => setSelected(item)} className="poster press text-left rounded-xl overflow-hidden bg-card border border-neutral-900 focus-visible:outline-none focus-visible:ring-2 ring-primary">
-      <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center">{item.poster ? <img src={item.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} /> : <span className="text-3xl" aria-hidden="true">{kind === 'movie' ? '🎬' : '📺'}</span>}{watchlistIds.has(item.id) && <div className="absolute top-1.5 right-1.5 bg-primary text-primary-foreground rounded-full p-1 z-10" title="Dans ma liste"><Bookmark className="h-3 w-3 fill-current" /></div>}</div>
+      <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center"><VodPoster src={item.poster} kind={kind} />{watchlistIds.has(item.id) && <div className="absolute top-1.5 right-1.5 bg-primary text-primary-foreground rounded-full p-1 z-10" title="Dans ma liste"><Bookmark className="h-3 w-3 fill-current" /></div>}</div>
       <div className="p-2"><p className="text-xs sm:text-sm line-clamp-2">{item.name}</p>{item.rating && <p className="text-xs text-neutral-400">★ {item.rating}</p>}</div>
     </button>)}</div>
     {filtered.length > limit && <Button variant="secondary" onClick={() => setLimit(v => v + 60)}>Afficher davantage</Button>}

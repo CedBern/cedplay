@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VodLibrary } from '@/components/VodLibrary';
+import { clearVodCategoryCache } from '@/utils/vodPosterCache';
 import type { PlaylistInfo } from '@/types/channel';
 
 const mocks = vi.hoisted(() => ({ request: vi.fn(), openVod: vi.fn(), getPlayHistory: vi.fn(), pushPlayHistory: vi.fn() }));
@@ -19,6 +20,7 @@ vi.mock('@/utils/nativePlayer', () => ({ NativePlayerBridge: { isAvailable: () =
 const playlist: PlaylistInfo = { id: 'test', name: 'Test', channels: [], groups: [] };
 beforeEach(() => {
   vi.clearAllMocks();
+  clearVodCategoryCache();
   localStorage.clear();
   mocks.getPlayHistory.mockResolvedValue([]);
   mocks.pushPlayHistory.mockResolvedValue(undefined);
