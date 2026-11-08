@@ -33,6 +33,15 @@ export interface XmltvParsed {
   programmes: XmltvProgramme[];
 }
 
+/** Fenêtre de programmes conservés dès l'analyse (évite de garder tout un guide en mémoire). */
+export interface XmltvParseWindow {
+  keepFromMs?: number | undefined;
+  keepUntilMs?: number | undefined;
+}
+
+/** Décalage maximal applicable (tvg-shift et réglage de liste sont bornés à ±24 h). */
+const PARSE_SHIFT_MARGIN_MS = 48 * 3_600_000;
+
 /** Parse une date XMLTV (« 20261103120000 +0100 » ou ISO 8601). */
 export function parseXmltvDate(raw: string): Date | null {
   const m = raw.trim().match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s+([+-])(\d{2})(\d{2}))?$/);
@@ -66,10 +75,12 @@ function stripCdata(text: string): string {
  * Parse un fichier XMLTV complet sans dépendre de DOMParser (qui est absent des Web Workers).
  * Fonctionne à haute performance (100k+ programmes analysés en quelques centaines de millisecondes).
  */
-export function parseXmltv(xml: string): XmltvParsed {
+export function parseXmltv(xml: string, window: XmltvParseWindow = {}): XmltvParsed {
   if (!xml || (!xml.includes('<tv') && !xml.includes('<programme'))) {
     throw new Error('Fichier XMLTV invalide.');
   }
+  const keepFrom = window.keepFromMs ?? -Infinity;
+  const keepUntil = window.keepUntilMs ?? Infinity;
 
   const channels: XmltvChannel[] = [];
   const channelRegex = /<channel\s+([^>]*?)>([\s\S]*?)<\/channel>/gi;
@@ -104,6 +115,10 @@ export function parseXmltv(xml: string): XmltvParsed {
     const start = parseXmltvDate(startMatch[1]);
     const stop = parseXmltvDate(stopMatch[1]);
     if (!start || !stop || stop <= start) continue;
+    // Filtre appliqué pendant la boucle : sans lui, un guide de 40 Mo restait
+    // entièrement en mémoire avant le premier filtrage de buildEPGData.
+    if (stop.getTime() + PARSE_SHIFT_MARGIN_MS <= keepFrom
+      || start.getTime() - PARSE_SHIFT_MARGIN_MS >= keepUntil) continue;
 
     const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     if (!titleMatch) continue;

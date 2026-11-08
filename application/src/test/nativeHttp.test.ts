@@ -65,6 +65,30 @@ describe('httpGetJson', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => { throw new Error('pas du JSON'); } }));
     expect(await httpGetJson('http://relais.test/xtream/categories')).toMatchObject({ ok: true, data: null });
   });
+
+  it('web : borne une requête muette et libère sa minuterie', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })));
+    const pending = httpGetJson('http://relais.test/xtream/categories');
+    const rejected = expect(pending).rejects.toThrow('Le serveur ne répond pas');
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('web : propage l’annulation de l’appelant en AbortError', async () => {
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })));
+    const pending = httpGetJson('http://relais.test/xtream/categories', { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await rejected;
+  });
 });
 
 describe('fetchLiveCategories (natif)', () => {

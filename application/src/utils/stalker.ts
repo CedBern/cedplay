@@ -25,6 +25,8 @@ export function normalizeMac(input: string): string {
 export function portalCandidates(input: string): string[] {
   let raw = input.trim();
   if (!raw) return [];
+  // Saisie « ftp://… » ou « file://… » : ne pas la transformer en « http://ftp//… ».
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && !/^https?:\/\//i.test(raw)) return [];
   if (!/^https?:\/\//i.test(raw)) raw = `http://${raw}`;
   let url: URL;
   try { url = new URL(raw); } catch { return []; }

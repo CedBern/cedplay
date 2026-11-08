@@ -422,6 +422,9 @@ const ChannelCard = React.memo(function ChannelCard({
       // Inverted index for faster search
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const hydratedGroups = useRef<ChannelGroup[] | null>(null);
+  /** Liste pour laquelle la recherche a été remise à zéro : un simple changement
+   * d'identité de `groups` (rafraîchissement du guide) ne doit plus effacer la frappe. */
+  const searchResetFor = useRef<string | undefined>(playlistId);
   const [compactMode, setCompactMode] = useState(false);
   const [virtualizationEnabled, setVirtualizationEnabled] = useState(true);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -436,6 +439,12 @@ const ChannelCard = React.memo(function ChannelCard({
     pendingFocus.current = null;
     setFavLoading(true);
     setPreferencesLoaded(false);
+    // La recherche ne repart de zéro que lorsqu'on change de liste : `groups` change
+    // d'identité à chaque mise à jour du guide, et la frappe en cours disparaissait.
+    if (searchResetFor.current !== playlistId) {
+      searchResetFor.current = playlistId;
+      setSearchTerm('');
+    }
     void (async () => {
       try {
         const keys = ['favorites', 'qualityFilter', 'showVariants', 'selectedGroup', 'compactMode', 'virtualizationEnabled'] as const;
@@ -454,7 +463,6 @@ const ChannelCard = React.memo(function ChannelCard({
         if (mode) setSearchMode(mode);
         const quality = playlistId ? scopedFilters?.quality : values[1];
         setQualityFilter(typeof quality === 'string' ? quality : 'all');
-        setSearchTerm('');
         setShowVariants(values[2] === true);
         const group = playlistId ? scopedFilters?.group : values[3];
         const savedGroup = typeof group === 'string' ? group : 'all';
@@ -624,15 +632,17 @@ const ChannelCard = React.memo(function ChannelCard({
         rangeExtractor: range => [...new Set([...defaultRangeExtractor(range), ...[focusedRow, requestedRow].filter((i): i is number => i !== null && i >= 0 && i < channelsToRender.length)])].sort((a, b) => a - b),
       });
 
-      const restoreRowFocus = () => {
+      const restoreRowFocus = useCallback(() => {
         const pending = pendingFocus.current;
         if (!pending) return;
         const row = Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-channel-id]') ?? []).find(el => el.dataset.channelId === pending.id);
         const actions = row?.querySelectorAll<HTMLButtonElement>('[data-channel-actions] button');
         const button = actions?.[Math.min(pending.action, actions.length - 1)];
         if (button) { pendingFocus.current = null; focusRemote(button); }
-      };
+      }, []);
       // Une ligne hors écran n'existe pas encore : focus seulement après son montage.
+      // Dépendances explicites : sans liste, l'effet relançait un parcours du DOM et un
+      // `getBoundingClientRect()` après chaque frappe (reflow forcé sur 1 988 chaînes).
       useLayoutEffect(() => {
         restoreRowFocus();
         const active = document.activeElement;
@@ -642,7 +652,7 @@ const ChannelCard = React.memo(function ChannelCard({
         const box = (active.closest('[data-channel-id]') ?? active).getBoundingClientRect(), bounds = viewport.getBoundingClientRect();
         if (box.top < bounds.top) viewport.scrollTop -= bounds.top - box.top;
         else if (box.bottom > bounds.bottom) viewport.scrollTop += box.bottom - bounds.bottom;
-      });
+      }, [restoreRowFocus, channelsToRender, shouldVirtualize, focusedRow, requestedRow, compactMode]);
 
       const moveRowFocus = (event: React.KeyboardEvent, index: number) => {
         if (event.defaultPrevented || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return;
@@ -676,7 +686,15 @@ const ChannelCard = React.memo(function ChannelCard({
         const next = current.includes(channel.id) ? current.filter(f => f !== channel.id) : [...current, channel.id];
         favoritesRef.current = next;
         setFavorites(next);
-        await saveFavoritesToDB(next);
+        try {
+          await saveFavoritesToDB(next);
+        } catch {
+          // Quota plein : sans retour, l'étoile restait allumée jusqu'au redémarrage.
+          favoritesRef.current = current;
+          setFavorites(current);
+          toast.error('Stockage plein : favori non enregistré.');
+          return;
+        }
         window.dispatchEvent(new Event('favorites-updated'));
       }, []);
 

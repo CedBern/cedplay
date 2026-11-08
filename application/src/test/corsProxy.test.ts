@@ -24,7 +24,7 @@ describe('CORSProxy.fetchWithProxy', () => {
   });
 
   it('renvoie le texte de la réponse en cas de succès', async () => {
-    const fetcher = vi.fn().mockResolvedValue({ ok: true, text: async () => '#EXTM3U' });
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode('#EXTM3U').buffer });
     vi.stubGlobal('fetch', fetcher);
     await expect(CORSProxy.fetchWithProxy('http://serveur/liste.m3u')).resolves.toBe('#EXTM3U');
     expect(fetcher.mock.calls[0][0]).toBe('http://serveur/liste.m3u');
@@ -40,6 +40,24 @@ describe('CORSProxy.fetchWithProxy', () => {
   it('traduit tout échec réseau/CORS en message d\'import explicite', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await expect(CORSProxy.fetchWithProxy('https://serveur/liste.m3u')).rejects.toThrow('Import impossible (connexion, accès ou CORS)');
+  });
+
+  it('refuse une liste dont l’en-tête annonce plus de 64 Mo', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => String(64 * 1024 * 1024 + 1) },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }));
+    await expect(CORSProxy.fetchWithProxy('https://serveur/grosse.m3u')).rejects.toThrow('Liste trop volumineuse');
+  });
+
+  it('décode une liste Latin-1 sans déclaration au lieu de produire des U+FFFD', async () => {
+    // « Café » en windows-1252.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([0x23, 0x45, 0x58, 0x54, 0x4d, 0x33, 0x55, 0x0a, 0x43, 0x61, 0x66, 0xe9]).buffer,
+    }));
+    await expect(CORSProxy.fetchWithProxy('https://serveur/liste.m3u')).resolves.toBe('#EXTM3U\nCafé');
   });
 
   it('avorte au bout de 15 s et rejette', async () => {
@@ -82,7 +100,7 @@ describe('CORSProxy helpers', () => {
   });
 
   it('testConnectivity renvoie true sur succès HEAD et false sur échec', async () => {
-    const ok = vi.fn().mockResolvedValue({ ok: true, text: async () => '' });
+    const ok = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) });
     vi.stubGlobal('fetch', ok);
     await expect(CORSProxy.testConnectivity('https://serveur')).resolves.toBe(true);
     expect(ok.mock.calls[0][1]).toMatchObject({ method: 'HEAD' });

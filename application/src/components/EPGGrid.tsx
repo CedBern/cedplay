@@ -257,11 +257,21 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   useEffect(() => {
     if (!previewActive) return;
     const unsubscribe = NativePlayerBridge.onPreviewState(setPreviewState);
-    const relayout = () => { if (requested.current) sendPreview(requested.current); };
+    // Un défilement produit des dizaines d'événements par seconde ; chacun mesurait le
+    // cadre et rappelait le pont natif. Une seule relance par image suffit.
+    let frame = 0;
+    const relayout = () => {
+      if (frame || !requested.current) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (requested.current) sendPreview(requested.current);
+      });
+    };
     window.addEventListener('resize', relayout);
     window.addEventListener('scroll', relayout, true);
     return () => {
       unsubscribe();
+      if (frame) cancelAnimationFrame(frame);
       window.removeEventListener('resize', relayout);
       window.removeEventListener('scroll', relayout, true);
       requested.current = null;

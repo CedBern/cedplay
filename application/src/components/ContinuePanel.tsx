@@ -11,6 +11,7 @@ import type { PodcastProgress } from '@/types/podcast';
 import { AudioBridge } from '@/utils/nativePlayer';
 import { onPodcastStorageChange, readAllEpisodeProgress } from '@/utils/podcastStorage';
 import { formatEpisodeLength } from '@/utils/podcastFormat';
+import { useAdultVodCategories } from '@/hooks/useAdultVodCategories';
 import { Bookmark, Check, Clock, Film, Headphones, Heart, MonitorPlay, Play, Tv, X } from 'lucide-react';
 
 interface ContinuePanelProps {
@@ -23,6 +24,8 @@ interface ContinuePanelProps {
   lockedGroups?: string[] | undefined;
   /** true quand le code parental a été saisi pour cette session. */
   unlocked?: boolean | undefined;
+  /** Contrôle parental actif : les titres VOD des catégories adultes sont masqués. */
+  parentalEnabled?: boolean | undefined;
   /** Guide des programmes : « en ce moment » sur les chaînes favorites. */
   epgData?: EPGData | null | undefined;
   /** Accueil vide : ouvrir la liste des chaînes. */
@@ -37,7 +40,8 @@ const MAX_ITEMS = 10;
 /** Seuil sous lequel on considère qu'un titre n'a pas réellement été lancé. */
 const RESUME_THRESHOLD_MS = 60_000;
 
-export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVod, lockedGroups, unlocked, epgData, onBrowseLive }: ContinuePanelProps) {
+export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVod, lockedGroups, unlocked, parentalEnabled, epgData, onBrowseLive }: ContinuePanelProps) {
+  const adultVod = useAdultVodCategories(playlist, parentalEnabled === true && !unlocked);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [, setTick] = useState(0);
   const [history, setHistory] = useState<PlayHistoryEntry[]>([]);
@@ -141,17 +145,18 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
       if (entry.playlistId !== playlist.id) continue;
       if (entry.status === 'completed' || entry.hiddenFromContinue) continue;
       if ((entry.positionMs || 0) < RESUME_THRESHOLD_MS) continue;
+      if (adultVod.isAdult(entry.mediaKind === 'series' ? 'series' : 'movie', entry.categoryId)) continue;
       if (seen.has(entry.channelId)) continue;
       seen.add(entry.channelId);
       result.push(entry);
       if (result.length >= MAX_ITEMS) break;
     }
     return result;
-  }, [history, playlist.id]);
+  }, [history, playlist.id, adultVod]);
 
   const watchlistItems = useMemo(() => {
-    return watchlist.filter(item => item.playlistId === playlist.id);
-  }, [watchlist, playlist.id]);
+    return watchlist.filter(item => item.playlistId === playlist.id && !adultVod.isAdult(item.kind, item.categoryId));
+  }, [watchlist, playlist.id, adultVod]);
 
   const inProgressPodcasts = useMemo(() => {
     return Object.values(podcastProgress)

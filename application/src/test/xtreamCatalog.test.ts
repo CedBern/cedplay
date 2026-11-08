@@ -74,4 +74,23 @@ describe('Catalogues Xtream', () => {
     localStorage.setItem('cedplay.xtreamLimits:corrompu', '{oops');
     expect(readCachedLimits('corrompu')).toBeNull();
   });
+
+  it('distingue des identifiants refusés d’une panne réseau', async () => {
+    mocks.native = true;
+    mocks.get.mockResolvedValue({ status: 200, data: { user_info: { auth: 0 } } });
+    await expect(catalogRequest(account, 'get_vod_categories')).rejects.toThrow('Identifiants refusés ou abonnement expiré');
+  });
+
+  it('borne une requête web muette au lieu d’attendre indéfiniment', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })));
+    const pending = catalogRequest(account, 'get_vod_categories');
+    const rejected = expect(pending).rejects.toThrow('délai dépassé');
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejected;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 });

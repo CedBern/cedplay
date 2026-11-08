@@ -13,7 +13,8 @@ self.onmessage = (ev: MessageEvent<ParseMessage>) => {
   if (!data || data.type !== 'parse') return;
   try {
     const xmls = Array.isArray(data.xml) ? data.xml : [data.xml];
-    const parsed = buildMergedEPGData(xmls.map(parseXmltv), data.channels, data.options ?? {});
+    const options = data.options ?? {};
+    const parsed = buildMergedEPGData(xmls.map(part => parseXmltv(part, options)), data.channels, options);
     const packed = packEPGData(parsed);
     (self as unknown as Worker).postMessage({ type: 'result', data: packed },
       Object.values(packed.channels).map(rows => rows.buffer));

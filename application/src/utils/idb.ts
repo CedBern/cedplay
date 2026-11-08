@@ -20,21 +20,43 @@ interface IPTVPlayerDB extends DBSchema {
   };
 }
 
-let dbPromise: Promise<IDBPDatabase<IPTVPlayerDB>>;
+let dbPromise: Promise<IDBPDatabase<IPTVPlayerDB>> | undefined;
+
+/** Un autre onglet peut garder l'ancienne version ouverte : sans borne, `openDB`
+ *  reste en attente pour toujours et l'écran de chargement ne rend jamais la main. */
+const DB_OPEN_TIMEOUT_MS = 10_000;
 
 function getDb(): Promise<IDBPDatabase<IPTVPlayerDB>> {
-  if (!dbPromise) {
-    dbPromise = openDB<IPTVPlayerDB>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
-        if (!db.objectStoreNames.contains(PLAYLIST_STORE_NAME)) {
-          db.createObjectStore(PLAYLIST_STORE_NAME, { keyPath: 'id' });
-        }
-        if (oldVersion < 2 && !db.objectStoreNames.contains(META_STORE_NAME)) {
-          db.createObjectStore(META_STORE_NAME, { keyPath: 'key' });
-        }
-      },
-    });
-  }
+  if (dbPromise) return dbPromise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const opening = openDB<IPTVPlayerDB>(DB_NAME, DB_VERSION, {
+    upgrade(db, oldVersion) {
+      if (!db.objectStoreNames.contains(PLAYLIST_STORE_NAME)) {
+        db.createObjectStore(PLAYLIST_STORE_NAME, { keyPath: 'id' });
+      }
+      if (oldVersion < 2 && !db.objectStoreNames.contains(META_STORE_NAME)) {
+        db.createObjectStore(META_STORE_NAME, { keyPath: 'key' });
+      }
+    },
+    // Un autre onglet détient la version précédente : la migration attend qu'il se
+    // ferme. Le délai ci-dessous évite d'attendre indéfiniment.
+    blocked() { /* l'ouverture reste en attente, bornée par DB_OPEN_TIMEOUT_MS */ },
+    // Cet onglet empêche un autre de migrer : ne pas fermer la base en cours d'usage,
+    // l'autre onglet réessaiera quand cette page sera fermée.
+    blocking() { /* rien à faire : la fermeture n'est pas sûre en pleine écriture */ },
+    // Connexion perdue (stockage évincé, onglet restauré) : la prochaine lecture
+    // doit rouvrir au lieu de réutiliser un handle mort.
+    terminated() { dbPromise = undefined; },
+  }).finally(() => { if (timer !== undefined) clearTimeout(timer); });
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Base de données locale indisponible (ouverture bloquée).')), DB_OPEN_TIMEOUT_MS);
+  });
+  // Un échec (VersionError après un retour à une version antérieure, quota, mode
+  // privé) ne doit jamais être mémorisé pour toute la session.
+  dbPromise = Promise.race([opening, timeout]).catch(error => {
+    dbPromise = undefined;
+    throw error;
+  });
   return dbPromise;
 }
 
@@ -53,9 +75,33 @@ export async function getPlaylistFromDB(id: string): Promise<PlaylistInfo | unde
   return db.get(PLAYLIST_STORE_NAME, id);
 }
 
+/**
+ * Clés `meta` qui n'ont de sens que pour une liste donnée. Sans purge à la suppression,
+ * les guides XML (plusieurs Mo chacun) et les index de replay restaient indéfiniment,
+ * jusqu'à saturer le quota et faire échouer les écritures de favoris et de réglages.
+ */
+const PLAYLIST_META_KEYS = [
+  'catchupIndex', 'channelFilters', 'epgConfig', 'hiddenGroups', 'hiddenChannels',
+  'listCustomization', 'mosaicLayouts', 'playlistRefreshedAt',
+] as const;
+
+function metaKeyBelongsToPlaylist(key: string, playlistId: string): boolean {
+  if (key === `epgCache_${playlistId}` || key.startsWith(`epgCache_${playlistId}_`)) return true;
+  if (key === `epgParsed_v2_${playlistId}`) return true;
+  const separator = key.lastIndexOf(':');
+  return separator > 0 && key.slice(separator + 1) === playlistId
+    && (PLAYLIST_META_KEYS as readonly string[]).includes(key.slice(0, separator));
+}
+
 export async function deletePlaylistFromDB(id: string): Promise<void> {
   const db = await getDb();
-  await db.delete(PLAYLIST_STORE_NAME, id);
+  const tx = db.transaction([PLAYLIST_STORE_NAME, META_STORE_NAME], 'readwrite');
+  await tx.objectStore(PLAYLIST_STORE_NAME).delete(id);
+  const meta = tx.objectStore(META_STORE_NAME);
+  for (const key of await meta.getAllKeys()) {
+    if (metaKeyBelongsToPlaylist(String(key), id)) await meta.delete(key);
+  }
+  await tx.done;
 }
 
 /** Both stores are read from a single consistent snapshot. */

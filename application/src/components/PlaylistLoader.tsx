@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { CORSProxy } from '@/utils/corsProxy';
 import { parseM3UInWorker } from '@/utils/parseWorker';
+import { assertImportSize, decodeImportText } from '@/utils/textImport';
 import { PlaylistInfo } from '@/types/channel';
 import { XtreamLoginDialog } from '@/components/XtreamLoginDialog';
 import { StalkerLoginDialog } from '@/components/StalkerLoginDialog';
@@ -30,7 +31,10 @@ export function PlaylistLoader({ onPlaylistLoaded, tvMode = false }: PlaylistLoa
 
   const loadFile = (file: File) => {
     void load(async () => {
-      const content = await file.text();
+      // Taille vérifiée avant lecture : au-delà du plafond, l'application
+      // affiche un message au lieu de charger deux copies du fichier.
+      assertImportSize(file.size, 'playlist');
+      const content = decodeImportText(new Uint8Array(await file.arrayBuffer()), 'playlist');
       return parseM3UInWorker(content, file.name, setProgress);
     });
   };

@@ -1,7 +1,8 @@
 // Relais CORS pour les builds web hébergés.
 // Par défaut, l'application de développement utilise le relais local
-// (démarré par `pnpm proxy`) ; pour un build web déployé sur un serveur,
-// renseigne l'adresse de ton relais dans les paramètres (champ « Relais web »).
+// (démarré par `node proxy-server.mjs` dans application/) ; pour un build web
+// déployé sur un serveur, renseigne l'adresse de ton relais dans les paramètres
+// (champ « Relais web »).
 
 import { StorageManager } from '@/utils/storage';
 

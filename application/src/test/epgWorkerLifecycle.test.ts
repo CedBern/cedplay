@@ -87,6 +87,18 @@ it.each(['error', 'messageerror', 'timeout', 'worker-result-error', 'invalid-res
   expect(vi.getTimerCount()).toBe(0);
 });
 
+it('refuse le repli synchrone d’un gros guide après le délai du worker', async () => {
+  // Au-delà du seuil, re-parser le même XML sur le fil principal gèlerait la
+  // télécommande pendant une à deux minutes : on rend une erreur explicite.
+  const bigXml = '<tv>' + 'x'.repeat(4_000_000) + '</tv>';
+  const pending = parseEPGInWorker(bigXml, channels);
+  const rejected = expect(pending).rejects.toThrow('trop de temps');
+  vi.advanceTimersByTime(60_000);
+  await rejected;
+  expect(TestWorker.instances[0].terminate).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('libère aussi le worker si l’envoi initial ne peut pas être cloné', async () => {
   TestWorker.throwOnPost = true;
   const pending = parseEPGInWorker(xml, channels);

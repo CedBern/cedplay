@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from 'react';
-import { failedPosterUrls, loadedPosterUrls } from '@/utils/vodPosterCache';
+import { failedPosterUrls, loadedPosterUrls, rememberFailedPoster, rememberLoadedPoster } from '@/utils/vodPosterCache';
 
 export interface VodPosterProps {
   src?: string | null | undefined;
@@ -62,11 +62,11 @@ export const VodPoster = memo(function VodPoster({
         referrerPolicy="no-referrer"
         className={`${className} transition-opacity duration-300 ease-out ${loaded ? 'opacity-100' : 'opacity-0'}`}
         onLoad={() => {
-          loadedPosterUrls.add(src);
+          rememberLoadedPoster(src);
           setLoaded(true);
         }}
         onError={() => {
-          failedPosterUrls.add(src);
+          rememberFailedPoster(src);
           setError(true);
           setLoaded(false);
         }}

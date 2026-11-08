@@ -13,6 +13,10 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- targetSdk 35 : Android 15 impose le mode bord à bord. L'interface web gère
+             ses marges sûres, mais le rendu TV/boîtier n'a pas encore été validé sur
+             Android 15 : on garde les barres système opaques jusqu'à cette recette. -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
     </style>
 
 

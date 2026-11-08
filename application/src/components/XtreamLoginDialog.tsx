@@ -44,9 +44,22 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
   const returnFocus = useRef<HTMLElement | null>(null);
   const selectionRef = useRef<HTMLDivElement>(null);
   const lastCategory = useRef<string | null>(null);
+  // Requête en cours (catégories ou import) : fermer le dialogue doit l'annuler,
+  // sinon un fournisseur muet laisse « Import en cours… » et ses workers actifs.
+  const requestRef = useRef<AbortController | null>(null);
+  const beginRequest = () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    return controller;
+  };
   const [localOpen, setLocalOpen] = useState(false);
   const open = controlledOpen ?? localOpen;
   const setOpen = (value: boolean) => { setLocalOpen(value); onOpenChange?.(value); };
+  useEffect(() => {
+    if (!open) requestRef.current?.abort();
+  }, [open]);
+  useEffect(() => () => requestRef.current?.abort(), []);
   const [server, setServer] = useState(() => localStorage.getItem('xtream_last_server') || '');
   const [username, setUsername] = useState(() => localStorage.getItem('xtream_last_user') || '');
   const [password, setPassword] = useState(() => localStorage.getItem('xtream_last_pass') || '');
@@ -76,6 +89,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
     }
     setBusy(true);
     setLastError(null);
+    const controller = beginRequest();
     try {
       try {
         localStorage.setItem('xtream_last_server', cleanServer);
@@ -89,7 +103,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
         : `${getProxyBase()}/xtream/categories?server=${encodeURIComponent(cleanServer)}&username=${encodeURIComponent(cleanUser)}&password=${encodeURIComponent(cleanPass)}`;
       // Android : requête native (httpGetJson) — le webview bloque un fetch direct
       // vers un panneau Xtream qui n'envoie pas d'en-têtes CORS.
-      const { ok, status, data } = await httpGetJson(url);
+      const { ok, status, data } = await httpGetJson(url, { signal: controller.signal });
       if (!ok) {
         const errData: { error?: string; detail?: string; hints?: string[] } =
           data && typeof data === 'object' && !Array.isArray(data) ? data as { error?: string; detail?: string; hints?: string[] } : {};
@@ -112,6 +126,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
       setSelectedCats(new Set(available.map(c => c.category_id)));
       toast.success(`${data.length} catégories chargées.`);
     } catch (err) {
+      if (controller.signal.aborted) return;
       toast.error(err instanceof Error ? err.message : 'Connexion impossible au serveur Xtream.');
     } finally {
       setBusy(false);
@@ -146,6 +161,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
     setBusy(true);
     setImportProgress(0);
     setLastError(null);
+    const controller = beginRequest();
     const cleanServer = server.trim().replace(/\/+$/, '');
     const cleanUser = username.trim();
     const cleanPass = password.trim();
@@ -158,6 +174,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
       // l'actualisation automatique : mêmes chaînes, mêmes identifiants.
       const { channels: allChannels, groups, failed: failedCategories } = await fetchLiveChannels(
         account, selectedList, streamFormat, (done, total) => setImportProgress(Math.round((done / total) * 100)),
+        controller.signal,
       );
 
       if (allChannels.length === 0) {
@@ -182,6 +199,8 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
       toast.success(`${allChannels.length} chaînes importées avec succès !${failedCategories.length ? ` (${failedCategories.length} catégorie(s) en échec)` : ''}`);
       setOpen(false);
     } catch (err) {
+      // Fermeture pendant l'import : silencieuse, ce n'est pas une panne.
+      if (controller.signal.aborted) return;
       toast.error(err instanceof Error ? err.message : 'Erreur lors de l’importation des chaînes.');
     } finally {
       setBusy(false);

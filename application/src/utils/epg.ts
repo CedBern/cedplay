@@ -8,6 +8,7 @@ import { getMeta, setMeta } from '@/utils/idb';
 import { getProxyBase } from '@/utils/proxy';
 import { AppSettings } from '@/utils/storage';
 import { packEPGData, unpackEPGData, type PackedEPGData } from '@/utils/epgPacked';
+import { assertImportSize, assertXmltvTextSize, decodeImportText } from '@/utils/textImport';
 
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 h
 const MAX_FETCH_MS = 60_000;
@@ -41,6 +42,9 @@ export function getEPGUrl(playlist: PlaylistInfo, settings: AppSettings): string
 async function decompressGzip(bytes: Uint8Array): Promise<string> {
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
   const text = await new Response(stream).text();
+  // Un gzip de 40 Mo peut doubler ou tripler une fois décompressé : sans plafond,
+  // le WebView meurt avant même le début de l'analyse.
+  assertXmltvTextSize(text.length);
   return text;
 }
 
@@ -58,8 +62,9 @@ async function downloadXmltv(rawUrl: string): Promise<string> {
     const base64 = response.data;
     if (typeof base64 !== 'string') throw new Error('Réponse inattendue du serveur.');
     const bytes = base64ToUint8Array(base64);
+    assertImportSize(bytes.length, 'xmltv');
     const isGzip = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
-    return isGzip ? decompressGzip(bytes) : new TextDecoder().decode(bytes);
+    return isGzip ? decompressGzip(bytes) : decodeImportText(bytes, 'xmltv');
   }
   const proxied = `${getProxyBase()}/proxy?url=${encodeURIComponent(rawUrl)}`;
   const controller = new AbortController();
@@ -68,33 +73,46 @@ async function downloadXmltv(rawUrl: string): Promise<string> {
     const response = await fetch(proxied, { signal: controller.signal, referrerPolicy: 'no-referrer' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
+    assertImportSize(bytes.length, 'xmltv');
     const isGzip = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
     if (isGzip) {
       if (typeof DecompressionStream === 'undefined') throw new Error('Décompression gzip indisponible.');
       return await decompressGzip(bytes);
     }
-    return new TextDecoder().decode(bytes);
+    return decodeImportText(bytes, 'xmltv');
   } finally {
     clearTimeout(timeout);
   }
 }
+
+/** Au-delà, le guide est servi sans être mis en cache : un XML de cette taille suffit à
+ *  saturer le quota du WebView, partagé avec les favoris, les réglages et l'historique. */
+const MAX_CACHED_XML_CHARS = 12_000_000;
 
 /** Cache XML d'une source : la source principale garde la clé historique de la liste. */
 async function fetchCachedXmltv(cacheKey: string, url: string, force: boolean): Promise<EPGSource> {
   const saved = await getMeta<EPGCache>(cacheKey).catch(() => undefined);
   const cached = saved?.source === url ? saved : undefined;
   if (!force && cached?.xml && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return { ...cached, stale: false, url };
+  let xml: string;
   try {
-    const xml = await downloadXmltv(url);
+    xml = await downloadXmltv(url);
     // Validation minimale : le fichier doit ressembler à du XMLTV.
     if (!xml.includes('<tv') && !xml.includes('<programme')) throw new Error('Le serveur ne renvoie pas de guide XMLTV.');
-    const fetchedAt = Date.now();
-    await setMeta(cacheKey, { fetchedAt, xml, source: url } satisfies EPGCache);
-    return { xml, fetchedAt, stale: false, url };
-  } catch {
+  } catch (error) {
     if (cached?.xml) return { xml: cached.xml, fetchedAt: cached.fetchedAt, stale: true, url };
+    // Le plafond de taille est une cause précise : la masquer derrière « guide
+    // indisponible » ferait chercher une panne réseau inexistante.
+    if (error instanceof Error && error.message.startsWith('Guide trop volumineux')) throw error;
     throw new Error('Guide indisponible. Vérifie la connexion et la source EPG.');
   }
+  const fetchedAt = Date.now();
+  // Un échec d'écriture (quota plein) ne doit pas être présenté comme une panne réseau :
+  // le guide téléchargé reste utilisable pour la session, seul son cache est perdu.
+  if (xml.length <= MAX_CACHED_XML_CHARS) {
+    await setMeta(cacheKey, { fetchedAt, xml, source: url } satisfies EPGCache).catch(() => undefined);
+  }
+  return { xml, fetchedAt, stale: false, url };
 }
 
 /**

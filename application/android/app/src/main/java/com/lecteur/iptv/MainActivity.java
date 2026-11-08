@@ -12,7 +12,10 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativePlayerPlugin.class);
         super.onCreate(savedInstanceState);
 
-        // Keep screen awake while watching video
+        // Écran allumé pendant la session : le lecteur web (balise <video> dans cette
+        // activité, accessible par le bouton « Lecteur ») n'a pas d'autre moyen de le
+        // demander. Les activités de lecture native posent déjà leur propre drapeau.
+        // Conséquence assumée : l'écran ne s'éteint pas non plus dans les menus.
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         // Explicitly enable window hardware acceleration

@@ -19,6 +19,8 @@ import { SubtitleSelector, type ReadySubtitle } from '@/components/SubtitleSelec
 import { PlatformLogo } from '@/components/PlatformLogo';
 import { matchStreamingPlatformOrNetwork } from '@/utils/platformLogos';
 import { StorageManager } from '@/utils/storage';
+import { isAdultGroupName } from '@/utils/parentalControl';
+import { rememberVodCategories } from '@/utils/parentalVod';
 import { toast } from 'sonner';
 
 import { categoryCatalogCache } from '@/utils/vodPosterCache';
@@ -101,9 +103,30 @@ export interface VodResumeRequest {
   item?: VodWatchlistItem | undefined;
 }
 
-export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResumeHandled, tvMode = false, onSearch, onShowLocal }: { playlist: PlaylistInfo; kind: 'movie' | 'series'; tmdbApiKey?: string | undefined; resumeRequest?: VodResumeRequest | undefined; onResumeHandled?: (() => void) | undefined; /** Rendu télécommande (3 colonnes) au lieu de la mise en page mobile. */ tvMode?: boolean | undefined; onSearch?: (() => void) | undefined; /** TV, films : ouvrir la bibliothèque USB/SD depuis la colonne de gauche. */ onShowLocal?: (() => void) | undefined }) {
+export interface VodLibraryProps {
+  playlist: PlaylistInfo;
+  kind: 'movie' | 'series';
+  tmdbApiKey?: string | undefined;
+  resumeRequest?: VodResumeRequest | undefined;
+  onResumeHandled?: (() => void) | undefined;
+  /** Rendu télécommande (3 colonnes) au lieu de la mise en page mobile. */
+  tvMode?: boolean | undefined;
+  onSearch?: (() => void) | undefined;
+  /** TV, films : ouvrir la bibliothèque USB/SD depuis la colonne de gauche. */
+  onShowLocal?: (() => void) | undefined;
+  /** Contrôle parental actif : les catégories adultes du catalogue sont masquées. */
+  parentalEnabled?: boolean | undefined;
+  /** Code parental saisi pour la session. */
+  parentalUnlocked?: boolean | undefined;
+}
+
+export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResumeHandled, tvMode = false, onSearch, onShowLocal, parentalEnabled = false, parentalUnlocked = false }: VodLibraryProps) {
   const account = useMemo(() => getXtreamAccount(playlist), [playlist]);
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
+  // Verdict du filtre parental : « idle »/« loading » = catégories pas encore
+  // connues, « error » = échec réseau. Un ensemble vide ne vaut pas « aucune
+  // catégorie adulte ».
+  const [categoriesStatus, setCategoriesStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [category, setCategory] = useState<string | null>(null);
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [search, setSearch] = useState('');
@@ -129,6 +152,31 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     void StorageManager.loadSettingsAsync().then(s => { if (!cancelled) setAutoNextEnabled(s.autoNextEpisode !== false); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+  // Contrôle parental : même règle de nom que les groupes du direct, appliquée aux
+  // catégories du catalogue (films et séries). Le registre de session alimente la
+  // recherche globale et « Continuer », qui ne chargent pas ces catégories.
+  const hideAdult = parentalEnabled && !parentalUnlocked;
+  // Lu dans la requête de catégories sans la relancer quand le code est saisi.
+  const hideAdultRef = useRef(hideAdult);
+  hideAdultRef.current = hideAdult;
+  const adultCategoryIds = useMemo(
+    () => new Set(categories.filter(c => isAdultGroupName(c.name)).map(c => c.id)),
+    [categories],
+  );
+  const visibleCategories = useMemo(
+    () => hideAdult ? categories.filter(c => !adultCategoryIds.has(c.id)) : categories,
+    [hideAdult, categories, adultCategoryIds],
+  );
+  const visibleItems = useMemo(
+    () => hideAdult ? items.filter(item => !adultCategoryIds.has(item.categoryId)) : items,
+    [hideAdult, items, adultCategoryIds],
+  );
+  useEffect(() => {
+    if (hideAdult && category && adultCategoryIds.has(category)) setCategory('');
+  }, [hideAdult, category, adultCategoryIds]);
+  useEffect(() => {
+    if (hideAdult && selected && adultCategoryIds.has(selected.categoryId)) setSelected(null);
+  }, [hideAdult, selected, adultCategoryIds]);
   const [currentSub, setCurrentSub] = useState<ReadySubtitle | null>(null);
   const [vodHistory, setVodHistory] = useState<Awaited<ReturnType<typeof getPlayHistory>>>([]);
   const [allMovies, setAllMovies] = useState<CatalogItem[]>([]);
@@ -149,9 +197,17 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     return watchlist.filter(w => w.playlistId === playlist.id && w.kind === kind);
   }, [watchlist, playlist.id, kind]);
 
+  const visibleWatchlist = useMemo(
+    // Échec de lecture des catégories : impossible de dire quels titres enregistrés
+    // sont adultes, donc aucun n'est exposé (contrairement à l'attente en cours, où
+    // la liste reste visible mais la lecture est refusée plus bas).
+    () => (hideAdult && categoriesStatus === 'error' ? [] : hideAdult ? watchlistForKind.filter(w => !adultCategoryIds.has(w.categoryId ?? '')) : watchlistForKind),
+    [hideAdult, categoriesStatus, watchlistForKind, adultCategoryIds],
+  );
+
   const watchlistIds = useMemo(() => {
-    return new Set(watchlistForKind.map(w => w.id));
-  }, [watchlistForKind]);
+    return new Set(visibleWatchlist.map(w => w.id));
+  }, [visibleWatchlist]);
 
   const [historyRevision, setHistoryRevision] = useState(0);
   // Dernier ensemble d'œuvres qualifiées vu par « Pour toi » (voir l'effet d'historique) :
@@ -211,24 +267,34 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     return () => { cancelled = true; };
   }, [account, kind, playlist.id, catalogCacheKey, reload, historyRevision]);
 
+  const visibleAllMovies = useMemo(
+    () => hideAdult ? allMovies.filter(item => !adultCategoryIds.has(item.categoryId)) : allMovies,
+    [hideAdult, allMovies, adultCategoryIds],
+  );
   const recommendations = useMemo(
-    () => (kind === 'movie' ? recommendForHistory(vodHistory, allMovies, { limit: 12, playlistId: playlist.id }) : []),
-    [kind, vodHistory, allMovies, playlist.id],
+    () => (kind === 'movie' ? recommendForHistory(vodHistory, visibleAllMovies, { limit: 12, playlistId: playlist.id }) : []),
+    [kind, vodHistory, visibleAllMovies, playlist.id],
   );
 
   useEffect(() => {
     if (!account) return;
-    const controller = new AbortController(); setError(''); setLoading(true); setCategory(null); setItems([]); setCategories([]);
+    const controller = new AbortController(); setError(''); setLoading(true); setCategory(null); setItems([]); setCategories([]); setCategoriesStatus('loading');
     void catalogRequest(account, kind === 'movie' ? 'get_vod_categories' : 'get_series_categories', {}, controller.signal)
       .then(parseCategories).then(values => {
         if (controller.signal.aborted) return;
         setCategories(values);
+        setCategoriesStatus('ready');
+        // Enregistré seulement après une lecture réussie : une liste vide au montage ne doit
+        // pas faire croire à la recherche globale qu'aucune catégorie n'est adulte.
+        rememberVodCategories(playlist.id, kind, values);
+        // Contrôle parental : la catégorie par défaut ne doit jamais être une catégorie verrouillée.
+        const selectable = hideAdultRef.current ? values.filter(c => !isAdultGroupName(c.name)) : values;
         // Mode TV : retrouver la catégorie de la dernière visite si le catalogue la connaît encore.
-        const fallback = values.find(c => /^FR\b|FRANCE/i.test(c.name))?.id || values[0]?.id || '';
+        const fallback = selectable.find(c => /^FR\b|FRANCE/i.test(c.name))?.id || selectable[0]?.id || '';
         const stored = tvMode ? storedVodPosition(playlist.id, kind)?.category ?? null : null;
-        setCategory(stored !== null && (stored === '' || values.some(c => c.id === stored)) ? stored : fallback);
+        setCategory(stored !== null && (stored === '' || selectable.some(c => c.id === stored)) ? stored : fallback);
       })
-      .catch(e => { if (!controller.signal.aborted) setError(e.message); })
+      .catch(e => { if (!controller.signal.aborted) { setError(e.message); setCategoriesStatus('error'); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [account, kind, reload, tvMode, playlist.id]);
@@ -294,8 +360,8 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, [tvMode, selected, details]);
 
   const baseItems = useMemo(() => {
-    if (!showWatchlistOnly) return items;
-    return watchlistForKind.map(w => ({
+    if (!showWatchlistOnly) return visibleItems;
+    return visibleWatchlist.map(w => ({
       id: w.id,
       name: w.name,
       poster: w.poster ?? '',
@@ -303,7 +369,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       categoryId: w.categoryId ?? '',
       extension: w.extension ?? '',
     }));
-  }, [showWatchlistOnly, items, watchlistForKind]);
+  }, [showWatchlistOnly, visibleItems, visibleWatchlist]);
   // TV : l'affiche mémorisée peut se trouver au-delà de la première page (60 titres) ;
   // la limite est étendue dès ce rendu — synchronisée avec le catalogue — pour que la
   // demande de restauration de TvVodScreen trouve sa cible au premier affichage.
@@ -343,6 +409,13 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const progressLabel = useCallback((id: string) => cachedProgress(id).label, [cachedProgress]);
   const play = async (id: string, ext: string, title: string, restart = false, ctx?: { name?: string; poster?: string; seriesId?: string; categoryId?: string }) => {
     if (!account || busy) return;
+    // Contrôle parental : tant que les catégories ne sont pas lues, le verdict d'un
+    // titre enregistré (ou repris) est inconnu — la lecture est refusée plutôt que
+    // laissée passer. Le catalogue relancé restaurera la liste et la lecture.
+    if (hideAdult && categoriesStatus !== 'ready') {
+      toast.error('Contrôle parental : vérification du catalogue en cours. Réessaie dans un instant.');
+      return;
+    }
     try {
       const url = vodUrl(account, kind, id, ext), key = mediaKey(id);
       // Historique de lecture (recommandations « Pour toi ») : titre de la série pour un épisode.
@@ -644,7 +717,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     <TvVodScreen
       kind={kind}
       playlistId={playlist.id}
-      categories={categories}
+      categories={visibleCategories}
       category={category}
       onSelectCategory={handleSelectCategory}
       items={baseItems.slice(0, tvLimit)}
@@ -655,7 +728,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       onLoadMore={handleLoadMore}
       showWatchlistOnly={showWatchlistOnly}
       onToggleWatchlistOnly={() => setShowWatchlistOnly(v => !v)}
-      watchlistCount={watchlistForKind.length}
+      watchlistCount={visibleWatchlist.length}
       watchlistIds={watchlistIds}
       onToggleWatchlistItem={toggleWatchlistItem}
       onOpen={setSelected}
@@ -681,7 +754,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     </div>}
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
       <div className="flex-1 min-w-0">
-        <select aria-label="Catégorie VOD" className="bg-neutral-900 p-3 rounded-md w-full" value={category || ''} onChange={e => { setCategory(e.target.value); setShowWatchlistOnly(false); }}><option value="">Toutes les catégories</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+        <select aria-label="Catégorie VOD" className="bg-neutral-900 p-3 rounded-md w-full" value={category || ''} onChange={e => { setCategory(e.target.value); setShowWatchlistOnly(false); }}><option value="">Toutes les catégories</option>{visibleCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
       </div>
       <Button
         variant={showWatchlistOnly ? 'default' : 'outline'}
@@ -691,11 +764,11 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         title="Afficher uniquement les titres de Ma Liste"
       >
         {showWatchlistOnly ? <BookmarkCheck className="h-4 w-4 mr-1.5 text-primary" /> : <Bookmark className="h-4 w-4 mr-1.5" />}
-        Ma Liste ({watchlistForKind.length})
+        Ma Liste ({visibleWatchlist.length})
       </Button>
     </div>
     {category && (() => {
-      const selectedCat = categories.find(c => c.id === category);
+      const selectedCat = visibleCategories.find(c => c.id === category);
       const matched = selectedCat ? matchStreamingPlatformOrNetwork(selectedCat.name) : null;
       if (!matched) return null;
       return (

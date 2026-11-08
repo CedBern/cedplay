@@ -207,7 +207,7 @@ describe('M3UParser — import par URL', () => {
   it('rejette une réponse HTML (page web au lieu d\'une playlist)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      text: async () => '<html><body>Erreur 404</body></html>',
+      arrayBuffer: async () => new TextEncoder().encode('<html><body>Erreur 404</body></html>').buffer,
     }));
     await expect(M3UParser.parseFromUrlWithProgress('https://serveur/liste.m3u8'))
       .rejects.toThrow('Le serveur ne renvoie pas une liste de chaînes M3U.');
@@ -217,7 +217,7 @@ describe('M3UParser — import par URL', () => {
   it('rejette un contenu sans #EXTINF', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      text: async () => '#EXTM3U\njuste du texte',
+      arrayBuffer: async () => new TextEncoder().encode('#EXTM3U\njuste du texte').buffer,
     }));
     await expect(M3UParser.parseFromUrlWithProgress('https://serveur/liste.m3u8'))
       .rejects.toThrow('Le serveur ne renvoie pas une liste de chaînes M3U.');
@@ -227,7 +227,7 @@ describe('M3UParser — import par URL', () => {
   it('nomme la liste d\'après le hostname seul (sans credentials)', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      text: async () => '#EXTM3U\n#EXTINF:-1 tvg-id="h1",Chaîne H\nhttp://example.com/h.m3u8',
+      arrayBuffer: async () => new TextEncoder().encode('#EXTM3U\n#EXTINF:-1 tvg-id="h1",Chaîne H\nhttp://example.com/h.m3u8').buffer,
     }));
     const pl = await M3UParser.parseFromUrlWithProgress('https://serveur.example:8080/get.php?username=u&password=p');
     expect(pl.name).toBe('Liste — serveur.example');

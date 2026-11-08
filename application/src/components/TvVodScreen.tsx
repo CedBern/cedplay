@@ -247,6 +247,9 @@ export function TvVodScreen({
   const initialPosition = useMemo(() => storedVodPosition(playlistId, kind), [playlistId, kind]);
   const pendingRestore = useRef<string | null>(initialPosition?.itemId ?? null);
   const movedRef = useRef(false);
+  // Ligne à refocaliser après restauration, même si le focus est déjà passé sur les
+  // catégories entre-temps (catalogue chargé en différé).
+  const restoreFocusRow = useRef<number | null>(null);
   useEffect(() => {
     if (!items.length) return;
     const id = pendingRestore.current;
@@ -258,6 +261,7 @@ export function TvVodScreen({
       // arriver après le montage, l'écran étant alors resté sur les catégories).
       setRow(index);
       setColumn('grid');
+      restoreFocusRow.current = index;
       requestFocus();
     }
   }, [items, requestFocus]);
@@ -324,6 +328,12 @@ export function TvVodScreen({
 
   // Déplacer le vrai focus après le rendu de la cible.
   useLayoutEffect(() => {
+    // Retour sur l'affiche mémorisée : reprendre le focus même si l'attente du
+    // catalogue l'avait laissé sur les catégories.
+    if (restoreFocusRow.current !== null && column === 'grid' && row === restoreFocusRow.current) {
+      pendingFocus.current = true;
+      restoreFocusRow.current = null;
+    }
     if (!pendingFocus.current) {
       // La ligne active a changé sans touche (position restaurée) : le focus la suit.
       const a = document.activeElement;

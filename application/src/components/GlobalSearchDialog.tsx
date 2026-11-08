@@ -11,6 +11,7 @@ import { getXtreamAccount } from '@/utils/xtreamCatalog';
 import { invalidateSearchCatalog, searchCatalogSource } from '@/utils/catalogSearch';
 import { normalizeForCompare } from '@/utils/titleNormalize';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useAdultVodCategories } from '@/hooks/useAdultVodCategories';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import type { Channel, PlaylistInfo } from '@/types/channel';
 import { Search, Tv, Film, MonitorPlay, ExternalLink, Play, Lock } from 'lucide-react';
@@ -26,6 +27,8 @@ export interface GlobalSearchDialogProps {
   /** Groupes adultes verrouillés (contrôle parental). */
   lockedGroups?: string[] | undefined;
   unlocked?: boolean | undefined;
+  /** Contrôle parental actif : les catégories VOD adultes sont exclues des résultats. */
+  parentalEnabled?: boolean | undefined;
   /** Appelé quand l'utilisateur clique sur une chaîne verrouillée (ouvre le code). */
   onLockedChannelSelect?: (() => void) | undefined;
 }
@@ -40,6 +43,7 @@ export function GlobalSearchDialog({
   onSelectVod,
   lockedGroups,
   unlocked,
+  parentalEnabled,
   onLockedChannelSelect,
 }: GlobalSearchDialogProps) {
   const [query, setQuery] = useState('');
@@ -50,6 +54,9 @@ export function GlobalSearchDialog({
   const [refresh, setRefresh] = useState(0);
   const [vodLimit, setVodLimit] = useState(12);
   const account = useMemo(() => playlist ? getXtreamAccount(playlist) : null, [playlist]);
+  // Verrou VOD : les catégories du catalogue ne voyagent pas avec les titres, le hook
+  // les résout une fois puis filtre les résultats (fermé tant qu'elles sont inconnues).
+  const adultVod = useAdultVodCategories(playlist, parentalEnabled === true && !unlocked);
   const debouncedQuery = useDebounce(query, 250);
   const catalogEnabled = open && debouncedQuery.trim().length >= 2;
 
@@ -132,8 +139,11 @@ export function GlobalSearchDialog({
     if (!cleanQuery) return [];
     const words = normalizeForCompare(cleanQuery).split(' ').filter(Boolean);
     if (!words.length) return [];
-    return vodIndex.filter(({ name }) => words.every(word => name.includes(word))).map(({ item }) => item);
-  }, [cleanQuery, vodIndex]);
+    return vodIndex
+      .filter(({ item }) => !adultVod.isAdult(item.kind, item.categoryId))
+      .filter(({ name }) => words.every(word => name.includes(word)))
+      .map(({ item }) => item);
+  }, [cleanQuery, vodIndex, adultVod]);
 
   const hasResults = matchedChannels.length > 0 || matchedLockedChannels.length > 0 || matchedStreaming.length > 0 || matchedReplay.length > 0 || matchedVod.length > 0;
 

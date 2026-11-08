@@ -13,13 +13,16 @@ interface MoviesPanelProps {
   /** Rendu télécommande pour le catalogue VOD (l'écran Direct a le sien). */
   tvMode?: boolean | undefined;
   onSearch?: (() => void) | undefined;
+  /** Contrôle parental actif : catégories adultes masquées dans le catalogue. */
+  parentalEnabled?: boolean | undefined;
+  parentalUnlocked?: boolean | undefined;
 }
 
 /**
  * Rubrique « Films » : catalogue VOD de la liste + bibliothèque locale (USB/SD).
  * Le choix de source est une sous-catégorie, pas un onglet dédié.
  */
-export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandled, tvMode, onSearch }: MoviesPanelProps) {
+export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandled, tvMode, onSearch, parentalEnabled, parentalUnlocked }: MoviesPanelProps) {
   const [source, setSource] = useState<'catalog' | 'local'>('catalog');
   const pill = (active: boolean) => tvMode
     ? `tv-chip inline-flex h-10 items-center gap-2 rounded-full px-4 text-[14px] font-medium transition-colors ${active ? 'is-current text-foreground' : 'text-muted-foreground'}`
@@ -40,7 +43,7 @@ export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandl
         </button>
       </div>}
       {source === 'catalog'
-        ? <VodLibrary key={`${playlist.id}:movie`} playlist={playlist} kind="movie" tmdbApiKey={tmdbApiKey ?? undefined} resumeRequest={resumeRequest} onResumeHandled={onResumeHandled} tvMode={tvMode} onSearch={onSearch} onShowLocal={tvMode ? () => setSource('local') : undefined} />
+        ? <VodLibrary key={`${playlist.id}:movie`} playlist={playlist} kind="movie" tmdbApiKey={tmdbApiKey ?? undefined} resumeRequest={resumeRequest} onResumeHandled={onResumeHandled} tvMode={tvMode} onSearch={onSearch} onShowLocal={tvMode ? () => setSource('local') : undefined} parentalEnabled={parentalEnabled} parentalUnlocked={parentalUnlocked} />
         : <LocalLibrary tmdbApiKey={tmdbApiKey ?? null} />}
     </div>
   );

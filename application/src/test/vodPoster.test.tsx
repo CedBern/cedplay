@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { VodPoster } from '@/components/VodPoster';
-import { clearPosterCache, failedPosterUrls, loadedPosterUrls, prefetchPosters } from '@/utils/vodPosterCache';
+import { MAX_FAILED_POSTERS, MAX_LOADED_POSTERS, clearPosterCache, failedPosterUrls, loadedPosterUrls, prefetchPosters, rememberFailedPoster, rememberLoadedPoster } from '@/utils/vodPosterCache';
 
 describe('VodPoster', () => {
   beforeEach(() => {
@@ -55,5 +55,24 @@ describe('VodPoster', () => {
     prefetchPosters(['https://example.com/known.jpg', null, undefined, '', 'https://example.com/new.jpg'], 5);
     // L'URL connue n'est pas réévaluée
     expect(loadedPosterUrls.has('https://example.com/known.jpg')).toBe(true);
+  });
+
+  it('borne le cache des affiches : les plus anciennes entrées sortent', () => {
+    for (let i = 0; i <= MAX_LOADED_POSTERS; i += 1) rememberLoadedPoster(`https://example.com/p${i}.jpg`);
+    expect(loadedPosterUrls.size).toBe(MAX_LOADED_POSTERS);
+    expect(loadedPosterUrls.has('https://example.com/p0.jpg')).toBe(false);
+    expect(loadedPosterUrls.has(`https://example.com/p${MAX_LOADED_POSTERS}.jpg`)).toBe(true);
+
+    for (let i = 0; i <= MAX_FAILED_POSTERS; i += 1) rememberFailedPoster(`https://example.com/bad${i}.jpg`);
+    expect(failedPosterUrls.size).toBe(MAX_FAILED_POSTERS);
+    expect(failedPosterUrls.has('https://example.com/bad0.jpg')).toBe(false);
+  });
+
+  it('ré-ajouter une affiche déjà connue ne change pas sa place dans le cache', () => {
+    rememberLoadedPoster('https://example.com/first.jpg');
+    rememberLoadedPoster('https://example.com/second.jpg');
+    rememberLoadedPoster('https://example.com/first.jpg');
+    const entries = [...loadedPosterUrls];
+    expect(entries).toEqual(['https://example.com/first.jpg', 'https://example.com/second.jpg']);
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlaylistInfo } from '@/types/channel';
-import { buildLiveChannel, canRefreshPlaylist, downloadXtreamLive, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
+import { buildLiveChannel, canRefreshPlaylist, downloadXtreamLive, fetchLiveChannels, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
 
 vi.mock('@/utils/proxy', () => ({ getProxyBase: () => 'http://relais.test' }));
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false } }));
@@ -104,5 +104,23 @@ describe('Actualisation des listes Xtream', () => {
     expect(canRefreshPlaylist({ ...m3uFile, url: 'https://example.test/liste.m3u' })).toBe(true);
     saveLiveSelection('p2', { categoryIds: ['1'], format: 'ts' });
     expect(isXtreamLiveImport(m3uFile)).toBe(true);
+  });
+});
+
+describe('Annulation de l’import Xtream', () => {
+  it('abandonne les requêtes en cours sans les compter comme catégories en échec', async () => {
+    let calls = 0;
+    fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => {
+      calls += 1;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    });
+    const controller = new AbortController();
+    const pending = fetchLiveChannels(account, [{ category_id: '1', category_name: 'FR' }], 'm3u8', undefined, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    await rejected;
+    expect(calls).toBe(1);
   });
 });

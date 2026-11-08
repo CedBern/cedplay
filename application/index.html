@@ -21,9 +21,15 @@
 
   <script>
     // Applique le thème avant le premier rendu (évite le flash clair/sombre).
+    // `iptv_theme` est le miroir écrit par l'app à chaque changement ; `iptv_settings`
+    // reste lu en repli pour les installations issues d'une ancienne version.
     try {
-      var s = JSON.parse(localStorage.getItem('iptv_settings') || '{}');
-      if (s.theme !== 'light') document.documentElement.classList.add('dark');
+      var theme = localStorage.getItem('iptv_theme');
+      if (theme !== 'light' && theme !== 'dark') {
+        var s = JSON.parse(localStorage.getItem('iptv_settings') || '{}');
+        theme = s.theme;
+      }
+      if (theme !== 'light') document.documentElement.classList.add('dark');
     } catch (e) { document.documentElement.classList.add('dark'); }
   </script>
 

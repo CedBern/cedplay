@@ -77,11 +77,24 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
         // Parse hors du thread principal (worker, repli transparent).
         // Fenêtre gardée en mémoire : 8 jours passés (replay) et 10 à venir (séries, rappels).
         const now = Date.now();
-        const data = await parseEPGInWorker(sources.map(s => s.xml), playlist.channels, {
+        const options = {
           overrides: config.channels, offsetHours: config.offsetHours,
           keepFromMs: now - 8 * 86_400_000, keepUntilMs: now + 10 * 86_400_000,
-        }, controller.signal);
+        };
+        // La source principale couvre presque toujours toutes les chaînes : analyser
+        // les guides complémentaires « au cas où » doublait la mémoire des grosses box.
+        // Ils ne sont parsés que pour les chaînes restées sans programme.
+        const primaryData: EPGData = primary ? await parseEPGInWorker(primary.xml, playlist.channels, options, controller.signal) : {};
         if (cancelled) return;
+        const missing = playlist.channels.filter(channel => !primaryData[channel.id]);
+        const rest = sources.filter(source => source !== primary);
+        const secondaryData: EPGData = missing.length && rest.length
+          ? await parseEPGInWorker(rest.map(source => source.xml), missing, options, controller.signal)
+          : {};
+        if (cancelled) return;
+        const data = secondaryData && Object.keys(secondaryData).length
+          ? { ...primaryData, ...secondaryData }
+          : primaryData;
         setState({ data, status, fetchedAt, sourceCount: sources.length });
         void saveParsedEPGCache(playlist.id, cacheUrl, fetchedAt, data);
       } catch {

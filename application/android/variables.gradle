@@ -1,7 +1,9 @@
 ext {
     minSdkVersion = 22
-    compileSdkVersion = 34
-    targetSdkVersion = 34
+    // API 35 (Android 15) : cible exigée par Play depuis août 2025 et utile pour
+    // rester aligné sur les WebView récentes. AGP 8.9+ est requis (voir build.gradle).
+    compileSdkVersion = 35
+    targetSdkVersion = 35
     androidxActivityVersion = '1.8.0'
     androidxAppCompatVersion = '1.6.1'
     androidxCoordinatorLayoutVersion = '1.2.0'

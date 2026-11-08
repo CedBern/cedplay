@@ -42,10 +42,10 @@ export function liveCategoriesUrl(account: XtreamLiveAccount): string {
   return liveApiUrl(account, 'categories');
 }
 
-export async function fetchLiveCategories(account: XtreamLiveAccount): Promise<XtreamLiveCategory[]> {
+export async function fetchLiveCategories(account: XtreamLiveAccount, signal?: AbortSignal): Promise<XtreamLiveCategory[]> {
   // Android : requête native (httpGetJson) — le webview bloque un fetch direct vers
   // un serveur Xtream qui n'envoie pas d'en-têtes CORS.
-  const { ok, status, data } = await httpGetJson(liveCategoriesUrl(account));
+  const { ok, status, data } = await httpGetJson(liveCategoriesUrl(account), signal ? { signal } : {});
   if (!ok) throw new Error(`Catégories Xtream indisponibles (${status})`);
   if (!Array.isArray(data)) throw new Error('Réponse Xtream inattendue');
   return data.filter((c): c is XtreamLiveCategory => !!c && typeof c === 'object'
@@ -87,15 +87,19 @@ export async function fetchLiveChannels(
   categories: XtreamLiveCategory[],
   format: XtreamStreamFormat,
   onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<LiveChannelsResult> {
+  const cancelled = () => new DOMException('Import annulé.', 'AbortError');
+  if (signal?.aborted) throw cancelled();
   const perCategory: Channel[][] = categories.map(() => []);
   const failed: string[] = [];
   let next = 0;
   let done = 0;
   const fetchCategory = async (index: number) => {
+    if (signal?.aborted) throw cancelled();
     const cat = categories[index];
     try {
-      const { ok, data } = await httpGetJson(liveApiUrl(account, 'streams', cat.category_id));
+      const { ok, data } = await httpGetJson(liveApiUrl(account, 'streams', cat.category_id), signal ? { signal } : {});
       if (!ok) { failed.push(cat.category_name); return; }
       const streams = Array.isArray(data) ? (data as RawStream[]) : null;
       if (!streams) { failed.push(cat.category_name); return; }
@@ -103,7 +107,10 @@ export async function fetchLiveChannels(
         if (!s || s.stream_id === undefined || s.stream_id === null || typeof s.name !== 'string') continue;
         perCategory[index].push(buildLiveChannel(account, s, cat.category_name, format));
       }
-    } catch {
+    } catch (error) {
+      // Une annulation explicite (fermeture du dialogue) n'est pas une catégorie en échec.
+      if (signal?.aborted) throw cancelled();
+      if (error instanceof DOMException && error.name === 'AbortError') throw cancelled();
       failed.push(cat.category_name);
     } finally {
       done += 1;

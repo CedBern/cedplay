@@ -234,7 +234,8 @@ describe('XtreamLoginDialog', () => {
 
     // Requête passée par le relais avec les identifiants encodés.
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://relais.test/xtream/categories?server=http%3A%2F%2Fserveur.test%3A8080&username=user&password=pass'
+      'http://relais.test/xtream/categories?server=http%3A%2F%2Fserveur.test%3A8080&username=user&password=pass',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(onPlaylistLoaded).not.toHaveBeenCalled();
   });

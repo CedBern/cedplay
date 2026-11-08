@@ -7,11 +7,12 @@
     "build": "vite build",
     "lint": "eslint --quiet ./src",
     "preview": "vite preview --host 127.0.0.1 --port 5178 --strictPort",
+    "proxy": "node proxy-server.mjs",
     "test": "vitest run",
     "test:ui": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
-    "verify": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && eslint --quiet ./src && vitest run && vite build"
+    "verify": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit && eslint ./src && vitest run && vite build"
   },
   "dependencies": {
     "@capacitor/android": "6.2.3",

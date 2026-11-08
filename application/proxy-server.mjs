@@ -1,16 +1,32 @@
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
+import { assertPublicTarget, parseXtreamServer } from './proxy-guards.mjs';
 
 const PORT = Number(process.env.IPTV_PROXY_PORT || 5179);
 const HOST = '127.0.0.1';
 const USER_AGENT = 'IPTVSmartersPro';
 
-function setCorsHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', '*');
-  res.setHeader('Access-Control-Expose-Headers', '*');
+// Le relais n'est utile qu'au serveur de développement (Vite sur 5178). Toute autre
+// origine navigateur est refusée : sans cela, une page tierce ouverte dans le même
+// navigateur pourrait lire le réseau local et les pages d'administration des box.
+const DEFAULT_ALLOWED_ORIGINS = ['http://127.0.0.1:5178', 'http://localhost:5178'];
+const ALLOWED_ORIGINS = new Set(
+  (process.env.IPTV_PROXY_ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(','))
+    .split(',')
+    .map(origin => origin.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+);
+
+function setCorsHeaders(req, res) {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+  }
 }
 
 function extractErrorMessage(err) {
@@ -70,7 +86,13 @@ async function fetchWithRetry(targetUrl, headers = {}, retries = 2) {
 }
 
 const server = http.createServer(async (req, res) => {
-  setCorsHeaders(res);
+  setCorsHeaders(req, res);
+  const origin = req.headers.origin;
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Origine non autorisée.' }));
+    return;
+  }
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
@@ -105,6 +127,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (!['http:', 'https:'].includes(target.protocol)) { res.writeHead(400); res.end('HTTP requis'); return; }
+    try {
+      await assertPublicTarget(target);
+    } catch (err) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Cible refusée.' }));
+      return;
+    }
 
     const isHttps = target.protocol === 'https:';
     const client = isHttps ? https : http;
@@ -131,7 +160,7 @@ const server = http.createServer(async (req, res) => {
         const redirect = new URL(upstreamRes.headers.location, target);
         outHeaders.Location = `http://${HOST}:${PORT}/proxy?url=${encodeURIComponent(redirect.href)}`;
       }
-      setCorsHeaders(res);
+      setCorsHeaders(req, res);
       res.writeHead(upstreamRes.statusCode || 200, outHeaders);
 
       upstreamRes.pipe(res);
@@ -165,15 +194,17 @@ const server = http.createServer(async (req, res) => {
     const username = reqUrl.searchParams.get('username'), password = reqUrl.searchParams.get('password');
     let endpoint;
     try {
-      const base = new URL(reqUrl.searchParams.get('server'));
-      if (!['http:', 'https:'].includes(base.protocol) || !username || !password || !allowed.has(action)) throw new Error();
-      endpoint = new URL(`${base.href.replace(/\/+$/, '')}/player_api.php`);
+      const base = parseXtreamServer(reqUrl.searchParams.get('server'));
+      if (!base || !username || !password || !allowed.has(action)) throw new Error();
+      endpoint = new URL(`${base}/player_api.php`);
       endpoint.search = new URLSearchParams({ username, password, ...(action ? { action } : {}) }).toString();
       for (const key of ['category_id', 'vod_id', 'series_id']) {
         const value = reqUrl.searchParams.get(key);
         if (value !== null) { if (!/^\d+$/.test(value)) throw new Error(); endpoint.searchParams.set(key, value); }
       }
     } catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Requête catalogue invalide' })); return; }
+    // Même politique de cible que /proxy : un serveur local ou privé est refusé.
+    try { await assertPublicTarget(endpoint); } catch (err) { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: err.message || 'Cible refusée.' })); return; }
     try {
       const upstream = await fetchWithRetry(endpoint.href);
       if (upstream.statusCode < 200 || upstream.statusCode >= 300) { upstream.resume(); throw new Error(); }
@@ -187,16 +218,16 @@ const server = http.createServer(async (req, res) => {
 
   // Xtream categories helper
   if (reqUrl.pathname === '/xtream/categories') {
-    const serverUrl = reqUrl.searchParams.get('server');
+    const cleanServer = parseXtreamServer(reqUrl.searchParams.get('server'));
     const username = reqUrl.searchParams.get('username');
     const password = reqUrl.searchParams.get('password');
-    if (!serverUrl || !username || !password) {
+    if (!cleanServer || !username || !password) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Champs manquants' }));
       return;
     }
-    const cleanServer = serverUrl.replace(/\/+$/, '');
     console.log(`[${timestamp}] [XTREAM CATEGORIES] Serveur: ${cleanServer}`);
+    try { await assertPublicTarget(new URL(cleanServer)); } catch (err) { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: err.message || 'Cible refusée.' })); return; }
 
     const target = `${cleanServer}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&action=get_live_categories`;
     try {
@@ -220,17 +251,17 @@ const server = http.createServer(async (req, res) => {
 
   // Xtream streams helper
   if (reqUrl.pathname === '/xtream/streams') {
-    const serverUrl = reqUrl.searchParams.get('server');
+    const cleanServer = parseXtreamServer(reqUrl.searchParams.get('server'));
     const username = reqUrl.searchParams.get('username');
     const password = reqUrl.searchParams.get('password');
     const categoryId = reqUrl.searchParams.get('category_id');
-    if (!serverUrl || !username || !password || !categoryId) {
+    if (!cleanServer || !username || !password || !categoryId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Champs manquants' }));
       return;
     }
-    const cleanServer = serverUrl.replace(/\/+$/, '');
     console.log(`[${timestamp}] [XTREAM STREAMS] Catégorie: ${categoryId}`);
+    try { await assertPublicTarget(new URL(cleanServer)); } catch (err) { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: err.message || 'Cible refusée.' })); return; }
 
     const target = `${cleanServer}/player_api.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&action=get_live_streams&category_id=${encodeURIComponent(categoryId)}`;
     try {

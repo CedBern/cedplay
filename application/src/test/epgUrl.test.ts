@@ -103,6 +103,22 @@ describe('fetchEPGSource', () => {
     expect(result).toMatchObject({ xml: '<tv>secours</tv>', stale: true });
   });
 
+  it('sert le guide téléchargé même si le quota empêche de le mettre en cache', async () => {
+    const playlist = makePlaylist('quota-plein');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(XMLTV)));
+    const put = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(() => {
+      throw new DOMException('quota dépassé', 'QuotaExceededError');
+    });
+    try {
+      // Le guide de la session reste utilisable ; seul son cache est perdu.
+      await expect(fetchEPGSource(playlist, { ...baseSettings, epgUrl: 'https://epg.test/guide.xml' }))
+        .resolves.toMatchObject({ xml: XMLTV, stale: false });
+      await expect(getMeta(`epgCache_${playlist.id}`)).resolves.toBeUndefined();
+    } finally {
+      put.mockRestore();
+    }
+  });
+
   it('échoue sans cache de secours si la réponse n\'est pas du XMLTV', async () => {
     const playlist = makePlaylist('no-fallback');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>page web</html>')));

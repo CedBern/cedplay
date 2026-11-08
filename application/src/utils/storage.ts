@@ -9,6 +9,11 @@ const STORAGE_KEYS = {
   LAST_PLAYLIST: 'iptv_last_playlist'
 };
 
+// Miroir synchrone du thème pour le script inline d'index.html : les réglages
+// définitifs vivent en IndexedDB, illisible avant le premier rendu.
+// Hors STORAGE_KEYS : purgeLegacyKeys ne doit pas le supprimer.
+const THEME_MIRROR_KEY = 'iptv_theme';
+
 // Les jetons de lecture TMDB sont plus longs que les anciennes clés API v3.
 const MAX_TMDB_CREDENTIAL_LENGTH = 4096;
 
@@ -89,6 +94,12 @@ const appSettingsSchema = z.object({
 });
 
 // (Removed unused AppSettingsSchema alias after switching to safeParse)
+
+/** Au-delà, l'écran de démarrage repart des réglages synchrones au lieu d'attendre
+ *  une base bloquée par un autre onglet ou une migration impossible. */
+const SETTINGS_LOAD_TIMEOUT_MS = 8_000;
+
+class SettingsLoadTimeoutError extends Error {}
 
 export class StorageManager {
   // In-memory cache to avoid repeated IndexedDB reads within a session
@@ -193,7 +204,7 @@ export class StorageManager {
   static async loadSettingsAsync(force = false): Promise<AppSettings> {
   if (!force && this._settingsCache) { this._cacheHits += 1; return this._settingsCache; }
     if (!force && this._loadingPromise) return this._loadingPromise;
-    this._loadingPromise = (async () => {
+    const loading = (async () => {
     if (this._settingsCache && !force) { // should have returned earlier; defensive
       this._cacheHits += 1; return this._settingsCache;
     }
@@ -233,12 +244,45 @@ export class StorageManager {
   this._lastLoadTs = Date.now();
   return this._settingsCache;
     })();
-    try {
-      const result = await this._loadingPromise;
-      return result;
-    } finally {
-      this._loadingPromise = undefined;
-    }
+    // La promesse PARTAGÉE est la version protégée : sans cela, seul le premier
+    // appelant profitait du délai et du secours, et les appelants suivants
+    // (App et le lecteur au montage) restaient bloqués sur IndexedDB.
+    const shared: { promise?: Promise<AppSettings> } = {};
+    const protectedLoad = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new SettingsLoadTimeoutError()), SETTINGS_LOAD_TIMEOUT_MS);
+      });
+      try {
+        return await Promise.race([loading, timeout]);
+      } catch (error) {
+        // Une base inaccessible (ouverture bloquée, VersionError, quota) ne doit pas
+        // laisser l'application sur un écran de chargement éternel : les réglages
+        // synchrones de localStorage permettent de démarrer, une lecture ultérieure
+        // pourra réessayer.
+        if (error instanceof SettingsLoadTimeoutError) {
+          console.warn('[storage] Lecture des réglages trop lente : réglages de secours utilisés.');
+        } else {
+          console.warn('[storage] Réglages illisibles : réglages de secours utilisés.', error);
+        }
+        return this.getFallbackSettings();
+      } finally {
+        clearTimeout(timer);
+        if (this._loadingPromise === shared.promise) this._loadingPromise = undefined;
+      }
+    })();
+    shared.promise = protectedLoad;
+    this._loadingPromise = protectedLoad;
+    return protectedLoad;
+  }
+
+  /** Réglages de secours quand IndexedDB est muette ou en erreur. Le miroir de
+   *  thème reste prioritaire : le repli synchrone peut être plus ancien que le
+   *  dernier choix de l'utilisateur (au démarrage, il précède le chargement). */
+  private static getFallbackSettings(): AppSettings {
+    const base = this._settingsCache ?? this.getSettings();
+    const mirror = this.getThemeMirror();
+    return mirror && mirror !== base.theme ? { ...base, theme: mirror } : base;
   }
 
   static async saveSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
@@ -285,6 +329,22 @@ export class StorageManager {
 
   static setLastPlaylist(playlistName: string): void {
     localStorage.setItem(STORAGE_KEYS.LAST_PLAYLIST, playlistName);
+  }
+
+  /** Miroir synchrone du thème, lu par le script inline d'index.html au démarrage. */
+  static setThemeMirror(theme: 'light' | 'dark'): void {
+    try {
+      localStorage.setItem(THEME_MIRROR_KEY, theme);
+    } catch { /* stockage plein ou désactivé : le thème s'appliquera après le chargement */ }
+  }
+
+  static getThemeMirror(): 'light' | 'dark' | null {
+    try {
+      const value = localStorage.getItem(THEME_MIRROR_KEY);
+      return value === 'light' || value === 'dark' ? value : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

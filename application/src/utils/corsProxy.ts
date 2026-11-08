@@ -5,6 +5,7 @@
 
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getActiveUserAgent } from '@/utils/userAgent';
+import { assertImportSize, decodeImportText } from '@/utils/textImport';
 
 export class CORSProxy {
   static async fetchWithProxy(url: string, options: RequestInit = {}): Promise<string> {
@@ -26,9 +27,11 @@ export class CORSProxy {
         if (response.status < 200 || response.status >= 300) {
           throw new Error(`Import impossible : HTTP ${response.status}. Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.`);
         }
-        return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+        const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+        assertImportSize(text.length, 'playlist');
+        return text;
       } catch (err) {
-        if (err instanceof Error && err.message.startsWith('Import impossible : HTTP')) throw err;
+        if (err instanceof Error && (err.message.startsWith('Import impossible : HTTP') || err.message.startsWith('Liste trop volumineuse'))) throw err;
         throw new Error('Import impossible (connexion ou accès). Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.');
       }
     }
@@ -43,9 +46,14 @@ export class CORSProxy {
       if (!response.ok) {
         throw new Error(`Import impossible : HTTP ${response.status}. Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.`);
       }
-      return await response.text();
+      // Refus avant lecture quand le serveur annonce déjà un fichier trop gros.
+      const declared = Number(response.headers?.get?.('content-length'));
+      if (Number.isFinite(declared) && declared > 0) assertImportSize(declared, 'playlist');
+      // Octets puis décodage explicite : une liste Latin-1 sans en-tête de jeu
+      // de caractères redevenait illisible après le décodage UTF-8 imposé par text().
+      return decodeImportText(new Uint8Array(await response.arrayBuffer()), 'playlist');
     } catch (err) {
-      if (err instanceof Error && err.message.startsWith('Import impossible : HTTP')) {
+      if (err instanceof Error && (err.message.startsWith('Import impossible : HTTP') || err.message.startsWith('Liste trop volumineuse'))) {
         throw err;
       }
       throw new Error('Import impossible (connexion, accès ou CORS). Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.');

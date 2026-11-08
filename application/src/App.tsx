@@ -12,12 +12,21 @@ import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 
 const App = () => {
   useRemoteNavigation();
-  const [settings, setSettings] = useState<AppSettings>(() => StorageManager.getSettings());
+  // Le miroir de thème (localStorage) prime sur les réglages synchrones hérités :
+  // sans lui, un utilisateur en thème clair verrait un cadre sombre le temps que
+  // les réglages arrivent d'IndexedDB.
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    const initial = StorageManager.getSettings();
+    const mirror = StorageManager.getThemeMirror();
+    return mirror ? { ...initial, theme: mirror } : initial;
+  });
   useEffect(() => { (async () => { const s = await StorageManager.loadSettingsAsync(); setSettings(s); if (s.telemetryPersistence !== false) globalTelemetryLogger.enablePersistence(); })(); }, []);
   // Apply theme class when settings change
   useEffect(() => {
     const root = document.documentElement;
     if (settings.theme === 'dark') root.classList.add('dark'); else root.classList.remove('dark');
+    // Miroir synchrone pour le script inline d'index.html (évite le flash au lancement).
+    StorageManager.setThemeMirror(settings.theme);
   }, [settings.theme]);
   // Bouton retour Android : ferme le plein écran ou le dialogue ouvert, sinon
   // revient dans l'historique, sinon quitte l'app.

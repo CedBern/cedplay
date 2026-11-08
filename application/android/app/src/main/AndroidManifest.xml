@@ -39,6 +39,10 @@
         <package android:name="com.dazn" />
     </queries>
 
+    <!-- largeHeap conservé volontairement (P2-19) : catalogues Xtream/Stalker de
+         plusieurs milliers de chaînes et guides EPG volumineux. Il relève seulement
+         le plafond du tas, sans préallocation ; le retirer exposerait ces imports à
+         des OutOfMemoryError. -->
     <application
         android:banner="@drawable/tv_banner"
         android:allowBackup="false"

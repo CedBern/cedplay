@@ -99,28 +99,47 @@ export async function fetchXtreamLimits(playlistId: string, account: XtreamAccou
   return limits;
 }
 
+/** Panneau qui accepte la connexion sans répondre : sans borne, le catalogue
+ *  restait en attente indéfiniment et le dialogue ne pouvait pas être annulé. */
+const CATALOG_TIMEOUT_MS = 20_000;
+
+/** Le serveur a répondu, mais le compte est refusé : ne pas le présenter comme une panne réseau. */
+class CatalogAuthError extends Error {}
+
 export async function catalogRequest(account: XtreamAccount, action: string, params: Record<string, string> = {}, signal?: AbortSignal): Promise<unknown> {
   // action vide : informations du compte et du serveur (fuseau horaire).
   const query = new URLSearchParams({ username: account.username, password: account.password, ...(action ? { action } : {}), ...params });
   let data: unknown;
+  if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+  // Délai par défaut, composé avec l'annulation de l'appelant (changement de liste, fermeture).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CATALOG_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   try {
     if (Capacitor.isNativePlatform()) {
-      const response = await CapacitorHttp.get({ url: `${account.server}/player_api.php?${query}`, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json', connectTimeout: 15000, readTimeout: 30000 });
+      const response = await CapacitorHttp.get({ url: `${account.server}/player_api.php?${query}`, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json', connectTimeout: 15000, readTimeout: CATALOG_TIMEOUT_MS });
       if (response.status < 200 || response.status >= 300) throw new Error();
       data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
     } else {
       query.set('server', account.server);
-      const response = await fetch(`${getProxyBase()}/xtream/catalog?${query}`, { ...(signal ? { signal } : {}) });
+      const response = await fetch(`${getProxyBase()}/xtream/catalog?${query}`, { signal: controller.signal });
       if (!response.ok) throw new Error();
       data = await response.json();
     }
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-    if (object(object(data).user_info).auth === 0 || object(data).error) throw new Error();
+    const auth = object(object(data).user_info).auth;
+    if (auth === 0 || object(data).error) throw new CatalogAuthError();
     return data;
   } catch (error) {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (error instanceof CatalogAuthError) throw new Error('Identifiants refusés ou abonnement expiré chez le fournisseur.');
+    if (controller.signal.aborted) throw new Error('Le fournisseur ne répond pas (délai dépassé). Vérifie ta connexion.');
     // Never surface a transport exception containing the account URL.
     throw new Error('Catalogue indisponible. Vérifie ta connexion et l’accès VOD de ton compte.');
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 export function parseCategories(data: unknown): CatalogCategory[] {

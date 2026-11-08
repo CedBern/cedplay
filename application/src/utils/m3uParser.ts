@@ -1,5 +1,6 @@
 import { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
+import { assertImportSize, decodeImportText } from '@/utils/textImport';
 
 /** Valeurs de l'en-tête #EXTM3U appliquées aux chaînes qui ne les précisent pas. */
 interface M3UHeader {
@@ -118,6 +119,7 @@ export class M3UParser {
   ): Promise<PlaylistInfo> {
     // File parsing stays offline; URL imports use the explicit URL entry point.
     if (batchSize < 1) throw new Error('Taille de lot invalide.');
+    assertImportSize(content.length, 'playlist');
     const rawLines = content.split('\n');
     const lines = rawLines.map(l => l.trim()).filter(l => l);
     const totalLines = lines.length;
@@ -313,37 +315,15 @@ export class M3UParser {
   }
 
   static async parseFromFile(file: File): Promise<PlaylistInfo> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const content = e.target?.result as string;
-          const result = this.parseM3U(content, file.name);
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        }
-      };
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      reader.readAsText(file);
-    });
+    assertImportSize(file.size, 'playlist');
+    const content = decodeImportText(new Uint8Array(await file.arrayBuffer()), 'playlist');
+    return this.parseM3U(content, file.name);
   }
 
   static async parseFromFileWithProgress(file: File, onProgress?: (percent: number, channelsParsed: number) => void): Promise<PlaylistInfo> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const content = e.target?.result as string;
-          const result = await this.parseM3UWithProgress(content, file.name, onProgress);
-          resolve(result);
-        } catch (error) {
-          reject(error);
-        }
-      };
-      reader.onerror = () => reject(new Error('Failed to read file'));
-      reader.readAsText(file);
-    });
+    assertImportSize(file.size, 'playlist');
+    const content = decodeImportText(new Uint8Array(await file.arrayBuffer()), 'playlist');
+    return this.parseM3UWithProgress(content, file.name, onProgress);
   }
 
   static async parseFromUrl(url: string): Promise<PlaylistInfo> {

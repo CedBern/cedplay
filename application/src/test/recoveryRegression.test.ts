@@ -55,7 +55,7 @@ describe('Reprise : identifiants et confidentialité des imports', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
   it('un import URL masque les identifiants dans le nom de liste', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, text: async () => list(['Alpha']) }));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode(list(['Alpha'])).buffer }));
     const result = await M3UParser.parseFromUrl('https://example.test/list?password=secret');
     expect(result.name).toContain('example.test'); expect(result.name).not.toContain('secret');
   });

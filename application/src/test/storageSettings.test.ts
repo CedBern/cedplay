@@ -213,4 +213,94 @@ describe('StorageManager settings validation & migration', () => {
     const loaded = await StorageManager.loadSettingsAsync();
     expect(loaded.tvPreviewMode).toBe('manual');
   });
+
+  it('rend les réglages synchrones quand la base ne répond pas', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Ouverture bloquée par un autre onglet : la promesse ne se résout jamais.
+    getSettingsFromDBMock.mockReturnValue(new Promise(() => {}));
+    const pending = StorageManager.loadSettingsAsync(true);
+    await vi.advanceTimersByTimeAsync(8_000);
+    const settings = await pending;
+    expect(settings).toEqual(StorageManager.defaultSettings());
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('trop lente'));
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('partage le délai et le secours avec tous les appelants concurrents', async () => {
+    localStorage.clear();
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    getSettingsFromDBMock.mockReturnValue(new Promise(() => {}));
+    const settled: string[] = [];
+    const first = StorageManager.loadSettingsAsync().then(settings => { settled.push('first'); return settings; });
+    const second = StorageManager.loadSettingsAsync().then(settings => { settled.push('second'); return settings; });
+    await vi.advanceTimersByTimeAsync(8_001);
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      StorageManager.defaultSettings(),
+      StorageManager.defaultSettings(),
+    ]);
+    expect(settled).toEqual(['first', 'second']);
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('renvoie le secours à tous les appelants quand IndexedDB échoue', async () => {
+    localStorage.clear();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    getSettingsFromDBMock.mockRejectedValue(new Error('VersionError'));
+    const results = await Promise.allSettled([
+      StorageManager.loadSettingsAsync(),
+      StorageManager.loadSettingsAsync(),
+    ]);
+    expect(results.map(result => result.status)).toEqual(['fulfilled', 'fulfilled']);
+    warn.mockRestore();
+  });
+
+  it('conserve le thème du miroir dans le secours', async () => {
+    localStorage.clear();
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    StorageManager.setThemeMirror('light');
+    getSettingsFromDBMock.mockReturnValue(new Promise(() => {}));
+    const pending = StorageManager.loadSettingsAsync();
+    await vi.advanceTimersByTimeAsync(8_001);
+    expect((await pending).theme).toBe('light');
+    expect(StorageManager.getThemeMirror()).toBe('light');
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+});
+
+describe('miroir du thème (anti-flash au lancement)', () => {
+  beforeEach(() => { localStorage.clear(); });
+
+  it('écrit et relit le thème dans localStorage', () => {
+    expect(StorageManager.getThemeMirror()).toBeNull();
+    StorageManager.setThemeMirror('light');
+    expect(localStorage.getItem('iptv_theme')).toBe('light');
+    expect(StorageManager.getThemeMirror()).toBe('light');
+    StorageManager.setThemeMirror('dark');
+    expect(StorageManager.getThemeMirror()).toBe('dark');
+  });
+
+  it('ignore une valeur inconnue et survit à un stockage indisponible', () => {
+    localStorage.setItem('iptv_theme', 'sépia');
+    expect(StorageManager.getThemeMirror()).toBeNull();
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('plein', 'QuotaExceededError');
+    });
+    try {
+      expect(() => StorageManager.setThemeMirror('light')).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('n’est pas effacé par la purge des clés héritées', () => {
+    StorageManager.setThemeMirror('light');
+    StorageManager.purgeLegacyKeys();
+    expect(StorageManager.getThemeMirror()).toBe('light');
+  });
 });

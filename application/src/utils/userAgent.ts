@@ -33,16 +33,46 @@ function parseJsonLoose(text: string): unknown {
   try { return JSON.parse(text); } catch { return text; }
 }
 
+/** Fournisseur qui accepte la connexion sans répondre : sans borne, le dialogue
+ *  d'import restait sur « Import en cours… » indéfiniment. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+
+export interface HttpGetOptions {
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
+}
+
 /**
  * GET JSON : Android = requête native CapacitorHttp (ni CORS ni mixed content, donc
  * les serveurs Xtream sans en-têtes CORS répondent quand même) ; web = fetch standard.
  * Le corps est parsé même hors 2xx : le relais web renvoie ses erreurs en JSON.
  */
-export async function httpGetJson(url: string): Promise<{ ok: boolean; status: number; data: unknown }> {
+export async function httpGetJson(url: string, options: HttpGetOptions = {}): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const cancelled = () => new DOMException('Cancelled', 'AbortError');
+  if (options.signal?.aborted) throw cancelled();
   if (Capacitor.isNativePlatform()) {
-    const response = await CapacitorHttp.get({ url, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json', connectTimeout: 15000, readTimeout: 30000 });
+    const response = await CapacitorHttp.get({
+      url, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json',
+      connectTimeout: Math.min(15000, timeoutMs), readTimeout: timeoutMs,
+    });
     return { ok: response.status >= 200 && response.status < 300, status: response.status, data: typeof response.data === 'string' ? parseJsonLoose(response.data) : response.data };
   }
-  const res = await fetch(url);
-  return { ok: res.ok, status: res.status, data: await res.json().catch(() => null) };
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, timeoutMs);
+  options.signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    return { ok: res.ok, status: res.status, data: await res.json().catch(() => null) };
+  } catch (error) {
+    if (options.signal?.aborted) throw cancelled();
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Le serveur ne répond pas (délai dépassé). Vérifie la connexion.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abort);
+  }
 }

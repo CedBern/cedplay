@@ -341,11 +341,11 @@ export function IPTVPlayer() {
   );
   const customGroupOrder = !!customization.groupOrder?.length;
   const alphabetical = customization.channelSort === 'name';
-  const toggleChannelSort = () => {
+  const toggleChannelSort = useCallback(() => {
     const { channelSort: _sort, ...rest } = customization;
     updateCustomization(alphabetical ? rest : { ...rest, channelSort: 'name' });
     toast.success(alphabetical ? 'Ordre de la liste rétabli.' : 'Chaînes triées de A à Z.');
-  };
+  }, [customization, alphabetical, updateCustomization]);
   const visibleGroups = useMemo(() => {
     if (!currentPlaylist) return [];
     if (!hiddenGroups.length && !hiddenChannels.length) return customizedGroups;
@@ -397,20 +397,6 @@ export function IPTVPlayer() {
     });
   }, [activeUserAgent, appSettings.playerBuffer, appSettings.playerDecoder, appSettings.playerAfr]);
 
-  // Raccourcis Android (appui long sur l'icône) : les 4 premiers favoris de la liste.
-  useEffect(() => {
-    if (!currentPlaylist || !NativePlayerBridge.isAvailable()) return;
-    // Chaînes personnalisées : le nom et le logo choisis apparaissent aussi hors de l'application.
-    const byId = new Map(customizedGroups.flatMap(g => g.channels).map(c => [c.id, c]));
-    const favorites = favoriteIds.map(id => byId.get(id)).filter((c): c is Channel => Boolean(c));
-    void NativePlayerBridge.setChannelShortcuts(favorites.slice(0, 4).map(c => ({ id: c.id, name: c.name })));
-    // Android TV : rangée Favoris de l'écran d'accueil, au calme (écriture dans le lanceur).
-    const t = window.setTimeout(() => {
-      void NativePlayerBridge.setHomeFavorites(favorites.slice(0, 30).map(c => ({ id: c.id, name: c.name, ...(c.logo ? { logo: c.logo } : {}) })));
-    }, 3000);
-    return () => window.clearTimeout(t);
-  }, [currentPlaylist, customizedGroups, favoriteIds]);
-
   // Liste ordonnée des chaînes (zapping) et guide des programmes.
   const orderedChannels = useMemo(() => {
     const flat = visibleGroups.flatMap(g => g.channels);
@@ -440,6 +426,22 @@ export function IPTVPlayer() {
       : orderedChannels),
     [orderedChannels, parentalLockedGroups, parentalUnlocked],
   );
+
+  // Raccourcis Android (appui long sur l'icône) : les 4 premiers favoris jouables de la liste.
+  useEffect(() => {
+    if (!currentPlaylist || !NativePlayerBridge.isAvailable()) return;
+    // Chaînes personnalisées : le nom et le logo choisis apparaissent aussi hors de l'application.
+    // Filtre par playableChannels : le nom et l'affiche d'une chaîne adulte ne doivent pas
+    // apparaître sur l'écran d'accueil du téléviseur quand le contrôle parental est actif.
+    const byId = new Map(playableChannels.map(c => [c.id, c]));
+    const favorites = favoriteIds.map(id => byId.get(id)).filter((c): c is Channel => Boolean(c));
+    void NativePlayerBridge.setChannelShortcuts(favorites.slice(0, 4).map(c => ({ id: c.id, name: c.name })));
+    // Android TV : rangée Favoris de l'écran d'accueil, au calme (écriture dans le lanceur).
+    const t = window.setTimeout(() => {
+      void NativePlayerBridge.setHomeFavorites(favorites.slice(0, 30).map(c => ({ id: c.id, name: c.name, ...(c.logo ? { logo: c.logo } : {}) })));
+    }, 3000);
+    return () => window.clearTimeout(t);
+  }, [currentPlaylist, playableChannels, favoriteIds]);
 
   // Liste complète pour le zapping Android : transmise au calme, une fois par changement de liste.
   useEffect(() => {
@@ -518,6 +520,12 @@ export function IPTVPlayer() {
   // court-circuiteraient la mémoïsation des cartes (re-rendu complet à chaque zap ou frappe).
   const handleNativeChannelSelect = useCallback((channel: Channel) => { void openNativeChannel(channel); }, [openNativeChannel]);
   const handleRecordRequest = useCallback((channel: Channel) => { setRecordingsChannel(channel); setRecordingsOpen(true); }, []);
+  // Entrées de la colonne des catégories (Direct TV) : des flèches inline recréées à chaque
+  // rendu feraient rebâtir le `useMemo` de TvLiveScreen, qui réarme alors son minuteur de
+  // catégorie au moindre rafraîchissement du parent (guide, favoris, zapping).
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const showGuide = useCallback(() => setChannelView('grid'), []);
+  const openGroupManager = useCallback(() => setGroupManagerOpen(true), []);
 
   // Chaque tuile de la mosaïque ouvre un flux chez le fournisseur : on coupe le
   // lecteur web d'abord, sinon il garde sa connexion ouverte pendant la mosaïque.
@@ -956,7 +964,7 @@ export function IPTVPlayer() {
         <Tabs activationMode="manual" value={navSectionFor(activeTab, tvMode)} onValueChange={value => navigate(value as NavSection)} className="space-y-4">
           {tvMode ? appHeader : <MainNavigation onNavigate={navigate} />}
 
-          <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} /></Suspense></TabsContent>
+          <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} parentalEnabled={appSettings.parentalControlEnabled === true} /></Suspense></TabsContent>
           <TabsContent value="podcasts" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyPodcastsPanel tvMode={tvMode} /></Suspense></TabsContent>
           <TabsContent value={tvMode ? (activeTab === 'series' ? 'series' : 'movies') : 'vod'} className="screen-enter space-y-4">
             {!tvMode && <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
@@ -968,8 +976,8 @@ export function IPTVPlayer() {
                 className={`min-h-10 rounded-full px-5 text-sm font-medium transition-colors ${activeTab === kind ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
               >{kind === 'movies' ? 'Films' : 'Séries'}</button>)}
             </div>}
-            {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={() => setSearchOpen(true)} /></Suspense></div>}
-            {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={() => setSearchOpen(true)} /></Suspense></div>}
+            {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} /></Suspense></div>}
+            {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} /></Suspense></div>}
           </TabsContent>
           <TabsContent value="more" className="screen-enter space-y-4">
             {activeTab === 'more' && <div className="screen-enter"><MorePanel onOpen={openMore}>{tvMode && playlistMenu}</MorePanel></div>}
@@ -996,14 +1004,14 @@ export function IPTVPlayer() {
                 unlocked={parentalUnlocked}
                 onPlay={handleChannelSelect}
                 onLockedGroupSelect={() => setPinOpen(true)}
-                onSearch={() => setSearchOpen(true)}
-                onGuide={() => setChannelView('grid')}
+                onSearch={openSearch}
+                onGuide={showGuide}
                 onMosaic={openMosaicPicker}
                 onRecord={handleRecordRequest}
                 preview={previewEnabled}
                 previewMode={previewMode}
                 onEdit={openChannelEditor}
-                onOrganize={() => setGroupManagerOpen(true)}
+                onOrganize={openGroupManager}
                 alphabetical={alphabetical}
                 onToggleSort={toggleChannelSort}
                 favoriteLists={favoriteLists}
@@ -1154,7 +1162,7 @@ export function IPTVPlayer() {
                     onNextChannel={onNextChannel}
                     onPrevChannel={onPrevChannel}
                     onZapToNumber={zapToNumber}
-                    onNativePlay={channel => { void openNativeChannel(channel); }}
+                    onNativePlay={handleNativeChannelSelect}
                     nativeZap={nativeZap}
                     mini={activeTab !== 'player'}
                   />
@@ -1175,7 +1183,7 @@ export function IPTVPlayer() {
                         playlistId={currentPlaylist.id}
                         groups={visibleGroups}
                         onChannelSelect={handleChannelSelect}
-                      onNativeChannelSelect={channel => { void openNativeChannel(channel); }}
+                      onNativeChannelSelect={handleNativeChannelSelect}
                         {...(currentChannel ? { currentChannel } : {})}
                         keyboardNavigationEnabled={false}
                         epgData={epgData}
@@ -1183,7 +1191,7 @@ export function IPTVPlayer() {
                         unlocked={parentalUnlocked}
                         onLockedGroupSelect={() => setPinOpen(true)}
                         onMosaic={openMosaicPicker}
-                        onRecord={channel => { setRecordingsChannel(channel); setRecordingsOpen(true); }}
+                        onRecord={handleRecordRequest}
                         favoriteLists={favoriteLists}
                         customGroupOrder={customGroupOrder}
                       />
@@ -1273,6 +1281,7 @@ export function IPTVPlayer() {
         onSelectVod={item => openSavedVod(item.kind, item)}
         lockedGroups={parentalLockedGroups}
         unlocked={parentalUnlocked}
+        parentalEnabled={appSettings.parentalControlEnabled === true}
         onLockedChannelSelect={() => setPinOpen(true)}
       /></Suspense>}
 
