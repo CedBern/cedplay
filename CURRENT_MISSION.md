@@ -1,5 +1,12 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## 1.12.9 — lots figés et reconnexion du direct, 8 novembre 2026
+
+- Lots A→E figés dans `96f74e2` ; changement concurrent des logos (`3ebf54c`) préservé. Reconnexion native dans `63adb42` : fenêtre 180 s, délais 1,5/3,5/7/15 s plafonnés, une tentative en vol, accélération au retour réseau ; annulation pause effective, zap, cast, sortie et erreur permanente. Politique VOD conservée. Deux défauts de contre-relecture (pause système et Stalker nul en cours de récupération) reproduits puis corrigés.
+- **Hisense physique** : ancienne version incapable de repartir après 30 s de coupure HTTP contrôlée ; code final repris seul, première image **3 365 ms** après retour du service, un seul flux simultané sur le serveur synthétique. Pause pendant la récupération respectée, Lecture manuelle opérationnelle. Wi-Fi non coupé. APK release ensuite installée sans désinstallation, **57 / 1.12.9** confirmé ; accueil/Direct affichés et image d'une chaîne réelle observée. Essais instrumentés en diagnostic, lancement réel en release minifiée ; pas de mesure prolongée de fluidité.
+- Vérifié : tsc app+node 0 erreur, ESLint complet 0 erreur/18 avertissements, **779/779 Web**, **30/30 Java**, build Vite, cap sync et assembleRelease réussis. Certificat identique à 1.12.8. APK racine `CedPlay-1.12.9.apk` et alias identique, **4 396 428 octets**, SHA-256 `0b7c4af47758f5afd5a754f88a5c6a7379509fba614f719ea2a8928ee293daee` ; ancienne référence retirée après contrôle.
+- Rapport : `RECONNEXION_DIRECT_1.12.9_2026-11-08.md`, preuves `preuves/reconnexion-direct/`. Pas de push ni d'installation téléphone. Suite : recette d'usage/retour Wi-Fi réel, puis résilience DVR ; Media3/audio à traiter séparément.
+
 ## Contre-vérification de l'audit mobile/TV — 8 novembre 2026
 
 - Rapport complémentaire : `CONTRE_REVUE_AUDIT_MOBILE_TV_2026-11-08.md`. Aucun code produit modifié. L'instantané rouge du nouvel audit est dépassé : **778/778 tests Web**, 118 fichiers, dont 25/25 TV VOD ; sondes indépendantes réglages/thème **4/4**, contrôle parental **3/3** ; cinq cibles locales du relais refusées 403 et service local jamais atteint. Journaux `preuves/revue-lot-d/mobile-tv-*-recheck.log`.
