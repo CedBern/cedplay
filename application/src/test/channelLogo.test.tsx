@@ -38,4 +38,13 @@ describe('ChannelLogo', () => {
     render(<ChannelLogo name="CNN News" />);
     expect(screen.getByText('CNN')).toBeDefined();
   });
+
+  it('affiche l’image du logo en entier (object-contain, jamais rognée par object-cover)', () => {
+    const { container } = render(<ChannelLogo src="https://example.com/tf1.png" name="TF1" />);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    // Les logos arrondis/rectangulaires doivent rester visibles intégralement.
+    expect(img?.className).toContain('object-contain');
+    expect(img?.className).not.toContain('object-cover');
+  });
 });

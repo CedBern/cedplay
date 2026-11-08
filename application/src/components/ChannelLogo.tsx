@@ -57,13 +57,15 @@ const ChannelLogoBase: React.FC<ChannelLogoProps> = ({ src, name, compact }) => 
       )}
       {/* Chargement paresseux et décodage asynchrones gérés par le navigateur :
           plus d'observateur d'intersection par instance (coût au défilement). */}
+      {/* object-contain (et non cover) : les logos rectangulaires ou circulaires doivent
+          rester entiers — cover rognerait les bords et couperait les logos arrondis. */}
       <img
         src={src}
         data-src={src}
         alt="" aria-hidden="true"
         loading="lazy"
         decoding="async"
-        className={`object-cover rounded-lg w-full h-full transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+        className={`object-contain rounded-lg p-0.5 w-full h-full transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
         onLoad={() => setLoaded(true)}
         onError={(e) => {
           const url = (e.currentTarget.getAttribute('data-src') || src) as string;
