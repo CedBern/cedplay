@@ -2,6 +2,8 @@ import { EPGProgram, EPGData } from '@/types/epg';
 import { Channel } from '@/types/channel';
 import type { EpgChannelOverride } from '@/utils/epgConfig';
 
+export type EpgChannelRef = Pick<Channel, 'id' | 'name' | 'tvgId' | 'tvgName' | 'tvgShift'>;
+
 /** Associations manuelles et décalages appliqués en construisant le guide. */
 export interface EPGBuildOptions {
   overrides?: Record<string, EpgChannelOverride> | undefined;
@@ -134,7 +136,7 @@ const stripPrefix = (s: string) => s.replace(/^(?:[a-z]{2,3}\s*[:|-]\s*|\([a-z]{
  * Associe les programmes XMLTV aux chaînes : association manuelle d'abord, sinon par
  * tvg-id puis par nom. Applique le décalage horaire (tvg-shift, réglages du guide).
  */
-export function buildEPGData(parsed: XmltvParsed, channels: Channel[], options: EPGBuildOptions = {}): EPGData {
+export function buildEPGData<T extends EpgChannelRef>(parsed: XmltvParsed, channels: T[], options: EPGBuildOptions = {}): EPGData {
   const data: EPGData = {};
   if (!parsed.programmes.length) return data;
 
@@ -208,7 +210,7 @@ export function buildEPGData(parsed: XmltvParsed, channels: Channel[], options: 
  * Fusionne plusieurs guides : pour chaque chaîne, la première source (dans l'ordre
  * donné) qui a des programmes l'emporte. Les sources suivantes complètent les autres.
  */
-export function buildMergedEPGData(sources: XmltvParsed[], channels: Channel[], options: EPGBuildOptions = {}): EPGData {
+export function buildMergedEPGData<T extends EpgChannelRef>(sources: XmltvParsed[], channels: T[], options: EPGBuildOptions = {}): EPGData {
   const data: EPGData = {};
   let missing = channels;
   for (const parsed of sources) {

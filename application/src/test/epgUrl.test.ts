@@ -119,7 +119,7 @@ describe('fetchEPGSource', () => {
 });
 
 describe('cache du résultat parsé', () => {
-  const data = { channels: { c1: [{ title: 'JT', start: 0, endTime: 60 }] } } as never;
+  const data = { c1: [{ id: 'c1_0', channelId: 'c1', title: 'JT', startTime: new Date(0), endTime: new Date(60_000) }] };
 
   it('fait l\'aller-retour par playlist, url et fetchedAt', async () => {
     await saveParsedEPGCache('parsed-1', 'https://epg.test/g.xml', 1000, data);

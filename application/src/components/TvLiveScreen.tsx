@@ -22,6 +22,28 @@ const PAGE = 8;
 /** Temps d'arrêt sur une chaîne avant de lancer son aperçu (évite d'ouvrir un flux à chaque appui). */
 const PREVIEW_DELAY = 600;
 
+const CategoryButton = React.memo(function CategoryButton({ item, index, selected, focused }: {
+  item: CategoryItem; index: number; selected: boolean; focused: boolean;
+}) {
+  const icon = item.kind === 'action'
+    ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" /> : item.id === 'sort' ? <List className="h-4 w-4" aria-hidden="true" /> : item.id === 'organize' ? <SlidersHorizontal className="h-4 w-4" aria-hidden="true" /> : <CalendarDays className="h-4 w-4" aria-hidden="true" />)
+    : item.id === 'favorites' ? <Star className="h-4 w-4" aria-hidden="true" />
+    : item.id.startsWith('favlist:') ? <ListChecks className="h-4 w-4" aria-hidden="true" />
+    : item.id === 'recent' ? <Clock className="h-4 w-4" aria-hidden="true" />
+    : item.id === 'all' ? <List className="h-4 w-4" aria-hidden="true" />
+    : item.locked ? <Lock className="h-4 w-4" aria-hidden="true" /> : null;
+  return <React.Fragment>
+    {item.kind === 'category' && item.id === 'favorites' && index > 0 && <div className="mx-2 my-1.5 border-t border-neutral-900" aria-hidden="true" />}
+    <button type="button" aria-current={selected ? 'true' : undefined} data-tv-item data-tv-cat={index}
+      data-remote-entry={index === 0 ? '' : undefined} tabIndex={focused ? 0 : -1}
+      className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] ${selected ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}>
+      <span className="flex w-4 shrink-0 justify-center">{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      {item.kind === 'category' && <span className="shrink-0 font-mono text-xs tabular-nums opacity-70">{item.locked ? '' : item.count}</span>}
+    </button>
+  </React.Fragment>;
+});
+
 interface ChannelRowProps {
   channel: Channel;
   index: number;
@@ -549,6 +571,10 @@ export function TvLiveScreen({
   const current = highlighted && epgData ? getCurrentProgram(highlighted.id, epgData, now) : null;
   const upcoming = highlighted && epgData ? getUpcomingProgram(highlighted.id, epgData, now) : null;
   const listTitle = selectedItem?.label ?? 'Chaînes';
+  const categoryFocused = column === 'cat';
+  const categoryButtons = useMemo(() => items.map((item, index) => <CategoryButton key={item.id} item={item} index={index}
+    selected={item.kind === 'category' && item.id === category}
+    focused={categoryFocused && index === catIndex} />), [items, category, categoryFocused, catIndex]);
 
   return (
     <div
@@ -573,41 +599,24 @@ export function TvLiveScreen({
       )}
       {/* Catégories */}
       <nav aria-label="Catégories" data-tv-col="cat" className={`tv-col flex min-h-0 flex-col rounded-2xl border border-neutral-900 bg-neutral-950 ${column === 'cat' ? 'is-active' : ''}`}>
-        <div ref={catRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto p-2">
-          {items.map((item, index) => {
-            const selected = item.kind === 'category' && item.id === category;
-            const icon = item.kind === 'action'
-              ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" /> : item.id === 'sort' ? <List className="h-4 w-4" aria-hidden="true" /> : item.id === 'organize' ? <SlidersHorizontal className="h-4 w-4" aria-hidden="true" /> : <CalendarDays className="h-4 w-4" aria-hidden="true" />)
-              : item.id === 'favorites' ? <Star className="h-4 w-4" aria-hidden="true" />
-              : item.id.startsWith('favlist:') ? <ListChecks className="h-4 w-4" aria-hidden="true" />
-              : item.id === 'recent' ? <Clock className="h-4 w-4" aria-hidden="true" />
-              : item.id === 'all' ? <List className="h-4 w-4" aria-hidden="true" />
-              : item.locked ? <Lock className="h-4 w-4" aria-hidden="true" /> : null;
-            return <React.Fragment key={item.id}>
-              {item.kind === 'category' && item.id === 'favorites' && index > 0 && <div className="mx-2 my-1.5 border-t border-neutral-900" aria-hidden="true" />}
-              <button
-                type="button"
-                aria-current={selected ? 'true' : undefined}
-                data-tv-item
-                data-tv-cat={index}
-                data-remote-entry={index === 0 ? '' : undefined}
-                tabIndex={column === 'cat' && index === catIndex ? 0 : -1}
-                onFocus={() => syncColumn('cat', index)}
-                onClick={() => {
-                  if (item.kind === 'action') { (item.id === 'search' ? onSearch : item.id === 'organize' ? onOrganize : item.id === 'sort' ? onToggleSort : onGuide)?.(); return; }
-                  if (item.locked) { onLockedGroupSelect?.(); return; }
-                  setCatIndex(index);
-                  if (item.id !== category) { setCategory(item.id); setRow(0); }
-                  requestFocus(); setColumn('list');
-                }}
-                className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] ${selected ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}
-              >
-                <span className="flex w-4 shrink-0 justify-center">{icon}</span>
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                {item.kind === 'category' && <span className="shrink-0 font-mono text-xs tabular-nums opacity-70">{item.locked ? '' : item.count}</span>}
-              </button>
-            </React.Fragment>;
-          })}
+        <div ref={catRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto p-2"
+          onFocus={e => {
+            const target = (e.target as HTMLElement).closest<HTMLElement>('[data-tv-cat]');
+            if (target) syncColumn('cat', Number(target.dataset.tvCat));
+          }}
+          onClick={e => {
+            const target = (e.target as HTMLElement).closest<HTMLElement>('[data-tv-cat]');
+            if (!target) return;
+            const index = Number(target.dataset.tvCat);
+            const item = items[index];
+            if (!item) return;
+            if (item.kind === 'action') { (item.id === 'search' ? onSearch : item.id === 'organize' ? onOrganize : item.id === 'sort' ? onToggleSort : onGuide)?.(); return; }
+            if (item.locked) { onLockedGroupSelect?.(); return; }
+            setCatIndex(index);
+            if (item.id !== category) { setCategory(item.id); setRow(0); }
+            requestFocus(); setColumn('list');
+          }}>
+          {categoryButtons}
         </div>
       </nav>
 

@@ -7,6 +7,7 @@ import { listXmltvChannels } from '@/utils/epgXmltv';
 import { getMeta, setMeta } from '@/utils/idb';
 import { getProxyBase } from '@/utils/proxy';
 import { AppSettings } from '@/utils/storage';
+import { packEPGData, unpackEPGData, type PackedEPGData } from '@/utils/epgPacked';
 
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 h
 const MAX_FETCH_MS = 60_000;
@@ -145,21 +146,22 @@ export async function fetchSecondaryEPGSources(playlistId: string, urls: string[
 // ── Cache du résultat PARSÉ (par liste) : évite de re-parser l'XML multi-Mo à
 //    chaque chargement quand le cache XML 12 h est encore valide. ──────────
 
-interface EPGParsedCache { fetchedAt: number; url: string; data: EPGData }
+interface EPGParsedCache { fetchedAt: number; url: string; data: PackedEPGData }
 
-const parsedKey = (playlistId: string) => `epgParsed_${playlistId}`;
+// Ne pas lire l'ancien cache : son clonage suffit à épuiser la mémoire de petites box.
+const parsedKey = (playlistId: string) => `epgParsed_v2_${playlistId}`;
 
 export async function getParsedEPGCache(playlistId: string, url: string, fetchedAt: number): Promise<EPGData | null> {
   try {
     const saved = await getMeta<EPGParsedCache>(parsedKey(playlistId));
-    if (saved?.data && saved.url === url && saved.fetchedAt === fetchedAt) return saved.data;
+    if (saved?.data && saved.url === url && saved.fetchedAt === fetchedAt) return unpackEPGData(saved.data);
   } catch { /* cache indisponible */ }
   return null;
 }
 
 export async function saveParsedEPGCache(playlistId: string, url: string, fetchedAt: number, data: EPGData): Promise<void> {
   try {
-    await setMeta(parsedKey(playlistId), { fetchedAt, url, data } satisfies EPGParsedCache);
+    await setMeta(parsedKey(playlistId), { fetchedAt, url, data: packEPGData(data) } satisfies EPGParsedCache);
   } catch { /* stockage plein : non bloquant */ }
 }
 

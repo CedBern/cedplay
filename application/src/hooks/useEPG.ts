@@ -35,6 +35,7 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
   }, [playlistId]);
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     const forced = force.current;
     force.current = false;
     if (!playlist) { setState({ data: {}, status: 'absent' }); return; }
@@ -79,7 +80,7 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
         const data = await parseEPGInWorker(sources.map(s => s.xml), playlist.channels, {
           overrides: config.channels, offsetHours: config.offsetHours,
           keepFromMs: now - 8 * 86_400_000, keepUntilMs: now + 10 * 86_400_000,
-        });
+        }, controller.signal);
         if (cancelled) return;
         setState({ data, status, fetchedAt, sourceCount: sources.length });
         void saveParsedEPGCache(playlist.id, cacheUrl, fetchedAt, data);
@@ -87,7 +88,7 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
         if (!cancelled) setState(prev => ((prev.status === 'ready' || prev.status === 'stale') ? prev : { data: {}, status: 'error' }));
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [playlist, settings.epgUrl, revision]);
   useEffect(() => {
     const timer = window.setInterval(retry, 60 * 60 * 1000);
