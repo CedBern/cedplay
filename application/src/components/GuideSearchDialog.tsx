@@ -68,7 +68,7 @@ export function GuideSearchDialog({ open, onOpenChange, channels, epgData, catch
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{program.title}</span>
-                <span className="block truncate text-xs text-neutral-400">{channel.name} · {dayOf(program.startTime)} {formatTime(program.startTime)} – {formatTime(program.endTime)}</span>
+                <span className="block truncate text-xs text-neutral-400">{channel.name} · {dayOf(program.startTime)} <span className="font-mono">{formatTime(program.startTime)} – {formatTime(program.endTime)}</span></span>
               </span>
             </button></li>
           ))}
