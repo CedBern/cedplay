@@ -86,21 +86,42 @@ function Export-Png([string]$target, [int]$width, [int]$height, [string]$kind = 
         $k = [single]($width/320)
         $drawn = [single](136*$k)          # le dessin sans marges internes (80 unités sur 108)
         Draw-Mark $g ([single]((10-14*136/80)*$k)) ([single]((22-16*136/80)*$k)) ([single]($drawn*108/80))
+        # Le nom est symétrique par rapport à l'ouverture du C : l'espace entre « Ced » et « Play »
+        # est centré sur le milieu de cette ouverture. Le jambage du « y » ne descend pas dans le pied.
+        $unit = [single](136/80)
+        function To-Banner([double]$u) { return [single]((22 + ($u - 16)*$unit)*$k) }
+        $stand = $brand.parts | Where-Object role -eq 'stand'
+        $screen = $brand.parts | Where-Object role -eq 'screen'
+        $ys = [regex]::Matches($screen.d, '-?\d+(?:\.\d+)?') | ForEach-Object { [double]::Parse($_.Value, $inv) }
+        $half = $screen.width/2
+        $openMid = To-Banner (($ys[1] + $ys[$ys.Count-1])/2) # milieu de l'ouverture du C
+        $standTop = To-Banner (90 - $stand.width/2)
+        $standBottom = To-Banner (90 + $stand.width/2)
         $format = [System.Drawing.StringFormat]::GenericTypographic
         $family = [System.Drawing.FontFamily]::new('Segoe UI Black')
         $style = [System.Drawing.FontStyle]::Regular
-        $size = [single](64*$k)
-        $probe = [System.Drawing.Font]::new($family,$size,$style,[System.Drawing.GraphicsUnit]::Pixel)
-        $wide = [Math]::Max($g.MeasureString($brand.nameStart,$probe,[System.Drawing.PointF]::new(0,0),$format).Width, $g.MeasureString($brand.nameEnd,$probe,[System.Drawing.PointF]::new(0,0),$format).Width)
-        $probe.Dispose()
-        $room = [single](152*$k)
-        if ($wide -gt $room) { $size = [single]($size*$room/$wide) }
-        $font = [System.Drawing.Font]::new($family,$size,$style,[System.Drawing.GraphicsUnit]::Pixel)
-        $ascent = [single]($size*$family.GetCellAscent($style)/$family.GetEmHeight($style))
+        # Mesure exacte des lettres dessinées (pas de la boîte de la police) à une taille d'essai, puis mise à l'échelle.
+        function New-Word([string]$text, [single]$em) {
+            $p = [System.Drawing.Drawing2D.GraphicsPath]::new(); $p.AddString($text,$family,[int]$style,$em,[System.Drawing.PointF]::new(0,0),$format)
+            return ,$p
+        }
+        # Interligne naturel (une ligne = une hauteur de police) ; seul le milieu de l'espace entre les mots est calé
+        # sur le milieu de l'ouverture du C, et le « y » s'arrête sur le haut du pied.
+        $a = New-Word $brand.nameStart 100; $b = New-Word $brand.nameEnd 100
+        $gapMid = ($a.GetBounds().Bottom + 100 + $b.GetBounds().Top)/2
+        $lowest = 100 + $b.GetBounds().Bottom
+        $a.Dispose(); $b.Dispose()
+        $size = [single](100*($standTop - $openMid)/($lowest - $gapMid))
+        $start = New-Word $brand.nameStart $size; $end = New-Word $brand.nameEnd $size
+        $x = [single](158*$k); $dy = [single]($openMid - $gapMid*$size/100)
+        $m = [System.Drawing.Drawing2D.Matrix]::new(); $m.Translate($x, $dy); $start.Transform($m); $m.Dispose()
+        $m = [System.Drawing.Drawing2D.Matrix]::new(); $m.Translate($x, [single]($dy + $size)); $end.Transform($m); $m.Dispose()
+        if ($end.GetBounds().Bottom -gt $standBottom + 0.5) { throw 'Bannière TV : le « y » de Play descend sous le pied du logo.' }
+        if ([Math]::Max($start.GetBounds().Right,$end.GetBounds().Right) -gt $width - 8*$k) { throw 'Bannière TV : le nom déborde à droite.' }
+        $paths = @($start,$end)
         $line = [System.Drawing.SolidBrush]::new((Get-Color 'line')); $accent = [System.Drawing.SolidBrush]::new((Get-Color 'accent'))
-        $g.DrawString($brand.nameStart,$font,$line,[single](158*$k),[single](84*$k-$ascent),$format)
-        $g.DrawString($brand.nameEnd,$font,$accent,[single](158*$k),[single](148*$k-$ascent),$format)
-        $font.Dispose(); $family.Dispose(); $line.Dispose(); $accent.Dispose()
+        $g.FillPath($line,$paths[0]); $g.FillPath($accent,$paths[1])
+        $paths[0].Dispose(); $paths[1].Dispose(); $family.Dispose(); $line.Dispose(); $accent.Dispose()
     }
     elseif ($kind -eq 'social') {
         $g.Clear((Get-Color 'background'))
