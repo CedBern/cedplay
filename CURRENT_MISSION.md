@@ -803,3 +803,11 @@ Sur le téléphone : Prime/Max/Arte semblent **non installées** (le navigateur 
 **Version.** 1.12.8 / code 56 prise par cette livraison — la suivante sera **1.12.9 / code 57** (fiche CedPlay.md harmonisée).
 
 **Installation 1.12.8 terminée (8 novembre 2026).** Le Motorola est réapparu en adb après déblocage du débogage USB côté téléphone : `adb install -r CedPlay-1.12.8.apk` réussi (dumpsys `versionCode=56 versionName=1.12.8`). Les deux appareils (Motorola Edge 70 + Hisense HiSmartTV A4) sont en 1.12.8 — L'Équipe disponible dans Direct → Plateformes sur les deux.
+
+## 2026-11-08 — Logos de chaînes entiers (object-contain) — session plateformes
+
+- **Demande** : « les logos des chaines sont coupés dans leur forme circulaire, on ne peut pas les voir en entier ».
+- **Cause** : `ChannelLogo.tsx` rendait l'image avec `object-cover` — l'image est rognée pour remplir le carré, donc tout logo plus large que haut (ou circulaire touches aux bords) perd ses bords. Le bandeau de zap natif (Java) est déjà en `FIT_CENTER`, le lanceur Android TV délègue au système : seul ce composant web rognait.
+- **Correctif** (commit `3ebf54c`) : `object-contain` + léger padding (`p-0.5`), commenté dans le code ; test de non-régression dans `channelLogo.test.tsx` qui interdit le retour d'`object-cover`. Vérifié : tsc app+node 0 erreur, ESLint complet 0 erreur / 18 avertissements, **779/779 tests** (118 fichiers), vite build OK.
+- **Coordination multi-sessions** : pendant la vérification, l'autre session a bumpé les fichiers de version vers 1.12.9/code 57 (non commité) — réservation prise en direct ; le correctif logos est donc resté hors version propre et est parti dans la livraison 1.12.9 de l'autre session. Preuve d'embarquement : `object-contain rounded-lg p-0.5` trouvé dans `assets/public/assets/index-Dabjfpju.js` de `CedPlay-1.12.9.apk` (aapt code 57 / 1.12.9, compileSdk 35). Prochaine version libre : **1.12.10 / code 58**.
+- **Installation** : Hisense déjà en 1.12.9 (essai reconnexion de l'autre session) ; Motorola passé de 1.12.8 à **1.12.9/code 57** par `adb install -r CedPlay-1.12.9.apk` (dumpsys code 57 / 1.12.9 des deux côtés). Recette visuelle des logos (listes Direct, favoris, recherche) à confirmer par l'utilisateur sur les deux appareils.
