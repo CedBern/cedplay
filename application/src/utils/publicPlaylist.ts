@@ -1,8 +1,31 @@
 import { parseM3UInWorker } from '@/utils/parseWorker';
-import type { PlaylistInfo } from '@/types/channel';
+import type { Channel, PlaylistInfo } from '@/types/channel';
 
 export const PUBLIC_PLAYLIST_ID = 'cedplay-public-v1';
 export const PUBLIC_PLAYLIST_INITIALIZED = 'publicPlaylistInitialized';
+
+export function isLegacyPublicPlaylist(playlist: PlaylistInfo): boolean {
+  return !playlist.url && playlist.name === 'Flux publics légaux' &&
+    (playlist.totalChannelsBeforeDedup === 2465 || playlist.channels.length === 1988);
+}
+
+/** Distingue les anciens catalogues sans renommer les listes personnelles. */
+export function playlistDisplayName(playlist: PlaylistInfo): string {
+  if (playlist.id === PUBLIC_PLAYLIST_ID) return 'Chaînes gratuites officielles';
+  return isLegacyPublicPlaylist(playlist) ? 'Ancien catalogue communautaire' : playlist.name;
+}
+
+/** Le catalogue officiel a un id stable ; une correction d'adresse conserve les favoris. */
+export function reconcilePublicPlaylist(previous: PlaylistInfo, incoming: PlaylistInfo): PlaylistInfo {
+  const byTvg = new Map(previous.channels.filter(c => c.tvgId).map(c => [c.tvgId, c]));
+  const mapped = new Map<string, Channel>(incoming.channels.map(c => {
+    const old = c.tvgId ? byTvg.get(c.tvgId) : undefined;
+    return [c.id, old ? { ...c, id: old.id, isFavorite: old.isFavorite ?? false } : c];
+  }));
+  return { ...incoming, name: previous.name, channels: incoming.channels.map(c => mapped.get(c.id)!),
+    groups: incoming.groups.map(g => ({ ...g, channels: g.channels.map(c => mapped.get(c.id)!) })),
+    ...(previous.userAgent ? { userAgent: previous.userAgent } : {}) };
+}
 
 /** Sélection embarquée : aucun téléchargement de catalogue distant au premier lancement. */
 export async function loadPublicPlaylist(onProgress: (percent: number) => void = () => {}): Promise<PlaylistInfo> {

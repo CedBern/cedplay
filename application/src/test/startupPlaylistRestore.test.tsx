@@ -53,6 +53,10 @@ vi.mock('@/utils/idb', () => ({
 
 vi.mock('@/utils/publicPlaylist', () => ({
   PUBLIC_PLAYLIST_INITIALIZED: 'publicPlaylistInitialized',
+  PUBLIC_PLAYLIST_ID: 'cedplay-public-v1',
+  playlistDisplayName: (p: PlaylistInfo) => p.name,
+  isLegacyPublicPlaylist: () => false,
+  reconcilePublicPlaylist: (_previous: PlaylistInfo, incoming: PlaylistInfo) => incoming,
   loadPublicPlaylist: vi.fn(async () => {
     const channels = [{ id: 'free', name: 'Canal 22', url: 'https://example.test/free.m3u8', group: 'Mexique' }];
     return { id: 'cedplay-public-v1', name: 'Chaînes gratuites', channels, groups: [{ name: 'Mexique', channels }] };

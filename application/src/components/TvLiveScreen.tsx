@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useVirtualizer, defaultRangeExtractor } from '@tanstack/react-virtual';
 import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, ListChecks, Lock, Pencil, Play, Search, SlidersHorizontal, Star } from 'lucide-react';
 import type { FavoriteList } from '@/utils/favoriteLists';
+import { byChannelName } from '@/utils/channelCustomization';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData, EPGProgram } from '@/types/epg';
@@ -13,7 +14,7 @@ import { NativePlayerBridge, channelNumbering, findChannelByNumber, type Preview
 
 type Column = 'cat' | 'list' | 'info';
 type CategoryItem =
-  | { kind: 'action'; id: 'search' | 'guide' | 'organize'; label: string }
+  | { kind: 'action'; id: 'search' | 'guide' | 'organize' | 'sort'; label: string }
   | { kind: 'category'; id: string; label: string; count: number; locked: boolean };
 
 const ROW_HEIGHT = 56;
@@ -90,6 +91,8 @@ export interface TvLiveScreenProps {
   favoriteLists?: FavoriteList[] | undefined;
   /** Groupes déjà dans l'ordre choisi : ne pas les trier. */
   customGroupOrder?: boolean | undefined;
+  alphabetical?: boolean | undefined;
+  onToggleSort?: (() => void) | undefined;
 }
 
 function storedCategory(playlistId: string): string | null {
@@ -116,7 +119,7 @@ function useClock(): Date {
 export function TvLiveScreen({
   playlistId, groups, zapList, favoriteIds, epgData, currentChannel, lockedGroups, unlocked = false,
   onPlay, onLockedGroupSelect, onSearch, onGuide, onMosaic, onRecord, preview = false, previewMode = 'auto',
-  onEdit, onOrganize, favoriteLists, customGroupOrder = false,
+  onEdit, onOrganize, favoriteLists, customGroupOrder = false, alphabetical = false, onToggleSort,
 }: TvLiveScreenProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const catRef = useRef<HTMLDivElement>(null);
@@ -131,7 +134,10 @@ export function TvLiveScreen({
 
   const lockedSet = useMemo(() => new Set(lockedGroups ?? []), [lockedGroups]);
   const parentalLocked = lockedSet.size > 0 && !unlocked;
-  const allChannels = useMemo(() => groups.flatMap(g => g.channels), [groups]);
+  const allChannels = useMemo(() => {
+    const flat = groups.flatMap(g => g.channels);
+    return alphabetical ? flat.sort(byChannelName) : flat;
+  }, [groups, alphabetical]);
   const allowed = useCallback((c: Channel) => !parentalLocked || !lockedSet.has(c.group || ''), [parentalLocked, lockedSet]);
 
   const [recentIds, setRecentIds] = useState<string[]>([]);
@@ -164,6 +170,7 @@ export function TvLiveScreen({
     if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
     if (onGuide) list.push({ kind: 'action', id: 'guide', label: 'Guide TV' });
     if (onOrganize) list.push({ kind: 'action', id: 'organize', label: 'Organiser' });
+    if (onToggleSort) list.push({ kind: 'action', id: 'sort', label: alphabetical ? 'Tri : A–Z' : 'Tri : liste' });
     list.push({ kind: 'category', id: 'favorites', label: 'Favoris', count: favorites.length, locked: false });
     for (const l of favoriteLists ?? []) {
       list.push({ kind: 'category', id: `favlist:${l.id}`, label: l.name, count: l.channelIds.filter(id => { const c = byId.get(id); return !!c && allowed(c); }).length, locked: false });
@@ -175,7 +182,7 @@ export function TvLiveScreen({
       list.push({ kind: 'category', id: `group:${g.name}`, label: g.name, count: g.channels.length, locked });
     }
     return list;
-  }, [onSearch, onGuide, onOrganize, favorites.length, favoriteLists, byId, recents.length, allChannels, allowed, groups, customGroupOrder, parentalLocked, lockedSet]);
+  }, [onSearch, onGuide, onOrganize, onToggleSort, alphabetical, favorites.length, favoriteLists, byId, recents.length, allChannels, allowed, groups, customGroupOrder, parentalLocked, lockedSet]);
 
   const [category, setCategory] = useState<string>(() => storedCategory(playlistId) ?? (favoriteIds.length ? 'favorites' : 'all'));
   useEffect(() => {
@@ -570,7 +577,7 @@ export function TvLiveScreen({
           {items.map((item, index) => {
             const selected = item.kind === 'category' && item.id === category;
             const icon = item.kind === 'action'
-              ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" /> : item.id === 'organize' ? <SlidersHorizontal className="h-4 w-4" aria-hidden="true" /> : <CalendarDays className="h-4 w-4" aria-hidden="true" />)
+              ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" /> : item.id === 'sort' ? <List className="h-4 w-4" aria-hidden="true" /> : item.id === 'organize' ? <SlidersHorizontal className="h-4 w-4" aria-hidden="true" /> : <CalendarDays className="h-4 w-4" aria-hidden="true" />)
               : item.id === 'favorites' ? <Star className="h-4 w-4" aria-hidden="true" />
               : item.id.startsWith('favlist:') ? <ListChecks className="h-4 w-4" aria-hidden="true" />
               : item.id === 'recent' ? <Clock className="h-4 w-4" aria-hidden="true" />
@@ -587,7 +594,7 @@ export function TvLiveScreen({
                 tabIndex={column === 'cat' && index === catIndex ? 0 : -1}
                 onFocus={() => syncColumn('cat', index)}
                 onClick={() => {
-                  if (item.kind === 'action') { (item.id === 'search' ? onSearch : item.id === 'organize' ? onOrganize : onGuide)?.(); return; }
+                  if (item.kind === 'action') { (item.id === 'search' ? onSearch : item.id === 'organize' ? onOrganize : item.id === 'sort' ? onToggleSort : onGuide)?.(); return; }
                   if (item.locked) { onLockedGroupSelect?.(); return; }
                   setCatIndex(index);
                   if (item.id !== category) { setCategory(item.id); setRow(0); }

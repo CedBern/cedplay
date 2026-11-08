@@ -83,7 +83,8 @@ export function GroupManagerDialog({ open, onOpenChange, groups, hidden, onChang
   const moveChannel = (id: string, delta: number) => {
     if (!custom || !onCustomChange || !group) return;
     const ids = group.channels.map(c => c.id);
-    onCustomChange({ ...custom, channelOrder: { ...custom.channelOrder, [group.name]: moveInList(ids, ids.indexOf(id), delta) } });
+    const { channelSort: _sort, ...rest } = custom;
+    onCustomChange({ ...rest, channelOrder: { ...custom.channelOrder, [group.name]: moveInList(ids, ids.indexOf(id), delta) } });
   };
   const applyNumbers = () => {
     const first = Number(firstNumber);
@@ -112,6 +113,8 @@ export function GroupManagerDialog({ open, onOpenChange, groups, hidden, onChang
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => setMany(filtered.map(g => g.name), false)}>Tout afficher{query ? ' (filtrés)' : ''}</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => setMany(filtered.map(g => g.name), true)}>Tout masquer{query ? ' (filtrés)' : ''}</Button>
+          {canOrder && <Button type="button" variant="outline" size="sm" aria-pressed={custom?.channelSort === 'name'} onClick={() => onCustomChange!({ ...custom!, channelSort: 'name' })}>Chaînes A–Z</Button>}
+          {canOrder && custom?.channelSort === 'name' && <Button type="button" variant="outline" size="sm" onClick={() => { const { channelSort: _sort, ...rest } = custom; onCustomChange!(rest); }}>Ordre de la liste</Button>}
           {canOrder && custom?.groupOrder && <Button type="button" variant="outline" size="sm" onClick={() => { const { groupOrder: _g, ...rest } = custom; onCustomChange!(rest); }}>Ordre alphabétique</Button>}
           {hiddenChannels.length > 0 && <Button type="button" variant="outline" size="sm" onClick={() => setView({ kind: 'hidden' })}><EyeOff className="mr-1.5 h-4 w-4" aria-hidden="true" />{hiddenChannels.length} chaîne{hiddenChannels.length > 1 ? 's' : ''} masquée{hiddenChannels.length > 1 ? 's' : ''}</Button>}
         </div>

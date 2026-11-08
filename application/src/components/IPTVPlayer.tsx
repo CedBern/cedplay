@@ -13,7 +13,7 @@ import { MorePanel, type MoreDestination } from '@/components/MorePanel';
 import { GroupManagerDialog, FavoritesOrganizerDialog, loadHiddenGroups, saveHiddenGroups } from '@/components/ListOrganizers';
 import { BrandMark } from '@/components/BrandMark';
 import { loadHiddenChannels, saveHiddenChannels } from '@/utils/streamCheck';
-import { applyCustomization, loadCustomization, saveCustomization, EMPTY_CUSTOMIZATION, type ChannelEdit, type ListCustomization } from '@/utils/channelCustomization';
+import { applyCustomization, byChannelName, loadCustomization, saveCustomization, EMPTY_CUSTOMIZATION, type ChannelEdit, type ListCustomization } from '@/utils/channelCustomization';
 import { loadFavoriteLists, FAVORITE_LISTS_EVENT, type FavoriteList } from '@/utils/favoriteLists';
 import { ChannelEditorDialog } from '@/components/ChannelEditor';
 import { fetchTextWithUserAgent, playlistUserAgent, setActiveUserAgent } from '@/utils/userAgent';
@@ -46,7 +46,7 @@ import { applySeriesRules } from '@/utils/recordingRules';
 import { EpgSettingsDialog } from '@/components/EpgSettingsDialog';
 import type { EPGProgram } from '@/types/epg';
 import { isPlaybackDelegated } from '@/utils/playbackOwnership';
-import { loadPublicPlaylist, PUBLIC_PLAYLIST_INITIALIZED } from '@/utils/publicPlaylist';
+import { loadPublicPlaylist, playlistDisplayName, reconcilePublicPlaylist, PUBLIC_PLAYLIST_ID, PUBLIC_PLAYLIST_INITIALIZED } from '@/utils/publicPlaylist';
 /** Date de la dernière actualisation réussie d'une liste par adresse (manuelle, automatique ou import). */
 const playlistRefreshedKey = (playlistId: string) => `playlistRefreshedAt:${playlistId}`;
 // Dynamic telemetry import helper
@@ -229,13 +229,14 @@ export function IPTVPlayer() {
     let updated = false;
     try {
       const saved = await getPlaylistsFromDB();
-      const existing = findExistingPlaylist(saved, playlist);
+      const existing = (playlist.id === PUBLIC_PLAYLIST_ID ? saved.find(p => p.id === PUBLIC_PLAYLIST_ID) : undefined) ?? findExistingPlaylist(saved, playlist);
       if (existing) {
         // Compte et choix Xtream sont rangés sous l'id de la nouvelle liste : à lire avant
         // que reconcilePlaylist() ne lui rende l'id de l'ancienne.
         const linkedAccount = getXtreamAccount(playlist);
         const liveSelection = readLiveSelection(playlist.id);
-        playlist = reconcilePlaylist(existing, playlist);
+        playlist = playlist.id === PUBLIC_PLAYLIST_ID && existing.id === PUBLIC_PLAYLIST_ID
+          ? reconcilePublicPlaylist(existing, playlist) : reconcilePlaylist(existing, playlist);
         if (linkedAccount) saveXtreamAccount(existing.id, linkedAccount);
         if (liveSelection) saveLiveSelection(existing.id, liveSelection);
         updated = true;
@@ -327,6 +328,12 @@ export function IPTVPlayer() {
     [currentPlaylist, customization],
   );
   const customGroupOrder = !!customization.groupOrder?.length;
+  const alphabetical = customization.channelSort === 'name';
+  const toggleChannelSort = () => {
+    const { channelSort: _sort, ...rest } = customization;
+    updateCustomization(alphabetical ? rest : { ...rest, channelSort: 'name' });
+    toast.success(alphabetical ? 'Ordre de la liste rétabli.' : 'Chaînes triées de A à Z.');
+  };
   const visibleGroups = useMemo(() => {
     if (!currentPlaylist) return [];
     if (!hiddenGroups.length && !hiddenChannels.length) return customizedGroups;
@@ -393,7 +400,10 @@ export function IPTVPlayer() {
   }, [currentPlaylist, customizedGroups, favoriteIds]);
 
   // Liste ordonnée des chaînes (zapping) et guide des programmes.
-  const orderedChannels = useMemo(() => visibleGroups.flatMap(g => g.channels), [visibleGroups]);
+  const orderedChannels = useMemo(() => {
+    const flat = visibleGroups.flatMap(g => g.channels);
+    return alphabetical ? flat.sort(byChannelName) : flat;
+  }, [visibleGroups, alphabetical]);
 
   // Contrôle parental : groupes adultes verrouillés tant qu'un code n'a pas été saisi.
   const [parentalUnlocked, setParentalUnlocked] = useState(false);
@@ -839,17 +849,19 @@ export function IPTVPlayer() {
 
   // En-tête : sur TV, une seule ligne (logo, rubriques, liste, recherche) — repliable.
   const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
-      <div className="flex items-center gap-2 min-w-0 flex-1">
+      <div className={tvMode ? 'tv-header-main min-w-0 flex-1 items-center gap-3' : 'flex items-center gap-2 min-w-0 flex-1'}>
         <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
           <BrandMark className="h-8 w-8 sm:h-9 sm:w-9" />
           {/* « Play » prend l'orange du triangle du logo, qui est aussi le bouton lecture. */}
           <span>Ced<span className="text-[#FF5A36]">Play</span></span>
         </h1>
         {tvMode && <MainNavigation tv onNavigate={navigate} />}
-        <DropdownMenu>
+        <DropdownMenu onOpenChange={open => {
+          if (open) void getPlaylistsFromDB().then(setAllPlaylists).catch(() => toast.error('Impossible de lire les listes enregistrées.'));
+        }}>
           <DropdownMenuTrigger asChild>
-            <Button variant={tvMode ? 'ghost' : 'outline'} size="sm" className={tvMode ? 'tv-chip ml-auto h-10 min-w-0 gap-1.5 rounded-full px-3.5 text-[14px] font-normal text-muted-foreground' : 'min-h-11 min-w-0 border-neutral-800 text-white hover:bg-neutral-900 px-3 gap-1.5'} title={currentPlaylist.name} aria-label="Changer de liste">
-              <span className={`truncate ${tvMode ? 'max-w-[180px]' : 'max-w-[200px] sm:max-w-[240px]'}`}>{currentPlaylist.name}</span>
+            <Button variant={tvMode ? 'ghost' : 'outline'} size="sm" className={tvMode ? 'tv-chip h-10 w-full min-w-0 gap-1.5 rounded-full px-3 text-[14px] font-normal text-muted-foreground' : 'min-h-11 min-w-0 border-neutral-800 text-white hover:bg-neutral-900 px-3 gap-1.5'} title={playlistDisplayName(currentPlaylist)} aria-label="Changer de liste">
+              <span className={`min-w-0 truncate ${tvMode ? 'flex-1' : 'max-w-[200px] sm:max-w-[240px]'}`}>{playlistDisplayName(currentPlaylist)}</span>
               <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 opacity-70" />
             </Button>
           </DropdownMenuTrigger>
@@ -861,19 +873,19 @@ export function IPTVPlayer() {
             }}>
               {allPlaylists.map(pl => (
                 <DropdownMenuRadioItem key={pl.id} value={pl.id}>
-                  <span className="truncate flex-1">{pl.name}</span>
+                  <span className="truncate flex-1">{playlistDisplayName(pl)}</span>
                   <span className="ml-auto pl-2 text-xs text-muted-foreground shrink-0">{pl.channels.length}</span>
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => { void openPublicPlaylist(); }}>Chaînes gratuites</DropdownMenuItem>
+            {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => { void openPublicPlaylist(); }}>Chaînes gratuites officielles</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
             {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
             <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
+        {!tvMode && currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
           <Badge variant="outline" className="hidden sm:inline-flex border-neutral-800 text-amber-300 text-xs shrink-0">
             {currentPlaylist.channels.length}/{currentPlaylist.totalChannelsBeforeDedup}
           </Badge>
@@ -963,6 +975,8 @@ export function IPTVPlayer() {
                 previewMode={previewMode}
                 onEdit={openChannelEditor}
                 onOrganize={() => setGroupManagerOpen(true)}
+                alphabetical={alphabetical}
+                onToggleSort={toggleChannelSort}
                 favoriteLists={favoriteLists}
                 customGroupOrder={customGroupOrder}
               />
@@ -998,6 +1012,7 @@ export function IPTVPlayer() {
                       onEditChannel={openChannelEditor}
                       favoriteLists={favoriteLists}
                       customGroupOrder={customGroupOrder}
+                      alphabetical={alphabetical}
                     /></Suspense>
                   ) : (
                     <Suspense fallback={<PanelFallback className="h-72" />}><LazyEPGGrid

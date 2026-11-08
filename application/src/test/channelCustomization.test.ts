@@ -13,6 +13,16 @@ const groups: ChannelGroup[] = [
 ];
 
 describe('personnalisation de la liste', () => {
+  it('conserve le tri A–Z au rechargement et inclut les nouvelles chaînes sans modifier la source', () => {
+    const source = [{ name: 'Test', channels: [ch('z', 'Test', { name: 'Zulu' }), ch('a10', 'Test', { name: 'Alpha 10' }), ch('a2', 'Test', { name: 'Alpha 2' })] }];
+    const custom = sanitizeCustomization(JSON.parse(JSON.stringify({ edits: {}, channelSort: 'name', channelOrder: { Test: ['z', 'a10'] } })));
+    expect(custom.channelSort).toBe('name');
+    const updated = [...source[0].channels, ch('e', 'Test', { name: 'Éclair' })];
+    const sorted = applyCustomization([{ name: 'Test', channels: updated }], custom)[0].channels;
+    expect(sorted.map(c => c.id)).toEqual(['a2', 'a10', 'e', 'z']);
+    expect(source[0].channels.map(c => c.id)).toEqual(['z', 'a10', 'a2']);
+    expect(sorted.find(c => c.id === 'z')?.url).toBe(source[0].channels[0].url);
+  });
   it('sans réglage, renvoie les groupes d’origine (même référence)', () => {
     expect(applyCustomization(groups, { edits: {} })).toBe(groups);
   });

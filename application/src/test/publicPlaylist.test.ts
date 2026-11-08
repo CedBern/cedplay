@@ -1,6 +1,27 @@
 import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { M3UParser } from '@/utils/m3uParser';
+import { isLegacyPublicPlaylist, playlistDisplayName, reconcilePublicPlaylist, PUBLIC_PLAYLIST_ID } from '@/utils/publicPlaylist';
+
+it('distingue la sélection officielle de l’ancien catalogue sans renommer les listes privées', () => {
+  const base = { id: 'old', name: 'Flux publics légaux', channels: [], groups: [], totalChannelsBeforeDedup: 2465 };
+  expect(isLegacyPublicPlaylist(base)).toBe(true);
+  expect(playlistDisplayName(base)).toBe('Ancien catalogue communautaire');
+  expect(playlistDisplayName({ ...base, id: PUBLIC_PLAYLIST_ID, name: 'Chaînes gratuites' })).toBe('Chaînes gratuites officielles');
+  expect(playlistDisplayName({ ...base, name: 'Ma liste' })).toBe('Ma liste');
+  expect(isLegacyPublicPlaylist({ ...base, totalChannelsBeforeDedup: 20 })).toBe(false);
+});
+
+it('une adresse officielle corrigée conserve l’identité et les favoris de la chaîne', () => {
+  const old = { id: 'ancien', name: 'TV UNAM', tvgId: 'TVUNAM.mx', url: 'https://example.test/old?DVR', isFavorite: true };
+  const fresh = { ...old, id: 'nouveau', url: 'https://example.test/live', isFavorite: false };
+  const previous = { id: PUBLIC_PLAYLIST_ID, name: 'Mon catalogue officiel', channels: [old], groups: [{ name: 'Mexique', channels: [old] }] };
+  const incoming = { ...previous, name: 'Chaînes gratuites', channels: [fresh], groups: [{ name: 'Mexique', channels: [fresh] }] };
+  const merged = reconcilePublicPlaylist(previous, incoming);
+  expect(merged.channels[0]).toMatchObject({ id: 'ancien', url: fresh.url, isFavorite: true });
+  expect(merged.groups[0].channels[0]).toBe(merged.channels[0]);
+  expect(previous.channels[0].url).toBe(old.url);
+});
 
 it('importe le catalogue public embarqué complet dans les deux chemins du parseur', async () => {
   const content = readFileSync('public/flux-legaux.m3u', 'utf8');

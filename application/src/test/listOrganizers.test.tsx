@@ -60,6 +60,16 @@ it('range les groupes, puis l’ordre et les numéros des chaînes d’un groupe
   expect(rows[1]).toContain('202');
 });
 
+it('propose le tri des chaînes A–Z puis permet de revenir à la liste', () => {
+  const onCustom = vi.fn();
+  render(<Harness onCustom={onCustom} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Chaînes A–Z' }));
+  expect(onCustom).toHaveBeenLastCalledWith(expect.objectContaining({ channelSort: 'name' }));
+  expect(screen.getByRole('button', { name: 'Chaînes A–Z' })).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'Ordre de la liste' }));
+  expect(onCustom.mock.calls.at(-1)![0]).not.toHaveProperty('channelSort');
+});
+
 it('modifie une chaîne, l’ajoute à une nouvelle liste de favoris et la masque', async () => {
   const onSave = vi.fn();
   const onHide = vi.fn();

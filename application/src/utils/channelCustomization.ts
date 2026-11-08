@@ -19,6 +19,8 @@ export interface ListCustomization {
   groupOrder?: string[];
   /** Ordre choisi des chaînes, par nom de groupe (ids). */
   channelOrder?: Record<string, string[]>;
+  /** Tri dynamique, également pour les nouvelles chaînes après actualisation. */
+  channelSort?: 'name';
 }
 
 export const EMPTY_CUSTOMIZATION: ListCustomization = { edits: {} };
@@ -55,6 +57,7 @@ export function sanitizeCustomization(raw: unknown): ListCustomization {
     }
   }
   const out: ListCustomization = { edits };
+  if (source.channelSort === 'name') out.channelSort = 'name';
   const groupOrder = stringList(source.groupOrder);
   if (groupOrder.length) out.groupOrder = [...new Set(groupOrder)];
   if (source.channelOrder && typeof source.channelOrder === 'object') {
@@ -99,6 +102,7 @@ function orderBy<T>(items: T[], order: string[] | undefined, keyOf: (item: T) =>
 }
 
 export const byGroupName = (a: ChannelGroup, b: ChannelGroup) => a.name.localeCompare(b.name, 'fr');
+export const byChannelName = (a: Channel, b: Channel) => a.name.localeCompare(b.name, 'fr', { numeric: true, sensitivity: 'base' });
 
 /**
  * Groupes affichés après personnalisation. Sans ordre de groupes choisi, l'ordre
@@ -107,12 +111,12 @@ export const byGroupName = (a: ChannelGroup, b: ChannelGroup) => a.name.localeCo
 export function applyCustomization(groups: ChannelGroup[], custom: ListCustomization): ChannelGroup[] {
   const hasEdits = Object.keys(custom.edits).length > 0;
   const orders = custom.channelOrder;
-  if (!hasEdits && !orders && !custom.groupOrder) return groups;
+  if (!hasEdits && !orders && !custom.groupOrder && !custom.channelSort) return groups;
   const mapped = groups.map(group => {
     const order = orders?.[group.name];
-    if (!hasEdits && !order) return group;
+    if (!hasEdits && !order && !custom.channelSort) return group;
     const edited = hasEdits ? group.channels.map(c => applyEdit(c, custom.edits[c.id])) : group.channels;
-    return { ...group, channels: orderBy(edited, order, c => c.id) };
+    return { ...group, channels: custom.channelSort === 'name' ? [...edited].sort(byChannelName) : orderBy(edited, order, c => c.id) };
   });
   return custom.groupOrder ? orderBy(mapped, custom.groupOrder, g => g.name, byGroupName) : mapped;
 }

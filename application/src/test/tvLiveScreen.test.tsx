@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TvLiveScreen } from '@/components/TvLiveScreen';
@@ -19,6 +20,21 @@ afterEach(() => { cleanup(); document.documentElement.classList.remove('remote-n
 
 const active = () => document.activeElement as HTMLElement;
 const key = (k: string) => fireEvent.keyDown(active(), { key: k });
+
+it('le bouton Tri classe Toutes entre pays et permet de retrouver l’ordre de la liste', () => {
+  function SortedScreen() {
+    const [alphabetical, setSorted] = useState(false);
+    return <TvLiveScreen playlistId="tri" groups={groups} favoriteIds={[]} alphabetical={alphabetical} onToggleSort={() => setSorted(v => !v)} onPlay={() => {}} />;
+  }
+  render(<SortedScreen />);
+  const names = () => [...document.querySelectorAll<HTMLButtonElement>('[data-channel-row-id]')].map(el => el.getAttribute('aria-label')!.replace(/^\d+\. /, ''));
+  expect(names()[0]).toBe('Info');
+  const sort = screen.getByRole('button', { name: 'Tri : liste' });
+  fireEvent.click(sort);
+  expect(names()).toEqual(['Bruxelles', 'Culture', 'Info', 'Nuit', 'Sport']);
+  fireEvent.click(screen.getByRole('button', { name: 'Tri : A–Z' }));
+  expect(names()[0]).toBe('Info');
+});
 
 function setup(extra: Partial<React.ComponentProps<typeof TvLiveScreen>> = {}) {
   const onPlay = vi.fn();

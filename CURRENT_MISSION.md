@@ -561,3 +561,14 @@ Points ouverts pour continuer :
 - Reproduction exacte à 289 catégories en échec avant correction, verte ensuite ; 10 tests ciblés, 575/575 tests complets (89 fichiers), tsc app+node OK et ESLint src 0 erreur/18 avertissements existants. Build web/Capacitor/assembleRelease et signature OK.
 - APK CedPlay-1.11.15.apk / code 44 : 4583603 octets, SHA-256 76b57ad82361bef0832890db876d4eae21aee87eed348e60cac67af6c50b6014. 359 sources inchangées et 73 fichiers web conformes. Anciennes APK conservées, données privées non modifiées à distance, pas de push.
 - Défaut observé sur TV par l'utilisateur ; correction encore non essayée sur sa télécommande. Rapport : preuves/xtream-bouton-importer-2026-11-07/RAPPORT.md.
+
+
+## En-tête TV, classement A–Z et catalogues gratuits — 7 novembre 2026
+
+- Retour utilisateur : rubriques chevauchant logo/liste, deux catalogues gratuits, chaînes en échec, tri absent et soupçon VPN. En-tête : colonnes bornées et rubriques défilantes, texte de liste tronqué, sans badge TV.
+- Tri A–Z mémorisé par liste, visible dans Direct et Organiser, incluant les chaînes ajoutées après actualisation ; ordre global Toutes/guide/zapping cohérent, favoris conservés. Noms et identifiants/adresses/numéros explicites non réécrits.
+- Ancien catalogue communautaire 1988/2465 désormais distingué visuellement de la sélection officielle de 12 chaînes ; entrée gratuite non dupliquée dans le menu, anciennes listes préservées. Correction TV UNAM sans ?DVR ; rechargement via Plus → Chaînes gratuites avec ids/favoris conservés.
+- Contrôle des 12 manifestes et segments puis ffprobe : pistes H264/AAC reconnues pour les 12 depuis ce poste avec le User-Agent du lecteur. Pas d'essai de stabilité, écoute ou lecture sur box.
+- NordVPN : utilisateur signale mêmes échecs sans VPN puis avec Paris et Bordeaux (TF1/M6/France TV). Pas de preuve de blocage VPN ; aucun flux privé ni VPN de l'utilisateur testé. Ne pas confondre les anciens relais avec sa liste privée.
+- Vérifié : 581/581 tests (89 fichiers), tsc app+node OK, ESLint src 0 erreur/18 avertissements ; web/Capacitor/assembleRelease et signature OK. 359 sources inchangées, 73 fichiers web conformes. APK CedPlay-1.11.16.apk / code 45 : 4584483 octets ; SHA-256 557b77ef831d4dca0949236975e972970fbc54571b5f7cea0229ab72de5d673a.
+- Pas installée ; géométrie réelle de l'en-tête non mesurée (navigateur de contrôle désactivé). Rapport : preuves/entete-tri-flux-2026-11-07/RAPPORT.md. Aucun push.

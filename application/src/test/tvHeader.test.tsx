@@ -92,6 +92,22 @@ it('au toucher ou à la souris (sans télécommande), l’en-tête reste affich�
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
 });
 
+it('le menu ne propose qu’une entrée pour la sélection officielle déjà enregistrée', async () => {
+  const previous = { id: fixture.playlist.id, name: fixture.playlist.name };
+  fixture.playlist.id = 'cedplay-public-v1';
+  fixture.playlist.name = 'Chaînes gratuites';
+  try {
+    const user = userEvent.setup();
+    render(<IPTVPlayer />);
+    await screen.findByText('Reprise test');
+    const button = within(header()).getByRole('button', { name: 'Changer de liste' });
+    expect(button).toHaveAttribute('title', 'Chaînes gratuites officielles');
+    await user.click(button);
+    expect(await screen.findAllByRole('menuitemradio')).toHaveLength(1);
+    expect(screen.queryByRole('menuitem', { name: 'Chaînes gratuites officielles' })).toBeNull();
+  } finally { cleanup(); Object.assign(fixture.playlist, previous); }
+});
+
 async function waitForPoster(): Promise<HTMLElement> {
   await screen.findAllByText('Titre 0');
   return document.querySelector<HTMLElement>('[data-tv-vod] [data-tv-row="0"]')!;

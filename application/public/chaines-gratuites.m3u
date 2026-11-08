@@ -17,7 +17,7 @@ https://5fc584f3f19c9.streamlock.net:443/canal222/videocanal222/playlist.m3u8
 
 # Source : https://tv.unam.mx/en-vivo/
 #EXTINF:-1 tvg-id="TVUNAM.mx" group-title="Mexique",TV UNAM
-https://5fc584f3f19c9.streamlock.net/tvunam/videotvunam/playlist.m3u8?DVR
+https://5fc584f3f19c9.streamlock.net/tvunam/videotvunam/playlist.m3u8
 
 # Source : https://mxplus.tv/apiv3/channels
 #EXTINF:-1 tvg-id="CanalCatorce.mx" group-title="Mexique" tvg-logo="https://mxplus.tv/img/logos/canales/white/canal-14.png",Canal 14

@@ -8,7 +8,9 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.428680+00:00"
+    "checkedAt": "2026-11-08T02:24:22.946707+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "Canal 22",
@@ -19,7 +21,9 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.490809+00:00"
+    "checkedAt": "2026-11-08T02:24:22.947466+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "MX Nuestro Cine",
@@ -30,18 +34,22 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.492975+00:00"
+    "checkedAt": "2026-11-08T02:24:22.948148+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "TV UNAM",
     "id": "TVUNAM.mx",
-    "url": "https://5fc584f3f19c9.streamlock.net/tvunam/videotvunam/playlist.m3u8?DVR",
+    "url": "https://5fc584f3f19c9.streamlock.net/tvunam/videotvunam/playlist.m3u8",
     "source": "https://tv.unam.mx/en-vivo/",
     "group": "Mexique",
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.493700+00:00"
+    "checkedAt": "2026-11-08T02:24:22.948660+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "Canal 14",
@@ -52,7 +60,9 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/canal-14.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.621913+00:00"
+    "checkedAt": "2026-11-08T02:24:22.949241+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "TV Migrante",
@@ -63,7 +73,9 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/logo_tvm.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.622006+00:00"
+    "checkedAt": "2026-11-08T02:24:22.949928+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "Canal 21",
@@ -74,7 +86,9 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/capital.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.630012+00:00"
+    "checkedAt": "2026-11-08T02:24:23.444215+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "Televisión Mexiquense",
@@ -85,7 +99,9 @@
     "logo": "https://mxplus.tv/upload/images/tv/tv_logotipo_1786392146_66b5d3fa.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.531464+00:00"
+    "checkedAt": "2026-11-08T02:24:23.910998+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "SMRTV",
@@ -96,7 +112,9 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/smrtv.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.814423+00:00"
+    "checkedAt": "2026-11-08T02:24:23.911716+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "France 24 français",
@@ -107,7 +125,9 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.753962+00:00"
+    "checkedAt": "2026-11-08T02:24:24.235195+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "France 24 español",
@@ -118,7 +138,9 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.738975+00:00"
+    "checkedAt": "2026-11-08T02:24:24.309357+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   },
   {
     "name": "DW Español",
@@ -129,6 +151,8 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/dw.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T00:22:23.723220+00:00"
+    "checkedAt": "2026-11-08T02:24:24.309676+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
   }
 ]

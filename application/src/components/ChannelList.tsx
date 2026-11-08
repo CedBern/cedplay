@@ -26,6 +26,7 @@ import { useKeyboardNavigation } from '@/hooks/useKeyboardNavigation';
 import { createSearchIndex, searchChannels } from '@/utils/channelSearch';
 import { focusRemote } from '@/utils/remoteNavigation';
 import type { FavoriteList } from '@/utils/favoriteLists';
+import { byChannelName } from '@/utils/channelCustomization';
 
 /** Surligne les occurrences de la recherche dans un nom (fonction pure, partagée par toutes les cartes). */
 const highlight = (text: string, rawQuery: string): React.ReactNode => {
@@ -382,6 +383,7 @@ const ChannelCard = React.memo(function ChannelCard({
       favoriteLists?: FavoriteList[] | undefined;
       /** Les groupes arrivent dans l'ordre choisi par l'utilisateur : ne pas les trier. */
       customGroupOrder?: boolean | undefined;
+      alphabetical?: boolean | undefined;
     }
 
   export function ChannelList({ 
@@ -401,7 +403,8 @@ const ChannelCard = React.memo(function ChannelCard({
       onOrganizeFavorites,
       onEditChannel,
       favoriteLists,
-      customGroupOrder = false
+      customGroupOrder = false,
+      alphabetical = false
     }: ChannelListProps) {
   const now = useNow();
   const [searchTerm, setSearchTerm] = useState('');
@@ -487,8 +490,9 @@ const ChannelCard = React.memo(function ChannelCard({
 
       const allChannels = useMemo(() => {
         if (!groups) return [];
-        return groups.flatMap(group => group.channels);
-      }, [groups]);
+        const flat = groups.flatMap(group => group.channels);
+        return alphabetical ? flat.sort(byChannelName) : flat;
+      }, [groups, alphabetical]);
 
       const lockedGroupSet = useMemo(() => new Set(lockedGroups ?? []), [lockedGroups]);
       const parentalLocked = lockedGroupSet.size > 0 && !unlocked;
