@@ -2102,7 +2102,9 @@ public class NativePlayerActivity extends AppCompatActivity {
                     break;
             }
             // Contrôles masqués : haut/bas zappent, OK affiche le bandeau, gauche ouvre la liste.
-            if (!isControlsVisible && !isChannelPanelOpen()) {
+            // Sauf panneau d'erreur affiché : ses flèches doivent déplacer le focus entre ses
+            // boutons empilés (constaté sur Hisense : ▼ depuis « Réessayer » zappait).
+            if (!isControlsVisible && !isChannelPanelOpen() && !isErrorPanelShown()) {
                 switch (keyCode) {
                     case KeyEvent.KEYCODE_DPAD_UP: switchChannel(-1); return true;
                     case KeyEvent.KEYCODE_DPAD_DOWN: switchChannel(1); return true;
@@ -2425,6 +2427,10 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void hideError() {
         if (errorPanel != null) errorPanel.setVisibility(View.GONE);
+    }
+
+    private boolean isErrorPanelShown() {
+        return errorPanel != null && errorPanel.getVisibility() == View.VISIBLE;
     }
 
     /** Bilan de session joint au résultat de l'activité (aucune URL ni identifiant).
