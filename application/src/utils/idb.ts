@@ -1,6 +1,7 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { PlaylistInfo } from '../types/channel';
 import { Backup, createBackup, rebuildPlaylist, playlistSignature, type LocalBackup } from './backup';
+import { readMyPlatforms, writeMyPlatforms } from './myPlatforms';
 import { v5 as uuidv5 } from 'uuid';
 
 const DB_NAME = 'IPTVPlayerDB';
@@ -97,6 +98,8 @@ export async function exportBackupFromDB(): Promise<Backup> {
     }
     const lastPlaylist = localStorage.getItem('iptv_last_playlist');
     if (typeof lastPlaylist === 'string' && lastPlaylist) local.lastPlaylist = lastPlaylist;
+    const myPlatforms = readMyPlatforms();
+    if (myPlatforms.length) local.myPlatforms = myPlatforms;
   } catch { /* localStorage indisponible */ }
   if (Object.keys(vodProgress).length) local.vodProgress = vodProgress;
   if (Object.keys(xtreamAccounts).length) local.xtreamAccounts = xtreamAccounts;
@@ -226,6 +229,11 @@ export async function restoreBackupToDB(backup: Backup): Promise<{ added: number
       }
       if (backup.local?.lastPlaylist && !localStorage.getItem('iptv_last_playlist')) {
         localStorage.setItem('iptv_last_playlist', backup.local.lastPlaylist);
+      }
+      if (backup.local?.myPlatforms?.length) {
+        // Additif, comme le reste : on ajoute aux plateformes déjà choisies sur cet appareil.
+        const current = readMyPlatforms();
+        writeMyPlatforms([...current, ...backup.local.myPlatforms.filter(id => !current.includes(id))]);
       }
     } catch { /* localStorage indisponible : la restauration IDB reste valide */ }
     return { added, skipped };

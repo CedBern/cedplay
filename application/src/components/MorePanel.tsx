@@ -1,13 +1,12 @@
 import { Activity, ChevronRight, CircleDot, CirclePlay, History, ListVideo, Settings } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-export type MoreDestination = 'free' | 'replay' | 'streaming' | 'recordings' | 'lists' | 'xtream' | 'health' | 'settings';
+export type MoreDestination = 'free' | 'replay' | 'recordings' | 'lists' | 'xtream' | 'health' | 'settings';
 
 const entries: { key: MoreDestination; label: string; hint: string; Icon: LucideIcon }[] = [
   { key: 'free', label: 'Chaînes gratuites', hint: 'Ouvrir la sélection de chaînes officielles, dont le Mexique', Icon: CirclePlay },
   { key: 'xtream', label: 'Connexion Xtream', hint: 'Ajouter un abonnement : serveur, identifiant, mot de passe', Icon: ListVideo },
-  { key: 'replay', label: 'Replay', hint: 'Revoir les émissions récentes des chaînes', Icon: History },
-  { key: 'streaming', label: 'Streaming', hint: 'Raccourcis vers les plateformes', Icon: CirclePlay },
+  { key: 'replay', label: 'Replay et plateformes', hint: 'Revoir les émissions, ouvrir Netflix, france.tv…', Icon: History },
   { key: 'recordings', label: 'Enregistrements', hint: 'Programmés et terminés', Icon: CircleDot },
   { key: 'lists', label: 'Mes listes', hint: 'Ajouter, mettre à jour, exporter', Icon: ListVideo },
   { key: 'health', label: 'Vérifier les chaînes', hint: 'Repérer et masquer les liens hors service', Icon: Activity },

@@ -73,6 +73,14 @@ describe('Sauvegarde complète et restauration additive', () => {
     expect(await getMeta('favorites')).toEqual(['current', 'saved']);
     expect(await getMeta('settings')).toEqual({ volume: 0.8 });
   });
+  it('« Mes plateformes » part dans la sauvegarde et s’ajoute au choix de l’appareil à la restauration', async () => {
+    localStorage.setItem('streaming_my_platforms', JSON.stringify(['netflix', 'arte']));
+    const snapshot = parseBackup(JSON.stringify(await exportBackupFromDB()));
+    expect(snapshot.local?.myPlatforms).toEqual(['netflix', 'arte']);
+    localStorage.setItem('streaming_my_platforms', JSON.stringify(['youtube', 'arte']));
+    await restoreBackupToDB(snapshot);
+    expect(JSON.parse(localStorage.getItem('streaming_my_platforms')!)).toEqual(['youtube', 'arte', 'netflix']);
+  });
   it('garde la date la plus récente pour chaque chaîne de l’historique', async () => {
     await setMeta('playHistory', [{ channelId: 'a', ts: 10 }]);
     await restoreBackupToDB(createBackup([], [{ key: 'playHistory', value: [{ channelId: 'a', ts: 4 }, { channelId: 'b', ts: 20 }] }]));

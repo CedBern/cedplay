@@ -24,7 +24,7 @@ import type { VodResumeRequest } from '@/components/VodLibrary';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
-import { LazyBackupPanel, LazyPublicCatalogueDialog, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
+import { LazyBackupPanel, LazyPublicCatalogueDialog, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayHub, LazySettingsPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
 import { downloadStalkerPlaylist, stalkerAvailable } from '@/utils/stalker';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2 } from 'lucide-react';
@@ -564,7 +564,7 @@ export function IPTVPlayer() {
       window.dispatchEvent(tvVodBack);
       if (tvVodBack.defaultPrevented) { event.preventDefault(); return; }
       if (tvMode && activeTab === 'channels' && channelView === 'grid') { event.preventDefault(); setChannelView('list'); return; }
-      const parent: Record<string, string> = { replay: 'more', streaming: 'more', player: 'channels', loader: tabBeforeLists };
+      const parent: Record<string, string> = { replay: 'more', player: 'channels', loader: tabBeforeLists };
       const target = parent[activeTab] ?? (activeTab !== 'continue' ? 'continue' : null);
       if (!target || !currentPlaylist) return;
       event.preventDefault();
@@ -746,7 +746,7 @@ export function IPTVPlayer() {
   const openMore = (destination: MoreDestination) => {
     if (destination === 'free') { setPublicCatalogueOpen(true); }
     else if (destination === 'xtream') setXtreamOpen(true);
-    else if (destination === 'replay' || destination === 'streaming') setActiveTab(destination);
+    else if (destination === 'replay') setActiveTab('replay');
     else if (destination === 'recordings') { setRecordingsChannel(null); setRecordingsOpen(true); }
     else if (destination === 'settings') setSettingsOpen(true);
     else if (destination === 'health') setHealthOpen(true);
@@ -950,12 +950,12 @@ export function IPTVPlayer() {
           </TabsContent>
           <TabsContent value="more" className="screen-enter space-y-4">
             {activeTab === 'more' && <div className="screen-enter"><MorePanel onOpen={openMore} /></div>}
-            {(activeTab === 'replay' || activeTab === 'streaming') && <div key={activeTab} className="screen-enter space-y-4">
-              <div className="flex items-center gap-3 text-foreground">
-                <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setActiveTab('more')}><ArrowLeft aria-hidden="true" className="h-4 w-4 mr-2" />Plus</Button>
-                <h2 className="text-xl font-semibold">{activeTab === 'replay' ? 'Replay' : 'Streaming'}</h2>
+            {activeTab === 'replay' && <div key="replay" className={`screen-enter space-y-4 ${tvMode ? '' : 'mx-auto max-w-2xl'}`}>
+              <div className="flex items-center gap-1 text-foreground">
+                <Button variant="ghost" size="icon" className="-ml-2 h-11 w-11 shrink-0 rounded-full" onClick={() => setActiveTab('more')} aria-label="Retour à Plus"><ArrowLeft aria-hidden="true" className="h-5 w-5" /></Button>
+                <h2 className="text-[22px] font-semibold tracking-tight">Replay et plateformes</h2>
               </div>
-              {activeTab === 'replay' ? <Suspense fallback={<PanelFallback className="h-72" />}><LazyReplayPanel playlist={currentPlaylist} epgData={epgData} /></Suspense> : <Suspense fallback={<PanelFallback className="h-72" />}><LazyStreamingPanel /></Suspense>}
+              <Suspense fallback={<PanelFallback className="h-72" />}><LazyReplayHub channels={playableChannels} epgData={epgData} catchupDays={catchupDays} onCatchup={playCatchup} tvMode={tvMode} /></Suspense>
             </div>}
           </TabsContent>
 

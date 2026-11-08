@@ -24,8 +24,7 @@ vi.mock('@/utils/nativePlayer', async () => ({ ...await vi.importActual<typeof i
 vi.mock('@/components/VodLibrary', () => ({ VodLibrary: ({ kind }: { kind: string }) => <div>Catalogue {kind}</div> }));
 vi.mock('@/components/ContinuePanel', () => ({ ContinuePanel: () => <div>Reprise test</div> }));
 vi.mock('@/components/MosaicPicker', () => ({ MosaicPicker: () => <div>Mosaïque test</div> }));
-vi.mock('@/components/ReplayPanel', () => ({ ReplayPanel: () => <div>Replay test</div> }));
-vi.mock('@/components/StreamingPanel', () => ({ StreamingPanel: () => <div>Streaming test</div> }));
+vi.mock('@/components/ReplayHub', () => ({ ReplayHub: () => <div>Replay test</div> }));
 vi.mock('@/components/LocalLibrary', () => ({ LocalLibrary: () => <div>Bibliothèque locale test</div> }));
 vi.mock('@/components/Recordings', () => ({ Recordings: () => <div>Enregistrements test</div> }));
 vi.mock('@/components/PlaylistLoader', () => ({ PlaylistLoader: () => <div>Importation disponible</div> }));

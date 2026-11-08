@@ -28,7 +28,7 @@ export function navSectionFor(screen: string, tv = false): NavSection | '' {
   if (screen === 'player' || screen === 'channels') return 'channels';
   if (screen === 'movies' || screen === 'series') return tv ? screen : 'vod';
   if (screen === 'podcasts') return 'podcasts';
-  if (screen === 'more' || screen === 'replay' || screen === 'streaming' || screen === 'loader') return 'more';
+  if (screen === 'more' || screen === 'replay' || screen === 'loader') return 'more';
   if (screen === 'continue') return 'continue';
   return '';
 }

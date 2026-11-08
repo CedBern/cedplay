@@ -25,6 +25,8 @@ const localSchema = z.object({
   xtreamAccounts: z.record(z.object({ server: z.string(), username: z.string(), password: z.string() })).optional(),
   /** Nom de la dernière liste utilisée. */
   lastPlaylist: z.string().optional(),
+  /** « Mes plateformes » de l'écran Replay et plateformes (localStorage `streaming_my_platforms`). */
+  myPlatforms: z.array(z.string().max(64)).max(200).optional(),
 }).strict().optional();
 
 // Version 2 ajoute la section `local` (progression VOD, comptes Xtream) ;
