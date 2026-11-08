@@ -2706,7 +2706,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (numberOverlay != null) numberOverlay.setVisibility(View.GONE);
     }
 
-    /** Bandeau de zap (haut-gauche, sous la barre de commandes) : logo, numéro · nom,
+    /** Bandeau de zap (haut-gauche ; sur téléphone, sous la barre de commandes) : logo, numéro · nom,
      *  programme en cours. Jamais focalisable : la télécommande reste à la page. */
     private void buildZapOverlay(FrameLayout root) {
         zapOverlay = new LinearLayout(this);
@@ -2737,9 +2737,12 @@ public class NativePlayerActivity extends AppCompatActivity {
         textCol.addView(zapProgram);
         zapOverlay.addView(textCol, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         zapOverlay.setVisibility(View.GONE);
-        // Sous la barre de commandes : pas de chevauchement quand elle est affichée.
+        // Téléphone : sous la barre de commandes, pour ne pas la chevaucher. TV : pas de barre
+        // en haut, le bandeau monte dans le coin, à la marge de sécurité de l'écran (comme le
+        // badge de retard).
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
-        lp.setMargins(dp(24), dp(72), dp(24), dp(24));
+        if (tvUi) lp.setMargins(dp(48), dp(32), dp(48), dp(24));
+        else lp.setMargins(dp(24), dp(72), dp(24), dp(24));
         root.addView(zapOverlay, lp);
     }
 
