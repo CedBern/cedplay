@@ -1,5 +1,12 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Lot C de l'audit — performance TV, 8 novembre 2026
+
+- Corrige le P1 de fluidité du guide et les trois P2 de performance React : l'aperçu natif n'est plus rappelé à chaque événement de défilement, les listes ne paient plus de reflow forcé à la frappe, et les caches mémoire ne grossissent plus à vie.
+- Modifiés : `EPGGrid.tsx` (relance de l'aperçu coalescée en `requestAnimationFrame`, frame annulée au démontage), `IPTVPlayer.tsx` (`openSearch`, `showGuide`, `openGroupManager`, `toggleChannelSort` mémoïsés ; `onNativePlay`, `onNativeChannelSelect` et `onRecord` réutilisent les callbacks stables existants), `ChannelList.tsx` (`useLayoutEffect` à dépendances explicites, `restoreRowFocus` mémoïsé, recherche remise à zéro seulement au changement de `playlistId`), `vodPosterCache.ts` (`rememberLoadedPoster`/`rememberFailedPoster`, plafonds 2 000 / 500), `VodPoster.tsx`.
+- Vérifié : `tsc` app+node 0 erreur, `eslint ./src` complet 0 erreur / 18 avertissements (inchangé), **717/717 tests** sur 113 fichiers (8 nouveaux, chacun vérifié par mutation : il échoue sur le code d'avant correction), `vite build` OK (chunk principal 637,6 kB / 194,0 kB gzip), `dist/` 2,7 Mo.
+- Non vérifié : fluidité réelle du guide et de l'aperçu sur box, frappe dans une liste de ~2 000 chaînes, défilement d'un catalogue VOD de plusieurs milliers d'affiches. Le lot C n'est ni commité ni empaqueté : la version en place est 1.12.8 / code 56 (session Plateformes), l'APK installée sur la Hisense ne le contient pas.
+
 ## Lot B de l'audit — démarrage et robustesse, 8 novembre 2026
 
 - Corrige les cinq P1 de robustesse : plus d'écran de chargement éternel si IndexedDB est bloquée, plus de gel du fil principal après un timeout du worker EPG, plafonds et encodage des imports, mémoire du guide réduite, import Xtream borné et annulable.
@@ -743,3 +750,5 @@ Sur le téléphone : Prime/Max/Arte semblent **non installées** (le navigateur 
 **Vérification.** 709/709 tests Web (inclut le Lot B de l'autre session en cours), tsc app+node 0, ESLint 0 erreur (18 avertissements), vite build 8,7 s, cap sync, assembleRelease OK. APK **CedPlay-1.12.8.apk** (4 607 473 octets, SHA-256 `f3fafbdfdf6c5cc8aa08a2f2…`, aapt `versionCode='56' versionName='1.12.8'`) installée sur la Hisense (dumpsys code 56 / 1.12.8). **Le téléphone n'apparaît pas en adb** (ni avant ni après redémarrage du serveur adb) : vérifier l'autorisation « Débogage USB » sur le Motorola, puis `adb install -r CedPlay-1.12.8.apk`. Comme pour la 1.12.7, l'APK embarque le travail non commité de la session concurrente (ici son Lot B, tests verts).
 
 **Version.** 1.12.8 / code 56 prise par cette livraison — la suivante sera **1.12.9 / code 57** (fiche CedPlay.md harmonisée).
+
+**Installation 1.12.8 terminée (8 novembre 2026).** Le Motorola est réapparu en adb après déblocage du débogage USB côté téléphone : `adb install -r CedPlay-1.12.8.apk` réussi (dumpsys `versionCode=56 versionName=1.12.8`). Les deux appareils (Motorola Edge 70 + Hisense HiSmartTV A4) sont en 1.12.8 — L'Équipe disponible dans Direct → Plateformes sur les deux.
