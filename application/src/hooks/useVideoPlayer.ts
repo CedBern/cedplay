@@ -45,6 +45,9 @@ export function useVideoPlayer() {
   // Pause du direct : écart (secondes) entre la position courante et le bord du
   // direct. null = au direct (ou flux non live).
   const [liveBehindSec, setLiveBehindSec] = useState<number | null>(null);
+  // Pistes de sous-titres du manifeste HLS (index -1 = désactivées).
+  const [subtitleTracks, setSubtitleTracks] = useState<{ index: number; label: string }[]>([]);
+  const [subtitleTrack, setSubtitleTrack] = useState(-1);
 
   const clearSource = useCallback(() => {
     if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
@@ -73,6 +76,7 @@ export function useVideoPlayer() {
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
     setIsPlaying(false); setIsLoading(false); setError(null);
     setAvailableQualities([]); setCurrentQuality('auto');
+    setSubtitleTracks([]); setSubtitleTrack(-1);
   }, [clearSource]);
 
   const playStream = useCallback(async function play(url: string, options: PlayOptions = {}) {
@@ -86,6 +90,7 @@ export function useVideoPlayer() {
     lastUrlRef.current = url;
     setIsPlaying(false); setIsLoading(true); setError(null);
     setAvailableQualities([]); setCurrentQuality('auto');
+    setSubtitleTracks([]); setSubtitleTrack(-1);
     if (options.resetAttempts !== false) { retryRef.current = 0; setRetryAttempts(0); }
     const isCurrent = () => generationRef.current === generation;
     const retry = () => {
@@ -167,6 +172,15 @@ export function useVideoPlayer() {
             } else {
               retry();
             }
+          });
+          // Pistes de sous-titres embarquées dans le manifeste (direct).
+          hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+            if (!isCurrent()) return;
+            setSubtitleTracks(hls.subtitleTracks.map((track, index) => ({
+              index,
+              label: track.name || track.lang || `Piste ${index + 1}`,
+            })));
+            setSubtitleTrack(hls.subtitleTrack);
           });
           hls.loadSource(streamUrl);
           hls.attachMedia(video);
@@ -275,6 +289,13 @@ export function useVideoPlayer() {
     hls.currentLevel = index - 1;
     setCurrentQuality(index === 0 ? 'auto' : `${hls.levels[index - 1].height || index}p`);
   }, []);
+  /** Sélectionne une piste de sous-titres HLS (-1 = désactivées). */
+  const changeSubtitleTrack = useCallback((index: number) => {
+    const hls = hlsRef.current;
+    if (!hls) return;
+    hls.subtitleTrack = index;
+    setSubtitleTrack(index);
+  }, []);
   const adaptQualityToNetwork = useCallback((_networkDownlink: number) => {
     // HLS.js owns automatic adaptation. Manual quality selection stays authoritative.
   }, []);
@@ -375,5 +396,6 @@ export function useVideoPlayer() {
   }, [playStream]);
   return { videoRef, isPlaying, isLoading, error, isFullscreen, volume, currentQuality, availableQualities,
     playStream, stopStream, changeQuality, adaptQualityToNetwork, getBufferHealth, retryAttempts,
-    togglePlay, toggleFullscreen, changeVolume, changeMute, isMuted, toggleMute, manualRetry, liveBehindSec, seekToLiveEdge };
+    togglePlay, toggleFullscreen, changeVolume, changeMute, isMuted, toggleMute, manualRetry, liveBehindSec, seekToLiveEdge,
+    subtitleTracks, subtitleTrack, changeSubtitleTrack };
 }

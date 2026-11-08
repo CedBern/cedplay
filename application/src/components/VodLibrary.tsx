@@ -22,8 +22,12 @@ import { toast } from 'sonner';
 
 const fullCatalogCache = new Map<string, { fetchedAt: number; items: CatalogItem[] }>();
 
-function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt }: { url: string; title: string; mediaId: string; restart: boolean; subtitleVtt?: string }) {
+function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { url: string; title: string; mediaId: string; restart: boolean; subtitleVtt?: string; onEnded?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
+  // Référence mutable : le callback d'enchaînement ne doit pas relancer l'effet
+  // d'attachement du flux (il ne dépend que de l'URL et du média).
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
   useEffect(() => {
     const video = ref.current;
     if (!video || !subtitleVtt) return;
@@ -51,6 +55,7 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt }: { url: stri
       saveVodProgress(mediaId, position, duration);
       void updateVodHistoryProgress(mediaId, position, duration, video.ended).catch(() => {});
     };
+    const ended = () => { save(); onEndedRef.current?.(); };
     const stop = () => { save(); cancelled = true; engine?.destroy(); video.pause(); video.removeAttribute('src'); video.load(); };
     const unsubscribe = onPlaybackDelegated(stop);
     // Reprise fiable en HLS : duration vaut Infinity tant que les segments ne sont
@@ -65,7 +70,7 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt }: { url: stri
     video.addEventListener('loadedmetadata', metadata);
     video.addEventListener('durationchange', applyPosition);
     video.addEventListener('pause', save);
-    video.addEventListener('ended', save);
+    video.addEventListener('ended', ended);
     const timer = window.setInterval(save, 15_000);
     const start = async () => {
       const playbackUrl = getPlaybackUrl(url);
@@ -78,7 +83,7 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt }: { url: stri
       void video.play().catch(() => {});
     };
     void start().catch(() => toast.error('Lecture indisponible dans ce navigateur.'));
-    return () => { clearInterval(timer); unsubscribe(); video.removeEventListener('loadedmetadata', metadata); video.removeEventListener('durationchange', applyPosition); video.removeEventListener('pause', save); video.removeEventListener('ended', save); stop(); };
+    return () => { clearInterval(timer); unsubscribe(); video.removeEventListener('loadedmetadata', metadata); video.removeEventListener('durationchange', applyPosition); video.removeEventListener('pause', save); video.removeEventListener('ended', ended); stop(); };
   }, [url, mediaId, restart]);
   return <div className="space-y-2"><p>{title}</p><video ref={ref} controls playsInline className="w-full max-h-[65vh] bg-black" onError={() => toast.error('Ce format ne peut pas être lu ici. Essaie le lecteur Android.')} /></div>;
 }
@@ -110,6 +115,17 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const [subtitleEpisodeId, setSubtitleEpisodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState<{ url: string; title: string; mediaId: string; restart: boolean; subtitleVtt?: string } | null>(null);
+  // Enchaînement web : prochain épisode de la saison, proposé à la fin de la
+  // lecture (miroir web du zapContext natif). ctx reporte l'identité de la
+  // série dans l'historique même après fermeture de la fiche.
+  const [queueNext, setQueueNext] = useState<{ id: string; ext: string; title: string; name: string; ctx?: { name?: string; poster?: string; seriesId?: string; categoryId?: string } } | null>(null);
+  const [autoNextCountdown, setAutoNextCountdown] = useState<number | null>(null);
+  const [autoNextEnabled, setAutoNextEnabled] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    void StorageManager.loadSettingsAsync().then(s => { if (!cancelled) setAutoNextEnabled(s.autoNextEpisode !== false); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [currentSub, setCurrentSub] = useState<ReadySubtitle | null>(null);
   const [vodHistory, setVodHistory] = useState<Awaited<ReturnType<typeof getPlayHistory>>>([]);
   const [allMovies, setAllMovies] = useState<CatalogItem[]>([]);
@@ -310,24 +326,34 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const progressLabel = useCallback((id: string) => cachedProgress(id).label, [cachedProgress]);
-  const play = async (id: string, ext: string, title: string, restart = false) => {
+  const play = async (id: string, ext: string, title: string, restart = false, ctx?: { name?: string; poster?: string; seriesId?: string; categoryId?: string }) => {
     if (!account || busy) return;
     try {
       const url = vodUrl(account, kind, id, ext), key = mediaKey(id);
       // Historique de lecture (recommandations « Pour toi ») : titre de la série pour un épisode.
-      const entryName = kind === 'series' && selected ? selected.name : title;
+      // ctx reporte la série d'un épisode lancé automatiquement (la fiche est fermée).
+      const seriesRef = ctx || (selected ? { name: selected.name, poster: selected.poster, seriesId: selected.id, categoryId: selected.categoryId } : undefined);
+      const entryName = kind === 'series' && seriesRef?.name ? seriesRef.name : title;
       const entryYear = normalizeTitle(entryName).year;
       await pushPlayHistory({
         channelId: `vod:${playlist.id}:${kind}:${id}`,
         ts: Date.now(),
         kind: 'vod', playlistId: playlist.id, mediaKind: kind, status: 'started',
         name: entryName,
-        ...(selected?.poster ? { poster: selected.poster } : {}),
+        ...(seriesRef?.poster ? { poster: seriesRef.poster } : {}),
         ...(kind === 'series' ? { episodeName: title } : {}),
-        ...(kind === 'series' && selected ? { seriesId: selected.id } : {}),
-        ...(selected?.categoryId ? { categoryId: selected.categoryId } : {}),
+        ...(kind === 'series' && seriesRef?.seriesId ? { seriesId: seriesRef.seriesId } : {}),
+        ...(seriesRef?.categoryId ? { categoryId: seriesRef.categoryId } : {}),
         ...(entryYear ? { year: entryYear } : {}),
       }).catch(() => { /* l'historique ne doit jamais bloquer la lecture */ });
+      // Prochain épisode de la saison (chemin natif et web partagent ce calcul).
+      const seasonEpisodes = (kind === 'series' && details?.episodes)
+        ? details.episodes.filter(e => e.season === season && e.extension)
+        : [];
+      const episodeIdx = seasonEpisodes.findIndex(e => e.id === id);
+      const nextEpisode = (kind === 'series' && episodeIdx >= 0 && episodeIdx + 1 < seasonEpisodes.length)
+        ? seasonEpisodes[episodeIdx + 1]
+        : undefined;
       if (NativePlayerBridge.isAvailable()) {
         setBusy(true);
         const eligibleSub = kind === 'movie' || subtitleEpisodeId === id ? currentSub : null;
@@ -335,10 +361,6 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           ...(eligibleSub.url ? { url: eligibleSub.url } : {}),
           ...(eligibleSub.srtContent ? { content: eligibleSub.srtContent } : {}),
         } : undefined;
-        const seasonEpisodes = (kind === 'series' && details?.episodes)
-          ? details.episodes.filter(e => e.season === season && e.extension)
-          : [];
-        const episodeIdx = seasonEpisodes.findIndex(e => e.id === id);
         const zapContext = (kind === 'series' && seasonEpisodes.length > 1 && episodeIdx >= 0) ? {
           urls: seasonEpisodes.map(e => vodUrl(account, 'series', e.id, e.extension)),
           titles: seasonEpisodes.map(e => `${e.number}. ${e.name}`),
@@ -361,10 +383,45 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           restart,
           ...(currentSub?.vttContent && (kind === 'movie' || subtitleEpisodeId === id) ? { subtitleVtt: currentSub.vttContent } : {}),
         });
+        setQueueNext(nextEpisode ? {
+          id: nextEpisode.id,
+          ext: nextEpisode.extension,
+          title: `${nextEpisode.number}. ${nextEpisode.name}`,
+          name: nextEpisode.name,
+          ...(seriesRef ? {
+            ctx: {
+              ...(seriesRef.name ? { name: seriesRef.name } : {}),
+              ...(seriesRef.poster ? { poster: seriesRef.poster } : {}),
+              ...(seriesRef.seriesId ? { seriesId: seriesRef.seriesId } : {}),
+              ...(seriesRef.categoryId ? { categoryId: seriesRef.categoryId } : {}),
+            },
+          } : {}),
+        } : null);
+        setAutoNextCountdown(null);
       }
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Lecture indisponible.'); }
     finally { setBusy(false); }
   };
+
+  // Fin de lecture web : si un épisode suit et que le réglage l'autorise,
+  // compte à rebours de 5 s avant de l'enchaîner (annulable).
+  const handleWebEnded = () => {
+    if (autoNextEnabled && queueNext) setAutoNextCountdown(5);
+  };
+  useEffect(() => {
+    if (autoNextCountdown === null || !queueNext) return;
+    if (autoNextCountdown <= 0) {
+      const next = queueNext;
+      setAutoNextCountdown(null);
+      setQueueNext(null);
+      void play(next.id, next.ext, next.name, false, next.ctx);
+      return;
+    }
+    const timer = window.setTimeout(() => setAutoNextCountdown(current => (current === null ? null : current - 1)), 1000);
+    return () => window.clearTimeout(timer);
+    // play lit le catalogue courant ; il n'est pas une dépendance stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoNextCountdown, queueNext]);
 
   // Reprise depuis « Continuer » : ouvre directement la lecture du titre en cours.
   useEffect(() => {
@@ -557,7 +614,16 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       {details.episodes.length === 0 ? <p>Aucun épisode fourni pour cette série.</p> : <><select aria-label="Saison" className="w-full bg-neutral-900 p-3 rounded-md" value={season} onChange={e => setSeason(e.target.value)}>{[...new Set(details.episodes.map(e => e.season))].map(s => <option key={s} value={s}>Saison {s}</option>)}</select><div className="space-y-2">{details.episodes.filter(e => e.season === season).map((e, idx) => <div key={e.id} className="bg-white/5 rounded-lg p-3 space-y-2"><p>{e.number}. {e.name}</p>{e.plot && <p className="text-xs text-neutral-400 line-clamp-3">{e.plot}</p>}<div className="flex flex-wrap gap-2">{settings.subtitlesEnabled !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setCurrentSub(null); setSubtitleEpisodeId(e.id); }}>Sous-titres épisode {e.number}</Button>}<Button size="sm" disabled={busy || !e.extension} {...(idx === 0 ? { 'data-remote-start': true } : {})} onClick={() => void play(e.id, e.extension, e.name)}>{progressLabel(e.id)}</Button>{cachedProgress(e.id).saved && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void play(e.id, e.extension, e.name, true)}>Depuis le début</Button>}</div>{!e.extension && <p className="text-xs text-amber-300">Format non fourni.</p>}</div>)}</div></>}
     </div>}
   </DialogContent></Dialog>;
-  const playingDialog = <Dialog open={!!playing} onOpenChange={open => { if (!open) setPlaying(null); }}><DialogContent className="bg-neutral-950 text-white sm:max-w-4xl"><DialogHeader><DialogTitle>Lecture</DialogTitle><DialogDescription>Pause, déplacement et reprise de lecture.</DialogDescription></DialogHeader>{playing && <WebVodPlayer key={playing.url} {...playing} />}</DialogContent></Dialog>;
+  const playingDialog = <Dialog open={!!playing} onOpenChange={open => { if (!open) { setPlaying(null); setQueueNext(null); setAutoNextCountdown(null); } }}><DialogContent className="bg-neutral-950 text-white sm:max-w-4xl"><DialogHeader><DialogTitle>Lecture</DialogTitle><DialogDescription>Pause, déplacement et reprise de lecture.</DialogDescription></DialogHeader>{playing && <div className="relative">
+    {autoNextCountdown !== null && queueNext && <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center" data-testid="next-episode-overlay">
+      <p className="text-sm">Épisode suivant : <span className="font-semibold">{queueNext.title}</span> dans {autoNextCountdown} s</p>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => setAutoNextCountdown(0)}>Lire maintenant</Button>
+        <Button size="sm" variant="outline" onClick={() => setAutoNextCountdown(null)}>Annuler</Button>
+      </div>
+    </div>}
+    <WebVodPlayer key={playing.url} {...playing} onEnded={handleWebEnded} />
+  </div>}</DialogContent></Dialog>;
   // Mode TV : l'écran télécommande remplace la mise en page mobile ; fiches et lecture restent partagées.
   if (tvMode) return <section>
     <TvVodScreen

@@ -28,6 +28,7 @@ export interface AppSettings {
   playbackRate?: number; // preferred playback speed
   autoLoadLastPlaylist?: boolean; // auto-load last used playlist on startup
   autoReconnect?: boolean; // resume the stream automatically after a network outage
+  autoNextEpisode?: boolean; // web VOD : lancer l'épisode suivant à la fin de la lecture
   epgUrl?: string; // custom XMLTV URL for lists without a linked Xtream account
   tmdbApiKey?: string; // TMDB API key or read access token (enriched VOD info)
   subtitlesEnabled?: boolean; // active la recherche et l'affichage des sous-titres
@@ -63,6 +64,7 @@ const appSettingsSchema = z.object({
   playbackRate: z.number().min(0.5).max(2).optional(),
   autoLoadLastPlaylist: z.boolean().optional(),
   autoReconnect: z.boolean().optional(),
+  autoNextEpisode: z.boolean().optional(),
   epgUrl: z.string().max(500).optional(),
   // Les jetons de lecture v4 TMDB font ~220 caractères : 200 les tronquait.
   tmdbApiKey: z.string().max(MAX_TMDB_CREDENTIAL_LENGTH).optional(),
@@ -154,6 +156,7 @@ export class StorageManager {
   playbackRate: 1,
   autoLoadLastPlaylist: true,
   autoReconnect: true,
+  autoNextEpisode: true,
   epgUrl: '',
   tmdbApiKey: '',
   subtitlesEnabled: true,
@@ -311,6 +314,7 @@ export class StorageManager {
   ...(p.playbackRate !== undefined ? { playbackRate: p.playbackRate } : {}),
   ...(p.autoLoadLastPlaylist !== undefined ? { autoLoadLastPlaylist: p.autoLoadLastPlaylist } : {}),
   ...(p.autoReconnect !== undefined ? { autoReconnect: p.autoReconnect } : {}),
+  ...(p.autoNextEpisode !== undefined ? { autoNextEpisode: p.autoNextEpisode } : {}),
   ...(p.epgUrl !== undefined ? { epgUrl: p.epgUrl } : {}),
   ...(p.tmdbApiKey !== undefined ? { tmdbApiKey: p.tmdbApiKey } : {}),
   ...(p.subtitlesEnabled !== undefined ? { subtitlesEnabled: p.subtitlesEnabled } : {}),
@@ -348,6 +352,7 @@ export class StorageManager {
       playbackRate: typeof s.playbackRate === 'number' && !Number.isNaN(s.playbackRate) ? Math.min(2, Math.max(0.5, s.playbackRate)) : (base.playbackRate as number),
       autoLoadLastPlaylist: coerceBool(s.autoLoadLastPlaylist, base.autoLoadLastPlaylist as boolean),
       autoReconnect: coerceBool(s.autoReconnect, base.autoReconnect as boolean),
+      autoNextEpisode: coerceBool(s.autoNextEpisode, base.autoNextEpisode as boolean),
       epgUrl: typeof s.epgUrl === 'string' ? String(s.epgUrl).slice(0, 500) : (base.epgUrl as string),
       // Large marge : les jetons de lecture v4 TMDB dépassent 200 caractères.
       tmdbApiKey: typeof s.tmdbApiKey === 'string' ? String(s.tmdbApiKey).slice(0, MAX_TMDB_CREDENTIAL_LENGTH) : (base.tmdbApiKey as string),

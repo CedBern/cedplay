@@ -35,6 +35,7 @@ import { AppSettings, StorageManager } from '@/utils/storage';
 import { toast } from 'sonner';
 import { getFavoritesFromDB, pushPlayHistory } from '@/utils/idb';
 import { useEPG } from '@/hooks/useEPG';
+import { useRemindersSync } from '@/hooks/useRemindersSync';
 import { CORSProxy } from '@/utils/corsProxy';
 import { parseM3UInWorker } from '@/utils/parseWorker';
 import { adultGroupNames } from '@/utils/parentalControl';
@@ -547,6 +548,9 @@ export function IPTVPlayer() {
     setLaunchChannelId(null);
     if (channel) handleChannelSelect(channel.variants?.find(v => v.id === launchChannelId) || channel);
   }, [launchChannelId, currentPlaylist, customizedGroups, handleChannelSelect]);
+  // Rappels EPG : notifications système (Android) ; un appui ouvre la chaîne
+  // par le même flux que le raccourci lecteuriptv://channel?id=… ci-dessus.
+  useRemindersSync(setLaunchChannelId);
 
   // Bouton retour Android : sous-écran → rubrique parente → Accueil, puis sortie.
   useEffect(() => {

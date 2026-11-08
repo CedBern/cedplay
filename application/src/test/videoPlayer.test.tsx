@@ -5,18 +5,28 @@
 // Le mock de hls.js reproduit celui de src/test/videoLifecycle.test.tsx.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { VideoPlayer } from '@/components/VideoPlayer';
 import type { Channel } from '@/types/channel';
 
-const mockHls = vi.hoisted(() => ({ instances: [] as Array<{ destroy: ReturnType<typeof vi.fn>; events: Record<string, (...args: unknown[]) => void> }> }));
+const mockHls = vi.hoisted(() => ({
+  instances: [] as Array<{
+    destroy: ReturnType<typeof vi.fn>;
+    events: Record<string, (...args: unknown[]) => void>;
+    subtitleTracks: Array<{ name?: string; lang?: string }>;
+    subtitleTrack: number;
+  }>,
+}));
 vi.mock('hls.js', () => ({ default: class {
   static isSupported = () => true;
-  static Events = { MANIFEST_PARSED: 'manifest', ERROR: 'error' };
+  static Events = { MANIFEST_PARSED: 'manifest', ERROR: 'error', SUBTITLE_TRACKS_UPDATED: 'subtitleTracksUpdated' };
   static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
   events: Record<string, (...args: unknown[]) => void> = {};
   destroy = vi.fn(); levels = [{ height: 720 }];
   loadSource = vi.fn(); attachMedia = vi.fn();
   startLoad = vi.fn(); recoverMediaError = vi.fn();
+  subtitleTracks: Array<{ name?: string; lang?: string }> = [];
+  subtitleTrack = -1;
   on(event: string, callback: (...args: unknown[]) => void) { this.events[event] = callback; }
   constructor() { mockHls.instances.push(this); }
 } }));
@@ -123,5 +133,33 @@ describe('VideoPlayer', () => {
     fireEvent.keyDown(window, { key: 'ChannelDown' });
     expect(onNextChannel).toHaveBeenCalledTimes(2);
     expect(onPrevChannel).toHaveBeenCalledTimes(2);
+  });
+
+  it('expose et applique les pistes de sous-titres du direct (HLS)', async () => {
+    render(<VideoPlayer channel={canal} />);
+    await waitFor(() => expect(mockHls.instances).toHaveLength(1));
+    const instance = mockHls.instances[0];
+    // Pas de piste annoncée : aucun sélecteur de sous-titres.
+    expect(screen.queryByRole('button', { name: 'Sous-titres' })).toBeNull();
+
+    // Le manifeste annonce trois pistes : nommée, langue seule, sans rien.
+    instance.subtitleTracks = [{ name: 'Français', lang: 'fr' }, { name: '', lang: 'en' }, { name: '', lang: '' }];
+    await act(async () => {
+      instance.events['manifest']('manifest', {});
+      instance.events['subtitleTracksUpdated']('subtitleTracksUpdated', {});
+    });
+    await userEvent.click(await screen.findByRole('button', { name: 'Sous-titres' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Français/ }));
+    expect(instance.subtitleTrack).toBe(0);
+    // Le bouton affiche la piste choisie.
+    expect(screen.getByRole('button', { name: 'Sous-titres' })).toHaveTextContent('Français');
+    // Piste sans nom : libellés de repli (langue, puis rang).
+    await userEvent.click(screen.getByRole('button', { name: 'Sous-titres' }));
+    expect(await screen.findByRole('menuitem', { name: 'en' })).toBeVisible();
+    expect(await screen.findByRole('menuitem', { name: /Piste 3/ })).toBeVisible();
+    // Désactivation : -1 repart chez hls.js.
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Désactivés' }));
+    expect(instance.subtitleTrack).toBe(-1);
+    expect(screen.getByRole('button', { name: 'Sous-titres' })).toHaveTextContent('ST');
   });
 });

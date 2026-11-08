@@ -66,9 +66,12 @@ export async function exportBackupFromDB(): Promise<Backup> {
   ]);
   await tx.done;
   // Les gros caches régénérables (XMLTV brut/parsé, traductions) n'ont pas leur
-  // place dans une sauvegarde : ils sont re-téléchargés à la demande.
+  // place dans une sauvegarde : ils sont re-téléchargés à la demande. Le registre
+  // des notifications programmées décrit l'état de CET appareil : le restaurer
+  // ailleurs ferait croire que des notifications y sont déjà posées.
   const kept = (meta as { key: string; value: unknown }[]).filter(entry =>
-    !entry.key.startsWith('epgCache_') && !entry.key.startsWith('epgParsed_') && !entry.key.startsWith('sub_'));
+    !entry.key.startsWith('epgCache_') && !entry.key.startsWith('epgParsed_') && !entry.key.startsWith('sub_') &&
+    entry.key !== 'epgRemindersScheduled');
   // Les positions VOD et comptes Xtream vivent dans localStorage : on les exporte
   // aussi, sinon la reprise de lecture et les identifiants seraient perdus.
   const local: LocalBackup = {};
@@ -131,11 +134,36 @@ export async function restoreBackupToDB(backup: Backup): Promise<{ added: number
       existing.set(restored.id, restored);
       added++;
     }
+    // Les dispositions de mosaïque locales suivent leur liste reidentifiée,
+    // même si la sauvegarde n'en contenait aucune pour elle : fusion par nom,
+    // dispositions déjà en place prioritaires.
+    for (const [oldId, newId] of remapped) {
+      const sourceKey = `mosaicLayouts:${oldId}`;
+      const source = await meta.get(sourceKey) as { value: unknown } | undefined;
+      if (!Array.isArray(source?.value)) continue;
+      const targetKey = `mosaicLayouts:${newId}`;
+      const target = await meta.get(targetKey) as { value: unknown } | undefined;
+      const local = Array.isArray(target?.value) ? (target!.value as Array<{ name?: unknown }>) : [];
+      const names = new Set(local.map(l => typeof l?.name === 'string' ? l.name.toLocaleLowerCase() : ''));
+      const incoming = (source!.value as Array<{ name?: unknown }>).filter(l => typeof l?.name === 'string' && !names.has(l.name.toLocaleLowerCase()));
+      await meta.put({ key: targetKey, value: [...local, ...incoming] });
+      await meta.delete(sourceKey);
+    }
     for (const entry of backup.meta) {
       let key = entry.key;
       if (key.startsWith('lastChannel_')) {
         const replacement = remapped.get(key.slice('lastChannel_'.length));
         if (replacement) key = `lastChannel_${replacement}`;
+      }
+      // État propre à un appareil (notifications déjà posées) : jamais restauré,
+      // même présent dans une ancienne sauvegarde — sinon les rappels ne se
+      // programment plus ici.
+      if (key === 'epgRemindersScheduled') continue;
+      // Les dispositions de mosaïque suivent leur liste si la restauration lui
+      // attribue un nouvel identifiant.
+      if (key.startsWith('mosaicLayouts:')) {
+        const replacement = remapped.get(key.slice('mosaicLayouts:'.length));
+        if (replacement) key = `mosaicLayouts:${replacement}`;
       }
       const previous = await meta.get(key) as { key: string; value: unknown } | undefined;
       let value = entry.value;
@@ -164,6 +192,14 @@ export async function restoreBackupToDB(backup: Backup): Promise<{ added: number
         const localSettings = (typeof previous.value === 'object' && previous.value !== null) ? previous.value as Record<string, unknown> : {};
         const incoming = (typeof value === 'object' && value !== null) ? value as Record<string, unknown> : {};
         value = { ...incoming, ...localSettings };
+      } else if (key.startsWith('mosaicLayouts:')) {
+        // Fusion par nom, les dispositions locales restent prioritaires (même
+        // règle que la liste VOD) ; la lecture revalide et plafonne le total
+        // (sanitize de mosaicLayouts.ts).
+        const local = Array.isArray(previous?.value) ? (previous!.value as Array<{ name?: unknown }>) : [];
+        const incoming = Array.isArray(value) ? (value as Array<{ name?: unknown }>) : [];
+        const names = new Set(local.map(l => typeof l?.name === 'string' ? l.name.toLocaleLowerCase() : ''));
+        value = [...local, ...incoming.filter(l => typeof l?.name === 'string' && !names.has(l.name.toLocaleLowerCase()))];
       } else if (previous) continue;
       await meta.put({ key, value });
     }

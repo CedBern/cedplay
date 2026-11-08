@@ -71,7 +71,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
     } catch { toast.error('Impossible d’enregistrer les paramètres'); }
     finally { setSaving(false); }
   };
-  type ToggleKey = 'autoplay' | 'muteOnStart' | 'autoLoadLastPlaylist' | 'startOnLastChannel' |'autoReconnect' | 'keyboardNavigation' | 'compactModeDefault' | 'virtualizationEnabledDefault' | 'telemetryPersistence';
+  type ToggleKey = 'autoplay' | 'muteOnStart' | 'autoLoadLastPlaylist' | 'startOnLastChannel' |'autoReconnect' | 'autoNextEpisode' | 'keyboardNavigation' | 'compactModeDefault' | 'virtualizationEnabledDefault' | 'telemetryPersistence';
   const toggle = (key: ToggleKey, label: string, hint?: string) => <label key={key} className="flex min-h-12 cursor-pointer items-center justify-between gap-4 py-2">
     <span className="min-w-0">
       <span className="block text-sm text-foreground">{label}</span>
@@ -101,6 +101,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           {toggle('autoplay', 'Lire automatiquement la chaîne sélectionnée')}
           {toggle('muteOnStart', 'Démarrer sans son')}
           {toggle('autoReconnect', 'Relancer la lecture après une coupure réseau')}
+          {toggle('autoNextEpisode', 'Enchaîner automatiquement l’épisode suivant (VOD)')}
           <label className="block py-3">
             <span className="flex justify-between text-sm text-foreground">Volume de départ <span className="font-mono text-muted-foreground">{Math.round(draft.volume * 100)} %</span></span>
             <input className="mt-2 block w-full accent-primary" type="range" min="0" max="1" step="0.05" value={draft.volume} onChange={e => setDraft({ ...draft, volume: Number(e.target.value) })} />
@@ -247,7 +248,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           </div>
         </>)}
 
-        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.11.17 · Direct, films et séries</p>
+        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.12.0 · Direct, films et séries</p>
         <div className="sticky -bottom-6 -mx-6 flex justify-end gap-2 border-t border-neutral-900 bg-background px-6 py-3">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
           <Button disabled={saving} onClick={save}>{saving ? 'Enregistrement…' : 'Enregistrer'}</Button>

@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
-import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Loader2, AlertCircle, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Ratio } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize, Minimize, Loader2, AlertCircle, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Ratio, Subtitles, Check } from 'lucide-react';
 import { Channel } from '@/types/channel';
 import { useVideoPlayer } from '@/hooks/useVideoPlayer';
 import { isPlaybackDelegated } from '@/utils/playbackOwnership';
@@ -52,7 +52,8 @@ export function VideoPlayer({ channel, className = '', autoplay = true, keyboard
     togglePlay,
     toggleFullscreen,
     changeVolume,
-    manualRetry, isMuted, toggleMute, changeMute, liveBehindSec, seekToLiveEdge
+    manualRetry, isMuted, toggleMute, changeMute, liveBehindSec, seekToLiveEdge,
+    subtitleTracks, subtitleTrack, changeSubtitleTrack
   } = useVideoPlayer();
 
   // Active channel may shift to a variant if fallback is triggered
@@ -677,12 +678,38 @@ export function VideoPlayer({ channel, className = '', autoplay = true, keyboard
                 ) : null}
                 
                 {/* Quality Selector */}
-                <QualitySelector 
+                <QualitySelector
                   currentQuality={currentQuality}
                   availableQualities={availableQualities}
                   onQualityChange={changeQuality}
                   disabled={!isPlaying}
                 />
+                {/* Sous-titres du direct : pistes du manifeste HLS, rien sinon. */}
+                {subtitleTracks.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="secondary" className="h-6 px-2 text-xs flex items-center gap-1" title="Sous-titres" aria-label="Sous-titres">
+                        <Subtitles className="h-3 w-3" />
+                        {subtitleTrack === -1 ? 'ST' : subtitleTracks.find(t => t.index === subtitleTrack)?.label || 'ST'}
+                        <ChevronDown className="h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Sous-titres</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => changeSubtitleTrack(-1)} className="flex items-center justify-between gap-2 cursor-pointer">
+                        Désactivés
+                        {subtitleTrack === -1 && <Check className="h-4 w-4 text-green-500" />}
+                      </DropdownMenuItem>
+                      {subtitleTracks.map(track => (
+                        <DropdownMenuItem key={track.index} onClick={() => changeSubtitleTrack(track.index)} className="flex items-center justify-between gap-2 cursor-pointer">
+                          {track.label}
+                          {subtitleTrack === track.index && <Check className="h-4 w-4 text-green-500" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
               {channel.group && (
                 <Badge variant="secondary" className="text-xs mt-1">

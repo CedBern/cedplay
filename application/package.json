@@ -1,6 +1,6 @@
 {
   "name": "cedplay",
-  "version": "1.11.17",
+  "version": "1.12.0",
   "packageManager": "pnpm@8.10.0",
   "scripts": {
     "catalogue:check": "python scripts/public-catalogue.py",
@@ -19,6 +19,7 @@
     "@capacitor/android": "6.2.3",
     "@capacitor/app": "6.0.0",
     "@capacitor/core": "6.2.3",
+    "@capacitor/local-notifications": "^6.1.0",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@radix-ui/react-checkbox": "^1.1.1",
@@ -43,7 +44,6 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
-    "recharts": "^2.12.7",
     "sonner": "^1.5.0",
     "tailwind-merge": "^2.5.2",
     "tailwindcss-animate": "^1.0.7",
