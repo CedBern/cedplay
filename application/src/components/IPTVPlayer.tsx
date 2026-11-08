@@ -46,6 +46,7 @@ import { applySeriesRules } from '@/utils/recordingRules';
 import { EpgSettingsDialog } from '@/components/EpgSettingsDialog';
 import type { EPGProgram } from '@/types/epg';
 import { isPlaybackDelegated } from '@/utils/playbackOwnership';
+import { loadPublicPlaylist, PUBLIC_PLAYLIST_INITIALIZED } from '@/utils/publicPlaylist';
 /** Date de la dernière actualisation réussie d'une liste par adresse (manuelle, automatique ou import). */
 const playlistRefreshedKey = (playlistId: string) => `playlistRefreshedAt:${playlistId}`;
 // Dynamic telemetry import helper
@@ -166,6 +167,7 @@ export function IPTVPlayer() {
         if (cancelled) return;
         setAppSettings(settings);
         let playlist: PlaylistInfo | undefined;
+        let firstUse = false;
         if (lastPlaylistId) {
           try { playlist = await getPlaylistFromDB(lastPlaylistId); } catch { /* repli : tout relire */ }
         }
@@ -175,9 +177,23 @@ export function IPTVPlayer() {
           setAllPlaylists(saved);
           const name = StorageManager.getLastPlaylist();
           playlist = saved.find(p => p.id === lastPlaylistId) || saved.find(p => p.name === name) || saved[0];
+          // Une installation neuve ouvre immédiatement les chaînes gratuites. Une
+          // liste existante, même avec l'auto-restauration désactivée, reste intacte.
+          if (!saved.length && !await getMeta<boolean>(PUBLIC_PLAYLIST_INITIALIZED)) {
+            playlist = await loadPublicPlaylist();
+            if (cancelled) return;
+            await savePlaylistToDB(playlist);
+            await setMeta(PUBLIC_PLAYLIST_INITIALIZED, true);
+            await setMeta('lastPlaylistId', playlist.id);
+            StorageManager.setLastPlaylist(playlist.name);
+            setAllPlaylists([playlist]);
+            firstUse = true;
+          }
         }
-        if (playlist && settings.autoLoadLastPlaylist !== false) {
+        if (cancelled) return;
+        if (playlist && (firstUse || settings.autoLoadLastPlaylist !== false)) {
           setCurrentPlaylist(playlist);
+          if (firstUse) setActiveTab('channels');
           const lastId = await getLastChannelForPlaylist(playlist.id);
           const last = lastId ? playlist.channels.find(c => c.id === lastId) || null : null;
           if (!cancelled && lastId) setCurrentChannel(last);
@@ -185,7 +201,7 @@ export function IPTVPlayer() {
           // Un raccourci déjà reçu garde la priorité.
           if (!cancelled && last && settings.startOnLastChannel) setLaunchChannelId(current => current ?? last.id);
         } else setActiveTab('loader');
-      } catch { if (!cancelled) toast.error('Impossible de restaurer les données enregistrées.'); }
+      } catch { if (!cancelled) { setActiveTab('loader'); toast.error('Impossible de charger les listes. Tu peux les ouvrir depuis Mes listes.'); } }
       finally { if (!cancelled) setLoadingInitial(false); }
     })();
     return () => { cancelled = true; };
@@ -253,6 +269,17 @@ export function IPTVPlayer() {
         ? `Liste mise à jour : ${playlist.channels.length} chaînes`
         : `Liste chargée : ${playlist.channels.length} chaînes`);
     }
+  };
+
+  const publicLoading = useRef(false);
+  const openPublicPlaylist = async () => {
+    if (publicLoading.current) return;
+    publicLoading.current = true;
+    try {
+      await handlePlaylistLoaded(await loadPublicPlaylist());
+      await setMeta(PUBLIC_PLAYLIST_INITIALIZED, true);
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Chargement impossible.'); }
+    finally { publicLoading.current = false; }
   };
 
   // Groupes masqués par l'utilisateur (par liste) : absents de la liste, du guide et du zapping.
@@ -701,7 +728,8 @@ export function IPTVPlayer() {
     else setActiveTab(section);
   };
   const openMore = (destination: MoreDestination) => {
-    if (destination === 'xtream') setXtreamOpen(true);
+    if (destination === 'free') { void openPublicPlaylist(); }
+    else if (destination === 'xtream') setXtreamOpen(true);
     else if (destination === 'replay' || destination === 'streaming') setActiveTab(destination);
     else if (destination === 'recordings') { setRecordingsChannel(null); setRecordingsOpen(true); }
     else if (destination === 'settings') setSettingsOpen(true);
@@ -839,6 +867,7 @@ export function IPTVPlayer() {
               ))}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => { void openPublicPlaylist(); }}>Chaînes gratuites</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
             {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
             <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
@@ -1191,6 +1220,7 @@ export function IPTVPlayer() {
       /></Suspense>}
       {currentPlaylist && <FavoritesOrganizerDialog open={favoritesOrganizerOpen} onOpenChange={setFavoritesOrganizerOpen} channels={customizedGroups.flatMap(g => g.channels)} />}
       {searchOpen && <Suspense fallback={null}><LazyGlobalSearchDialog
+        tvMode={tvMode}
         open
         onOpenChange={setSearchOpen}
         playlist={currentPlaylist}

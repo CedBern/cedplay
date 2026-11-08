@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { loadPublicPlaylist } from '@/utils/publicPlaylist';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,17 +49,7 @@ export function PlaylistLoader({ onPlaylistLoaded }: PlaylistLoaderProps) {
     });
   };
 
-  // Charge la playlist publique embarquée (aucun relais, aucune URL distante).
-  const loadDemo = () => {
-    void load(async () => {
-      const assetUrl = `${import.meta.env.BASE_URL}flux-legaux.m3u`;
-      const res = await fetch(assetUrl);
-      if (!res.ok) throw new Error('Playlist de démonstration introuvable.');
-      const content = await res.text();
-      if (!content.includes('#EXTINF:')) throw new Error('La playlist de démonstration est vide.');
-      return parseM3UInWorker(content, 'Flux publics légaux', setProgress);
-    });
-  };
+  const loadDemo = () => { void load(() => loadPublicPlaylist(setProgress)); };
 
   return <Card className="w-full max-w-xl bg-neutral-950 text-white border-neutral-800">
     <CardHeader><CardTitle>Importer une liste de chaînes</CardTitle></CardHeader>
@@ -66,8 +57,8 @@ export function PlaylistLoader({ onPlaylistLoaded }: PlaylistLoaderProps) {
       <div className="p-4 bg-primary/10 rounded-lg border border-primary/30 space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h4 className="font-semibold text-sm text-white">Chaînes publiques gratuites</h4>
-            <p className="text-xs text-neutral-400">Chaînes légales gratuites, groupées par pays (France, États-Unis, Italie…).</p>
+            <h4 className="font-semibold text-sm text-white">Chaînes gratuites</h4>
+            <p className="text-xs text-neutral-400">Sélection de diffuseurs officiels : Mexique, France et Allemagne.</p>
           </div>
           <Button type="button" variant="default" size="sm" disabled={busy} onClick={loadDemo} className="shrink-0">Charger</Button>
         </div>

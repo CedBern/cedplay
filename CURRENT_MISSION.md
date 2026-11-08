@@ -531,3 +531,14 @@ Points ouverts pour continuer :
 - APK racine `CedPlay-1.11.12.apk` : 4581561 octets ; SHA-256 `1249ccf3747948c9c85eb0e2d0c09d72769a22d2fb72542db20afde03cb3fe97`. Même certificat que la 1.11.11 ; 72 fichiers web comparés octet par octet dans l'APK, sources applicatives inchangées pendant le build. Ancienne 1.11.11 conservée.
 - Rapport, manifeste et logs : `preuves/livraison-1.11.12-2026-11-07/RAPPORT.md`.
 - Aucun essai appareil ni installation effectué. Prochaine recette : cycle PIN complet, recherche podcasts, lien collé et abonnement Acast.
+
+
+## Navigation TV, recherche sur OK et chaînes gratuites — 7 novembre 2026
+
+- Retour utilisateur : menus TV encore moins fluides que TiviMate, recherche qui retient les flèches, liste gratuite peu visible et absente au premier lancement.
+- Rubriques parcourues par index sans mesurer toutes les cartes ; focus des contrôles sans scan global ; zoom/transitions TV retirés. Position Films/Séries sauvegardée après 300 ms de pause et à la sortie.
+- Recherche TV (globale/podcasts/lien) activée par OK ; flèches libres au repos ; Retour quitte d'abord la saisie. Dialogue Radix couvert pour éviter sa fermeture au premier Retour.
+- Première installation : sélection gratuite embarquée puis Direct, sans lecture. Accès permanent Plus → Chaînes gratuites et menu des listes. Listes personnelles préservées, suppression de la sélection respectée.
+- Nouveau catalogue vérifié de 12 chaînes, dont 9 mexicaines issues des lecteurs officiels et de SPR/MXPlus. L'ancien catalogue communautaire non vérifié reste sur disque et les listes importées ne sont pas changées.
+- Vérifié : 571/571 tests (89 fichiers), tsc app+node OK, eslint src 0 erreur/18 avertissements existants, web/Capacitor/assembleRelease OK. 359 sources inchangées pendant la construction, 74 fichiers web conformes dans l'APK, même certificat habituel.
+- APK CedPlay-1.11.13.apk / code 42 : 4 584 860 octets ; SHA-256 0d61688848c7edad9b615587b058cea4d90f0840aa35eb9daf55cecef3c35667. Pas installée, rien poussé. Navigateur de contrôle désactivé ; aucun FPS/temps par appui ni comparaison physique avec TiviMate. Rapport : preuves/tv-navigation-gratuites-2026-11-07/RAPPORT.md.

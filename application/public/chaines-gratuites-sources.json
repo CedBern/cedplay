@@ -1,0 +1,134 @@
+[
+  {
+    "name": "Canal Once",
+    "id": "CanalOnce.mx",
+    "url": "https://vivo.canaloncelive.tv/secureoncedos/oncedigital/playlist.m3u8",
+    "source": "https://www.canalonce.mx/en-vivo",
+    "group": "Mexique",
+    "logo": "",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.428680+00:00"
+  },
+  {
+    "name": "Canal 22",
+    "id": "Canal22.mx",
+    "url": "https://5fc584f3f19c9.streamlock.net:443/canal22/videocanal22/playlist.m3u8",
+    "source": "https://www.canal22.org.mx/streaming-22-1.html",
+    "group": "Mexique",
+    "logo": "",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.490809+00:00"
+  },
+  {
+    "name": "MX Nuestro Cine",
+    "id": "MXNuestroCine.mx",
+    "url": "https://5fc584f3f19c9.streamlock.net:443/canal222/videocanal222/playlist.m3u8",
+    "source": "https://www.canal22.org.mx/mx_nuestro_cine.html",
+    "group": "Mexique",
+    "logo": "",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.492975+00:00"
+  },
+  {
+    "name": "TV UNAM",
+    "id": "TVUNAM.mx",
+    "url": "https://5fc584f3f19c9.streamlock.net/tvunam/videotvunam/playlist.m3u8?DVR",
+    "source": "https://tv.unam.mx/en-vivo/",
+    "group": "Mexique",
+    "logo": "",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.493700+00:00"
+  },
+  {
+    "name": "Canal 14",
+    "id": "CanalCatorce.mx",
+    "url": "https://s5.mexside.net:1936/canal14/canal14/playlist.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Mexique",
+    "logo": "https://mxplus.tv/img/logos/canales/white/canal-14.png",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.621913+00:00"
+  },
+  {
+    "name": "TV Migrante",
+    "id": "TVMigrante.mx",
+    "url": "https://s5.mexside.net:1936/tvmigrante/tvmigrante/playlist.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Mexique",
+    "logo": "https://mxplus.tv/img/logos/canales/white/logo_tvm.png",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.622006+00:00"
+  },
+  {
+    "name": "Canal 21",
+    "id": "Capital21.mx",
+    "url": "https://video.cdmx.gob.mx/redes/stream.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Mexique",
+    "logo": "https://mxplus.tv/img/logos/canales/white/capital.png",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.630012+00:00"
+  },
+  {
+    "name": "Televisión Mexiquense",
+    "id": "MexiquenseTV.mx",
+    "url": "https://5e50264bd6766.streamlock.net/mexiquense/videomexiquense/playlist.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Mexique",
+    "logo": "https://mxplus.tv/upload/images/tv/tv_logotipo_1786392146_66b5d3fa.png",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.531464+00:00"
+  },
+  {
+    "name": "SMRTV",
+    "id": "SMRTV.mx",
+    "url": "https://s5.mexside.net:1936/enlinea/enlinea/playlist.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Mexique",
+    "logo": "https://mxplus.tv/img/logos/canales/white/smrtv.png",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.814423+00:00"
+  },
+  {
+    "name": "France 24 français",
+    "id": "France24.fr@French",
+    "url": "https://live.france24.com/hls/live/2037179/F24_FR_HI_HLS/master_2300.m3u8",
+    "source": "https://www.france24.com/fr/direct",
+    "group": "France",
+    "logo": "",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.753962+00:00"
+  },
+  {
+    "name": "France 24 español",
+    "id": "France24.fr@Spanish",
+    "url": "https://live.france24.com/hls/live/2037220/F24_ES_HI_HLS/master_2300.m3u8",
+    "source": "https://www.france24.com/es/direct",
+    "group": "France",
+    "logo": "",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.738975+00:00"
+  },
+  {
+    "name": "DW Español",
+    "id": "DW.de@Spanish",
+    "url": "https://dwamdstream104.akamaized.net/hls/live/2015530-b/dwstream104/stream04/streamPlaylist.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Allemagne",
+    "logo": "https://mxplus.tv/img/logos/canales/white/dw.png",
+    "status": 200,
+    "hls": true,
+    "checkedAt": "2026-11-08T00:22:23.723220+00:00"
+  }
+]

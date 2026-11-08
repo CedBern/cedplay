@@ -255,13 +255,20 @@ export function TvVodScreen({
       requestFocus();
     }
   }, [items, requestFocus]);
-  // Persistance : écrite seulement une fois des titres affichés (pas pendant les chargements).
-  const readyRef = useRef(false);
-  useEffect(() => { if (items.length) readyRef.current = true; }, [items]);
+  // La sauvegarde locale est synchrone : attendre une pause dans la navigation,
+  // puis conserver aussi la dernière position au départ de l'écran.
+  const positionRef = useRef<{ category: string | null; itemId?: string | undefined } | null>(null);
   useEffect(() => {
-    if (!readyRef.current) return;
-    storeVodPosition(playlistId, kind, { category, itemId: highlighted?.id });
-  }, [playlistId, kind, category, highlighted?.id]);
+    if (!items.length) return;
+    positionRef.current = { category, itemId: highlighted?.id };
+    const timer = window.setTimeout(() => {
+      if (positionRef.current) storeVodPosition(playlistId, kind, positionRef.current);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [playlistId, kind, category, highlighted?.id, items.length]);
+  useEffect(() => () => {
+    if (positionRef.current) storeVodPosition(playlistId, kind, positionRef.current);
+  }, [playlistId, kind]);
 
   const infoActions = useMemo<InfoAction[]>(() => {
     if (!highlighted) return [];
@@ -329,7 +336,7 @@ export function TvVodScreen({
     pendingFocus.current = false;
     redirecting.current = false;
     el.focus({ preventScroll: true });
-    el.scrollIntoView?.({ block: 'nearest' });
+    el.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
   });
 
   /** Appliquer tout de suite la catégorie sous le focus (droite ou OK). */

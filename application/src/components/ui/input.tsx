@@ -1,8 +1,23 @@
 import * as React from 'react';
+import { flushSync } from 'react-dom';
 
 import { cn } from '@/lib/utils';
 
-const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'input'>>(({ className, type, ...props }, ref) => {
+type InputProps = React.ComponentProps<'input'> & { remoteActivation?: boolean };
+
+const Input = React.forwardRef<HTMLInputElement, InputProps>(({ className, type, remoteActivation = false, readOnly, inputMode, onKeyDown, onBlur, onClick, ...props }, ref) => {
+  const [editing, setEditing] = React.useState(false);
+  const activating = React.useRef(false);
+  const waiting = remoteActivation && !editing && !readOnly;
+  const activate = (input: HTMLInputElement) => {
+    // Changer readOnly avant de redonner le focus, dans le geste utilisateur,
+    // permet au clavier Android de s'ouvrir uniquement après OK / toucher.
+    flushSync(() => setEditing(true));
+    activating.current = true;
+    input.blur();
+    input.focus({ preventScroll: true });
+    activating.current = false;
+  };
   return (
     <input
       type={type}
@@ -12,6 +27,23 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'input'>>(
       )}
       ref={ref}
       {...props}
+      data-remote-input={remoteActivation ? '' : undefined}
+      readOnly={readOnly || waiting}
+      inputMode={waiting ? 'none' : inputMode}
+      aria-description={waiting ? 'OK pour saisir, flèches pour naviguer.' : undefined}
+      onKeyDown={event => {
+        onKeyDown?.(event);
+        if (!remoteActivation || readOnly) return;
+        // Radix peut déjà avoir empêché la fermeture du dialogue en capture.
+        if (event.defaultPrevented && !(editing && ['Escape', 'BrowserBack', 'GoBack'].includes(event.key))) return;
+        if (waiting && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault(); event.stopPropagation(); activate(event.currentTarget);
+        } else if (editing && ['Escape', 'BrowserBack', 'GoBack'].includes(event.key)) {
+          event.preventDefault(); event.stopPropagation(); setEditing(false);
+        }
+      }}
+      onClick={event => { onClick?.(event); if (!event.defaultPrevented && waiting) activate(event.currentTarget); }}
+      onBlur={event => { onBlur?.(event); if (!activating.current) setEditing(false); }}
     />
   );
 });

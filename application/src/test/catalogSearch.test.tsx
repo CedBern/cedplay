@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GlobalSearchDialog } from '@/components/GlobalSearchDialog';
 import { searchCatalogSource, invalidateSearchCatalog } from '@/utils/catalogSearch';
@@ -78,4 +78,17 @@ it('ne stocke pas une réponse arrivée après l’annulation et recharge après
     await searchCatalogSource(mocks.account, 'p', 'movie', new AbortController().signal);
     expect(mocks.request).toHaveBeenCalledTimes(3);
   } finally { clock.mockRestore(); }
+});
+
+it('sur TV, Retour quitte la saisie avant de fermer la recherche', async () => {
+  render(<GlobalSearchDialog {...props} tvMode />);
+  const input = await screen.findByRole('textbox', { name: 'Rechercher' });
+  expect(input).toHaveAttribute('readonly');
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(input).not.toHaveAttribute('readonly');
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(props.onOpenChange).not.toHaveBeenCalled();
+  expect(input).toHaveAttribute('readonly');
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(props.onOpenChange).toHaveBeenCalledWith(false);
 });

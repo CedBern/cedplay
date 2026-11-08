@@ -17,6 +17,7 @@ import { Search, Tv, Film, MonitorPlay, ExternalLink, Play, Lock } from 'lucide-
 
 export interface GlobalSearchDialogProps {
   open: boolean;
+  tvMode?: boolean;
   onOpenChange: (open: boolean) => void;
   playlist: PlaylistInfo | null;
   onSelectChannel: (channel: Channel) => void;
@@ -31,6 +32,7 @@ export interface GlobalSearchDialogProps {
 
 export function GlobalSearchDialog({
   open,
+  tvMode = false,
   onOpenChange,
   playlist,
   onSelectChannel,
@@ -142,7 +144,11 @@ export function GlobalSearchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid-cols-1 min-w-0 w-[calc(100%-1.5rem)] bg-neutral-950 text-white border-neutral-800 max-h-[85dvh] overflow-y-auto sm:max-w-2xl p-4 sm:p-6">
+      <DialogContent onEscapeKeyDown={event => {
+        // Radix écoute Retour/Escape en capture, avant le champ : le premier
+        // appui quitte la saisie, le suivant peut fermer la recherche.
+        if (tvMode && document.activeElement?.matches('input[data-remote-input]:not([readonly])')) event.preventDefault();
+      }} className="grid-cols-1 min-w-0 w-[calc(100%-1.5rem)] bg-neutral-950 text-white border-neutral-800 max-h-[85dvh] overflow-y-auto sm:max-w-2xl p-4 sm:p-6">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <Search className="h-5 w-5 text-primary" />
@@ -156,6 +162,7 @@ export function GlobalSearchDialog({
         <div className="relative mt-2">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
           <Input
+            remoteActivation={tvMode}
             autoFocus
             aria-label="Rechercher"
             placeholder="Chaînes, direct, films, séries, plateformes…"

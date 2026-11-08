@@ -247,7 +247,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           </div>
         </>)}
 
-        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.11.12 · Direct, films et séries</p>
+        <p className="py-3 text-center text-xs text-muted-foreground">CedPlay · 1.11.13 · Direct, films et séries</p>
         <div className="sticky -bottom-6 -mx-6 flex justify-end gap-2 border-t border-neutral-900 bg-background px-6 py-3">
           <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>
           <Button disabled={saving} onClick={save}>{saving ? 'Enregistrement…' : 'Enregistrer'}</Button>

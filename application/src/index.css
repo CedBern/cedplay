@@ -319,3 +319,10 @@ html.tv-mode .tv-vod { transition: height 240ms cubic-bezier(.2, .8, .2, 1); }
 .tv-vod .tv-action { border-radius: 9999px; background-color: transparent; box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12); padding-left: 1rem; padding-right: 1rem; }
 .tv-vod .tv-action.is-primary { background-color: hsl(var(--foreground)); color: hsl(var(--background)); box-shadow: none; font-weight: 600; }
 .tv-vod .tv-action.is-primary svg { fill: currentColor; }
+
+/* TV : sélection immédiate, sans zoom ni recomposition animée à chaque appui. */
+html.tv-mode :is(button, input, [role="tab"], .tv-col, [data-app-header], .tv-vod) { transition: none !important; }
+html.tv-mode :is(.tv-live, .tv-vod) .tv-row:focus { transform: none; }
+html.tv-mode :is(.screen-enter, .hero-copy, .hero-image) { animation: none; transition: none; transform: none; opacity: 1; }
+html.tv-mode .glass { -webkit-backdrop-filter: none; backdrop-filter: none; }
+html.tv-mode :is(.tv-scroll, [data-app-header]) { scroll-behavior: auto; }

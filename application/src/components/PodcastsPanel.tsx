@@ -366,6 +366,7 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
       <form role="search" onSubmit={e => e.preventDefault()} className="relative">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <Input
+          remoteActivation={tvMode}
           ref={inputRef}
           type="search"
           value={searchQuery}
@@ -417,6 +418,7 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
         {linkOpen && (
           <form onSubmit={e => void handleLinkSubmit(e)} className="flex items-center gap-2">
             <Input
+              remoteActivation={tvMode}
               ref={linkInputRef}
               type="text"
               inputMode="url"

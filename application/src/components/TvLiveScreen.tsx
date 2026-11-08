@@ -320,7 +320,7 @@ export function TvLiveScreen({
     pendingFocus.current = false;
     redirecting.current = false;
     el.focus({ preventScroll: true });
-    if (column !== 'list') el.scrollIntoView?.({ block: 'nearest' });
+    if (column !== 'list') el.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
   });
 
   /** Appliquer tout de suite la catégorie sous le focus (droite ou OK). */

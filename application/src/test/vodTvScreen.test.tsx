@@ -190,6 +190,22 @@ it('une seule cible focusable à la fois (tabindex itinérant)', () => {
   expect(reachable[0].dataset.tvRow).toBe('0');
 });
 
+it('une flèche maintenue ne sauvegarde pas à chaque pas, mais conserve la dernière affiche en quittant', () => {
+  vi.useFakeTimers();
+  const storage = vi.spyOn(Storage.prototype, 'setItem');
+  try {
+    setup(); storage.mockClear();
+    for (let i = 0; i < 4; i++) key('ArrowRight');
+    expect(storage).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(300); });
+    expect(storage).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem('cedplay.tvVod:pl:movie')!)).toMatchObject({ itemId: 'id-5' });
+    key('ArrowLeft');
+    cleanup();
+    expect(JSON.parse(localStorage.getItem('cedplay.tvVod:pl:movie')!)).toMatchObject({ itemId: 'id-4' });
+  } finally { cleanup(); storage.mockRestore(); vi.useRealTimers(); }
+});
+
 // ── VodLibrary en mode TV : branchement réel (réseau et pont natif simulés) ──
 
 const mocks = vi.hoisted(() => ({ request: vi.fn(), openVod: vi.fn(), getPlayHistory: vi.fn(), pushPlayHistory: vi.fn() }));

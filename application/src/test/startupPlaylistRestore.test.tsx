@@ -51,6 +51,15 @@ vi.mock('@/utils/idb', () => ({
   manageContinueEntry: vi.fn(async () => {}),
 }));
 
+vi.mock('@/utils/publicPlaylist', () => ({
+  PUBLIC_PLAYLIST_INITIALIZED: 'publicPlaylistInitialized',
+  loadPublicPlaylist: vi.fn(async () => {
+    const channels = [{ id: 'free', name: 'Canal 22', url: 'https://example.test/free.m3u8', group: 'Mexique' }];
+    return { id: 'cedplay-public-v1', name: 'Chaînes gratuites', channels, groups: [{ name: 'Mexique', channels }] };
+  }),
+}));
+import { loadPublicPlaylist } from '@/utils/publicPlaylist';
+
 import * as idb from '@/utils/idb';
 import { IPTVPlayer } from '@/components/IPTVPlayer';
 
@@ -184,5 +193,40 @@ describe('Réimport d’une connexion Xtream', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('Chaînes gratuites au premier lancement', () => {
+  it('installe la sélection embarquée sans compte puis ouvre Direct sans lancer de lecture', async () => {
+    state.playlists = []; state.meta = {};
+    render(<IPTVPlayer />);
+    await screen.findByRole('button', { name: 'Changer de liste' });
+    expect(loadPublicPlaylist).toHaveBeenCalledOnce();
+    expect(screen.getByText('Chaînes gratuites')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
+    expect(idb.savePlaylistToDB).toHaveBeenCalledWith(expect.objectContaining({ id: 'cedplay-public-v1' }));
+    expect(idb.setMeta).toHaveBeenCalledWith('publicPlaylistInitialized', true);
+    expect(idb.pushPlayHistory).not.toHaveBeenCalled();
+  });
+  it('ne télécharge rien et conserve une liste personnelle déjà présente', async () => {
+    render(<IPTVPlayer />);
+    await screen.findByRole('button', { name: 'Changer de liste' });
+    expect(loadPublicPlaylist).not.toHaveBeenCalled();
+    expect(idb.savePlaylistToDB).not.toHaveBeenCalled();
+  });
+  it('ne recrée pas automatiquement la sélection après sa suppression', async () => {
+    state.playlists = []; state.meta = { publicPlaylistInitialized: true };
+    render(<IPTVPlayer />);
+    await screen.findByText('Importer une liste de chaînes');
+    expect(loadPublicPlaylist).not.toHaveBeenCalled();
+  });
+  it('rend la sélection accessible depuis Plus aux installations existantes', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    render(<IPTVPlayer />);
+    await user.click(await screen.findByRole('tab', { name: 'Plus' }));
+    await user.click(screen.getByRole('button', { name: /Chaînes gratuites/ }));
+    await waitFor(() => expect(idb.savePlaylistToDB).toHaveBeenCalledWith(expect.objectContaining({ id: 'cedplay-public-v1' })));
+    expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
   });
 });

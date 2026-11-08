@@ -4,6 +4,7 @@ import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import userEvent from '@testing-library/user-event';
 import 'fake-indexeddb/auto';
+import { Input } from '@/components/ui/input';
 import { MainNavigation } from '@/components/MainNavigation';
 import { TvLiveScreen } from '@/components/TvLiveScreen';
 
@@ -174,4 +175,59 @@ it.each(['continue', 'vod', 'more'])('Bas entre dans le contenu de %s même sans
   screen.getByRole('tab', { selected: true }).focus();
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('button', { name: 'Première action' })).toHaveFocus();
+});
+
+it('une recherche TV se traverse dans les quatre directions sans saisir ; OK active la saisie, Retour la quitte', () => {
+  geometry();
+  function Page() {
+    useRemoteNavigation();
+    return <><button data-x="0" data-y="0">Avant</button>
+      <Input remoteActivation aria-label="Recherche TV" data-x="100" data-y="0" />
+      <button data-x="200" data-y="0">Après</button>
+      <button data-x="100" data-y="100">Résultat</button></>;
+  }
+  render(<Page />);
+  const input = screen.getByRole('textbox', { name: 'Recherche TV' });
+  screen.getByText('Avant').focus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(input).toHaveFocus();
+  expect(input).toHaveAttribute('readonly');
+  fireEvent.keyDown(input, { key: 'ArrowRight' });
+  expect(screen.getByText('Après')).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(input).not.toHaveAttribute('readonly');
+  const left = new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true });
+  input.dispatchEvent(left);
+  expect(left.defaultPrevented).toBe(false);
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(input).toHaveFocus();
+  expect(input).toHaveAttribute('readonly');
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(screen.getByText('Résultat')).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  expect(input).toHaveFocus();
+  fireEvent.keyDown(input, { key: 'Enter' });
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(screen.getByText('Résultat')).toHaveFocus();
+  expect(input).toHaveAttribute('readonly');
+});
+
+it('le parcours horizontal des rubriques ne mesure pas les cartes du catalogue', () => {
+  geometry();
+  function Page() {
+    useRemoteNavigation();
+    return <Tabs value="continue" activationMode="manual"><MainNavigation tv onNavigate={() => {}} />
+      <TabsContent value="continue">{Array.from({ length: 200 }, (_, i) => <button key={i} data-card>{i}</button>)}</TabsContent>
+    </Tabs>;
+  }
+  const { container } = render(<Page />);
+  const measured = vi.fn();
+  container.querySelectorAll<HTMLElement>('[data-card]').forEach(el => { el.getBoundingClientRect = measured; });
+  screen.getByRole('tab', { name: 'Accueil' }).focus();
+  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(screen.getByRole('tab', { name: 'Plus' })).toHaveFocus();
+  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+  expect(screen.getByRole('tab', { name: 'Accueil' })).toHaveFocus();
+  expect(measured).not.toHaveBeenCalled();
 });

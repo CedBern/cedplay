@@ -1,9 +1,10 @@
 import { Activity, ChevronRight, CircleDot, CirclePlay, History, ListVideo, Settings } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-export type MoreDestination = 'replay' | 'streaming' | 'recordings' | 'lists' | 'xtream' | 'health' | 'settings';
+export type MoreDestination = 'free' | 'replay' | 'streaming' | 'recordings' | 'lists' | 'xtream' | 'health' | 'settings';
 
 const entries: { key: MoreDestination; label: string; hint: string; Icon: LucideIcon }[] = [
+  { key: 'free', label: 'Chaînes gratuites', hint: 'Ouvrir la sélection de chaînes officielles, dont le Mexique', Icon: CirclePlay },
   { key: 'xtream', label: 'Connexion Xtream', hint: 'Ajouter un abonnement : serveur, identifiant, mot de passe', Icon: ListVideo },
   { key: 'replay', label: 'Replay', hint: 'Revoir les émissions récentes des chaînes', Icon: History },
   { key: 'streaming', label: 'Streaming', hint: 'Raccourcis vers les plateformes', Icon: CirclePlay },

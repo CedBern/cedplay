@@ -21,7 +21,7 @@ export function useRemoteNavigation() {
       // sur des boutons, jamais besoin de les rediriger. Sortir avant le scan, qui fait
       // getBoundingClientRect + getComputedStyle sur tout élément focalisable du document
       // à chaque déplacement — le coût dominant d'un appui prolongé.
-      if (target.closest('[data-remote-self]')) return;
+      if (target.closest('[data-remote-self]') || target.matches('button, a[href], input, select, textarea, [role="tab"]')) return;
       const targets = remoteTargets(scope());
       if (targets.includes(target)) return;
       const next = targets.find(el => target.contains(el) && el.matches('[data-channel-play]'))
@@ -44,7 +44,7 @@ export function useRemoteNavigation() {
     const keydown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey) return;
       const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      const editing = active?.matches('input, textarea, select, [contenteditable="true"], [role="slider"]');
+      const editing = active?.matches('input, textarea, select, [contenteditable="true"], [role="slider"]') && !active?.matches('input[readonly][data-remote-input]');
       if ((event.key === 'Escape' || event.key === 'BrowserBack' || event.key === 'GoBack') && !editing && !document.querySelector('[role="dialog"], [role="menu"]')) {
         const back = new Event('iptv-back', { cancelable: true });
         window.dispatchEvent(back);
@@ -58,6 +58,19 @@ export function useRemoteNavigation() {
       // Sortie explicite des rubriques : une télécommande doit pouvoir descendre même
       // quand la géométrie (barre fixe, défilement ou écran étroit) n'offre aucun voisin.
       const navigation = active?.closest('[data-main-navigation]');
+      // La rangée de rubriques a un ordre explicite : aucun scan géométrique de
+      // tout le catalogue pour un simple déplacement horizontal.
+      if (navigation && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        const tabs = Array.from(navigation.querySelectorAll<HTMLElement>('[role="tab"]:not(:disabled)'));
+        const index = tabs.indexOf(active!);
+        if (index >= 0) {
+          const next = tabs[index + (event.key === 'ArrowRight' ? 1 : -1)];
+          // Au bord, les autres actions de l'en-tête restent accessibles.
+          if (next) {
+            event.preventDefault(); event.stopPropagation(); focusRemote(next); return;
+          }
+        }
+      }
       if (navigation && event.key === 'ArrowDown') {
         const selected = navigation.querySelector('[role="tab"][aria-selected="true"]');
         const panel = document.getElementById(selected?.getAttribute('aria-controls') ?? '');
