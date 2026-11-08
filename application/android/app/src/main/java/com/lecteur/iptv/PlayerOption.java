@@ -14,9 +14,14 @@ final class PlayerOption {
 
     /** Palette « Salle obscure » : un seul accent, celui du logo. */
     static final int C_BG = Color.parseColor("#0B0B0D");
-    static final int C_CARD = Color.parseColor("#141417");
-    static final int C_ELEV = Color.parseColor("#1C1C21");
-    static final int C_TRACK = Color.parseColor("#26262D");
+    /* Couches alignées sur index.css (.dark) : environ 5 points de L* entre deux couches,
+       sinon cartes et boutons se confondent sur une TV aux noirs écrasés. */
+    static final int C_CARD = Color.parseColor("#18181C");
+    static final int C_ELEV = Color.parseColor("#222228");
+    static final int C_TRACK = Color.parseColor("#2E2E36");
+    static final int C_BORDER = Color.parseColor("#2A2A31");
+    /** Erreur : rouge distinct de l'orange, déjà pris par l'accent et le direct. */
+    static final int C_ERROR = Color.parseColor("#E5484D");
     static final int C_TEXT = Color.parseColor("#F3F1ED");
     static final int C_SOFT = Color.parseColor("#C9C5BE");
     static final int C_MUTED = Color.parseColor("#A7A39C");

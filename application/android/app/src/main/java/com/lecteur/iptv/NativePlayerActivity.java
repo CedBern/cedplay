@@ -302,6 +302,10 @@ public class NativePlayerActivity extends AppCompatActivity {
     private final Handler nextEpisodeHandler = new Handler(Looper.getMainLooper());
     private LinearLayout nextEpisodePanel;
     private TextView nextEpisodeLabel;
+    private TextView nextEpisodeCountdown;
+    private View nextEpisodeProgress;
+    private Button nextEpisodeWatch;
+    private static final long NEXT_EPISODE_DELAY_MS = 8000;
     private ExoPlayer nextEpisodePlayer;
     private long nextEpisodeDeadline;
     private final Runnable nextEpisodeTicker = new Runnable() {
@@ -313,7 +317,9 @@ public class NativePlayerActivity extends AppCompatActivity {
             long remaining = nextEpisodeDeadline - SystemClock.elapsedRealtime();
             if (remaining <= 0) { cancelNextEpisode(); switchChannel(1); return; }
             String title = channelTitles != null && channelIndex + 1 < channelTitles.size() ? channelTitles.get(channelIndex + 1) : "Épisode suivant";
-            nextEpisodeLabel.setText("Épisode suivant dans " + ((remaining + 999) / 1000) + " s\n" + title);
+            nextEpisodeLabel.setText(title);
+            nextEpisodeCountdown.setText("dans " + ((remaining + 999) / 1000) + " s");
+            nextEpisodeProgress.setScaleX(1f - (float) remaining / NEXT_EPISODE_DELAY_MS);
             nextEpisodeHandler.postDelayed(this, 200);
         }
     };
@@ -561,47 +567,69 @@ public class NativePlayerActivity extends AppCompatActivity {
         root.addView(loadingBar);
 
         // Panneau d'erreur : cause lisible + reprise (réessayer, chaîne suivante, lecteur externe).
-        errorPanel = new LinearLayout(this);
-        errorPanel.setOrientation(LinearLayout.VERTICAL);
-        errorPanel.setGravity(Gravity.CENTER_HORIZONTAL);
-        errorPanel.setBackground(rounded(C_CARD, 18));
-        errorPanel.setPadding(dp(24), dp(16), dp(24), dp(16));
+        // Largeur bornée et boutons empilés pleine largeur : en WRAP_CONTENT, le panneau suivait
+        // la longueur du message et les deux boutons à poids 0 se tassaient jusqu'à couper
+        // leur libellé hors du cadre (constaté sur TV).
+        errorPanel = cappedColumn(400);
+        errorPanel.setBackground(panelCard());
+        errorPanel.setPadding(dp(24), dp(24), dp(24), dp(24));
         FrameLayout.LayoutParams errorParams = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
+        errorParams.setMargins(dp(16), dp(16), dp(16), dp(16));
         errorPanel.setLayoutParams(errorParams);
         errorPanel.setVisibility(View.GONE);
+
+        LinearLayout errorHead = new LinearLayout(this);
+        errorHead.setOrientation(LinearLayout.HORIZONTAL);
+        FrameLayout errorBadge = new FrameLayout(this);
+        GradientDrawable badgeBg = new GradientDrawable();
+        badgeBg.setShape(GradientDrawable.OVAL);
+        badgeBg.setColor(Color.argb(41, Color.red(PlayerOption.C_ERROR), Color.green(PlayerOption.C_ERROR), Color.blue(PlayerOption.C_ERROR)));
+        errorBadge.setBackground(badgeBg);
+        ImageView errorIcon = new ImageView(this);
+        errorIcon.setImageResource(R.drawable.ic_player_alert);
+        errorIcon.setImageTintList(ColorStateList.valueOf(PlayerOption.C_ERROR));
+        errorIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        errorBadge.addView(errorIcon, new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER));
+        LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(dp(40), dp(40));
+        badgeParams.setMarginEnd(dp(14));
+        errorHead.addView(errorBadge, badgeParams);
+        LinearLayout errorTexts = new LinearLayout(this);
+        errorTexts.setOrientation(LinearLayout.VERTICAL);
+        TextView errorTitle = new TextView(this);
+        errorTitle.setText("Lecture impossible");
+        errorTitle.setTextColor(C_TEXT);
+        errorTitle.setTextSize(18);
+        errorTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        errorTitle.setSingleLine(true);
+        errorTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        errorTexts.addView(errorTitle);
         errorText = new TextView(this);
-        errorText.setTextColor(Color.WHITE);
+        errorText.setTextColor(C_MUTED);
         errorText.setTextSize(14);
-        errorText.setGravity(Gravity.CENTER);
+        errorText.setLineSpacing(0, 1.15f);
         errorText.setMaxLines(3);
-        errorPanel.addView(errorText);
-        retryButton = new Button(this);
-        retryButton.setText("Réessayer la lecture");
-        retryButton.setAllCaps(false);
-        retryButton.setOnClickListener(v -> {
+        errorText.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams errorTextParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        errorTextParams.topMargin = dp(4);
+        errorTexts.addView(errorText, errorTextParams);
+        errorHead.addView(errorTexts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        errorPanel.addView(errorHead);
+
+        retryButton = panelButton("Réessayer la lecture", R.drawable.ic_player_replay, false, v -> {
             hideError();
             releasePlayer();
             initPlayer(streamUrl);
         });
-        errorPanel.addView(retryButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(52)));
-        LinearLayout errorActions = new LinearLayout(this);
-        errorActions.setOrientation(LinearLayout.HORIZONTAL);
-        btnNextChannel = new Button(this);
-        btnNextChannel.setText("Chaîne suivante");
-        btnNextChannel.setAllCaps(false);
-        btnNextChannel.setOnClickListener(v -> { hideError(); switchChannel(1); });
-        errorActions.addView(btnNextChannel, new LinearLayout.LayoutParams(0, dp(52), 1));
-        btnVlc = new Button(this);
-        btnVlc.setText("Ouvrir dans VLC");
-        btnVlc.setAllCaps(false);
-        btnVlc.setOnClickListener(v -> openInVlc());
-        errorActions.addView(btnVlc, new LinearLayout.LayoutParams(0, dp(52), 1));
-        errorPanel.addView(errorActions);
+        btnNextChannel = panelButton("Chaîne suivante", R.drawable.ic_player_next, false, v -> { hideError(); switchChannel(1); });
+        btnVlc = panelButton("Ouvrir dans VLC", R.drawable.ic_player_external, false, v -> openInVlc());
+        int errorGap = dp(20);
         for (Button b : new Button[] { retryButton, btnNextChannel, btnVlc }) {
-            b.setTextColor(C_TEXT);
-            styleFocusable(b, C_TRACK, C_TEXT, C_TEXT);
-            ((LinearLayout.LayoutParams) b.getLayoutParams()).setMargins(dp(4), dp(8), dp(4), 0);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+            p.topMargin = errorGap;
+            errorPanel.addView(b, p);
+            errorGap = dp(8);
         }
         root.addView(errorPanel);
 
@@ -759,35 +787,64 @@ public class NativePlayerActivity extends AppCompatActivity {
             });
         }
 
-        nextEpisodePanel = new LinearLayout(this);
-        nextEpisodePanel.setOrientation(LinearLayout.VERTICAL);
-        nextEpisodePanel.setBackground(rounded(C_CARD, 18));
-        nextEpisodePanel.setPadding(dp(16), dp(12), dp(16), dp(12));
-        FrameLayout.LayoutParams nextParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-        nextParams.setMargins(dp(16), 0, dp(16), dp(92));
+        nextEpisodePanel = cappedColumn(440);
+        nextEpisodePanel.setBackground(panelCard());
+        nextEpisodePanel.setPadding(dp(24), dp(20), dp(24), dp(24));
+        FrameLayout.LayoutParams nextParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        if (tvUi) nextParams.setMargins(dp(48), 0, dp(48), dp(92));
+        else nextParams.setMargins(dp(16), 0, dp(16), dp(92));
         nextEpisodePanel.setLayoutParams(nextParams);
+        LinearLayout nextHead = new LinearLayout(this);
+        nextHead.setOrientation(LinearLayout.HORIZONTAL);
+        nextHead.setGravity(Gravity.CENTER_VERTICAL);
+        TextView nextKicker = new TextView(this);
+        nextKicker.setText("ÉPISODE SUIVANT");
+        nextKicker.setTextColor(C_ACCENT);
+        nextKicker.setTextSize(12);
+        nextKicker.setTypeface(Typeface.DEFAULT_BOLD);
+        nextKicker.setLetterSpacing(0.06f);
+        nextKicker.setSingleLine(true);
+        nextKicker.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        nextHead.addView(nextKicker, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        nextEpisodeCountdown = new TextView(this);
+        nextEpisodeCountdown.setTextColor(C_MUTED);
+        nextEpisodeCountdown.setTextSize(13);
+        nextEpisodeCountdown.setSingleLine(true);
+        nextEpisodeCountdown.setFontFeatureSettings("tnum");
+        LinearLayout.LayoutParams countdownParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        countdownParams.setMarginStart(dp(12));
+        nextHead.addView(nextEpisodeCountdown, countdownParams);
+        nextEpisodePanel.addView(nextHead);
         nextEpisodeLabel = new TextView(this);
-        nextEpisodeLabel.setTextColor(Color.WHITE);
-        nextEpisodeLabel.setTextSize(16);
-        nextEpisodeLabel.setMaxLines(3);
-        nextEpisodePanel.addView(nextEpisodeLabel);
+        nextEpisodeLabel.setTextColor(C_TEXT);
+        nextEpisodeLabel.setTextSize(18);
+        nextEpisodeLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        nextEpisodeLabel.setMaxLines(2);
+        nextEpisodeLabel.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams nextLabelParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nextLabelParams.topMargin = dp(6);
+        nextEpisodePanel.addView(nextEpisodeLabel, nextLabelParams);
+        FrameLayout nextTrack = new FrameLayout(this);
+        nextTrack.setBackground(rounded(C_TRACK, 2));
+        nextEpisodeProgress = new View(this);
+        nextEpisodeProgress.setBackground(rounded(C_ACCENT, 2));
+        nextEpisodeProgress.setPivotX(0);
+        nextEpisodeProgress.setScaleX(0);
+        nextTrack.addView(nextEpisodeProgress, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)));
+        LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4));
+        trackParams.topMargin = dp(12);
+        nextEpisodePanel.addView(nextTrack, trackParams);
         LinearLayout nextActions = new LinearLayout(this);
-        Button stay = new Button(this);
-        stay.setText("Rester ici");
-        stay.setAllCaps(false);
-        stay.setOnClickListener(v -> cancelNextEpisode());
-        nextActions.addView(stay, new LinearLayout.LayoutParams(0, dp(52), 1));
-        Button watchNext = new Button(this);
-        watchNext.setText("Lire maintenant");
-        watchNext.setAllCaps(false);
-        watchNext.setOnClickListener(v -> { cancelNextEpisode(); switchChannel(1); });
-        nextActions.addView(watchNext, new LinearLayout.LayoutParams(0, dp(52), 1));
-        for (Button b : new Button[] { stay, watchNext }) {
-            b.setTextColor(C_TEXT);
-            styleFocusable(b, C_TRACK, C_TEXT, C_TEXT);
-            ((LinearLayout.LayoutParams) b.getLayoutParams()).setMargins(dp(4), dp(8), dp(4), 0);
-        }
-        nextEpisodePanel.addView(nextActions);
+        nextEpisodeWatch = panelButton("Lire maintenant", 0, true, v -> { cancelNextEpisode(); switchChannel(1); });
+        Button stay = panelButton("Rester ici", 0, true, v -> cancelNextEpisode());
+        LinearLayout.LayoutParams watchParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        watchParams.setMarginEnd(dp(8));
+        nextActions.addView(nextEpisodeWatch, watchParams);
+        nextActions.addView(stay, new LinearLayout.LayoutParams(0, dp(48), 1));
+        LinearLayout.LayoutParams actionsParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        actionsParams.topMargin = dp(16);
+        nextEpisodePanel.addView(nextActions, actionsParams);
         nextEpisodePanel.setVisibility(View.GONE);
         root.addView(nextEpisodePanel);
         if (!vod) {
@@ -1365,6 +1422,64 @@ public class NativePlayerActivity extends AppCompatActivity {
         d.setColor(color);
         d.setCornerRadius(dp(radiusDp));
         return d;
+    }
+
+    /** Carte des petits panneaux (erreur, épisode suivant). */
+    private GradientDrawable panelCard() {
+        GradientDrawable d = rounded(C_CARD, 16);
+        d.setStroke(dp(1), PlayerOption.C_BORDER);
+        return d;
+    }
+
+    /** Colonne qui remplit son parent jusqu'à maxDp : sur grand écran le panneau garde sa
+     *  largeur, sur un téléphone étroit il rétrécit au lieu de déborder. */
+    private LinearLayout cappedColumn(int maxDp) {
+        LinearLayout column = new LinearLayout(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int max = dp(maxDp);
+                if (MeasureSpec.getSize(widthSpec) > max) widthSpec = MeasureSpec.makeMeasureSpec(max, MeasureSpec.EXACTLY);
+                super.onMeasure(widthSpec, heightSpec);
+            }
+        };
+        column.setOrientation(LinearLayout.VERTICAL);
+        return column;
+    }
+
+    /** Bouton des petits panneaux : piste au repos, pastille blanche au focus et à l'appui.
+     *  Libellé sur une ligne, coupé par « … » plutôt que de sortir du bouton. */
+    private Button panelButton(String label, int icon, boolean centered, View.OnClickListener click) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(15);
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        b.setSingleLine(true);
+        b.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0);
+        b.setStateListAnimator(null);
+        b.setPadding(dp(centered ? 16 : 20), 0, dp(centered ? 16 : 20), 0);
+        b.setGravity(Gravity.CENTER_VERTICAL | (centered ? Gravity.CENTER_HORIZONTAL : Gravity.START));
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[] { android.R.attr.state_focused }, rounded(C_TEXT, 24));
+        bg.addState(new int[] { android.R.attr.state_pressed }, rounded(C_TEXT, 24));
+        bg.addState(new int[] {}, rounded(C_TRACK, 24));
+        b.setBackground(bg);
+        ColorStateList fg = new ColorStateList(
+            new int[][] { new int[] { android.R.attr.state_focused }, new int[] { android.R.attr.state_pressed }, new int[] {} },
+            new int[] { C_BG, C_BG, C_TEXT });
+        b.setTextColor(fg);
+        if (icon != 0) {
+            android.graphics.drawable.Drawable d = androidx.core.content.ContextCompat.getDrawable(this, icon);
+            if (d != null) {
+                d = d.mutate();
+                d.setBounds(0, 0, dp(20), dp(20));
+                d.setTintList(fg);
+                b.setCompoundDrawablesRelative(d, null, null, null);
+                b.setCompoundDrawablePadding(dp(centered ? 8 : 12));
+            }
+        }
+        b.setOnClickListener(click);
+        return b;
     }
 
     /** Fond à états (sélection télécommande, appui) + texte inversé tant que le bouton a le
@@ -2781,12 +2896,12 @@ public class NativePlayerActivity extends AppCompatActivity {
         cancelNextEpisode();
         if (!resumed || nextEpisodePanel == null) return;
         nextEpisodePlayer = player;
-        nextEpisodeDeadline = SystemClock.elapsedRealtime() + 8000;
+        nextEpisodeDeadline = SystemClock.elapsedRealtime() + NEXT_EPISODE_DELAY_MS;
+        nextEpisodeProgress.setScaleX(0);
         nextEpisodePanel.setVisibility(View.VISIBLE);
         if (tvUi) {
             hideControls();
-            LinearLayout actions = (LinearLayout) nextEpisodePanel.getChildAt(1);
-            actions.getChildAt(1).requestFocus();
+            nextEpisodeWatch.requestFocus();
         }
         nextEpisodeHandler.post(nextEpisodeTicker);
     }

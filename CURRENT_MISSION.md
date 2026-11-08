@@ -1,5 +1,13 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Petits panneaux du lecteur natif — 8 novembre 2026 — non livré (base 1.12.11/code 59)
+
+- Retour utilisateur (photo Hisense) : panneau « Flux indisponible » hors charte, libellés « Chaîne suivante » / « Ouvrir dans VLC » sortant de boutons tassés. Cause : panneau en `WRAP_CONTENT`, deux boutons à poids 0 dans une rangée trop étroite.
+- Refait dans `NativePlayerActivity.java` : panneau d'erreur (largeur max 400 dp, titre « Lecture impossible », icône rouge, message 3 lignes, trois boutons empilés pleine largeur avec icône, libellés sur une ligne coupés par « … ») et panneau « Épisode suivant » (carte max 440 dp en bas au centre, libellé orange, compte à rebours, titre 2 lignes, barre de progression, deux boutons égaux, focus sur « Lire maintenant »). Focus télécommande : pastille blanche, l'orange ne remplit aucun bouton.
+- `PlayerOption.java` : gris alignés sur `index.css` (.dark) — carte `#18181C`, élevé `#222228`, piste `#2E2E36` — plus bord `#2A2A31` et erreur `#E5484D`. **Touche tout le lecteur natif** (surfaces un peu plus claires). Icônes ajoutées : `ic_player_alert`, `ic_player_next`, `ic_player_external`.
+- Maquette : https://claude.ai/artifact/27TEJBn2s6tRWudV2n19cn
+- Vérifié : `:app:compileDebugJavaWithJavac` OK, **35/35 tests Java**. Non fait : `pnpm verify` (aucun fichier Web touché), APK, essai sur Hisense ou téléphone. Branche `claude/petits-panneaux-charte-f77ef4`, pas de push.
+
 ## Titres de section dans les chaînes — 8 novembre 2026 — 1.12.11/code 59
 
 - Correction du retour utilisateur après 1.12.10 : la photo désigne le titre fournisseur `FR: -- MUSIQUE / NEWS --` dans la colonne des chaînes, et non une catégorie de la colonne gauche. Reproduction physique sur 1.12.10 : titre premier dans les données source, quatrième après extraction TNT de M6 MUSIC et CSTAR HITS.
