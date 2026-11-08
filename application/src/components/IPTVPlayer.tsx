@@ -14,6 +14,7 @@ import { GroupManagerDialog, FavoritesOrganizerDialog, loadHiddenGroups, saveHid
 import { BrandMark } from '@/components/BrandMark';
 import { loadHiddenChannels, saveHiddenChannels } from '@/utils/streamCheck';
 import { applyCustomization, byChannelName, loadCustomization, saveCustomization, EMPTY_CUSTOMIZATION, type ChannelEdit, type ListCustomization } from '@/utils/channelCustomization';
+import { orderFrenchGroupsForTnt } from '@/utils/tntOrdering';
 import { loadFavoriteLists, FAVORITE_LISTS_EVENT, type FavoriteList } from '@/utils/favoriteLists';
 import { ChannelEditorDialog } from '@/components/ChannelEditor';
 import { fetchTextWithUserAgent, playlistUserAgent, setActiveUserAgent } from '@/utils/userAgent';
@@ -27,7 +28,7 @@ import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
 import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayHub, LazySettingsPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
 import { downloadStalkerPlaylist, stalkerAvailable } from '@/utils/stalker';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2 } from 'lucide-react';
+import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2, ListVideo } from 'lucide-react';
 import { Channel, PlaylistInfo } from '@/types/channel';
 import { getPlaylistsFromDB, getPlaylistFromDB, savePlaylistToDB, getLastChannelForPlaylist, setLastChannelForPlaylist, getMeta, setMeta, type VodWatchlistItem } from '@/utils/idb';
 import { downloadPlaylist, downloadPlaylistAdvanced } from '@/utils/m3uExport';
@@ -335,7 +336,7 @@ export function IPTVPlayer() {
     if (id) void saveCustomization(id, next).catch(() => toast.error('Impossible d’enregistrer l’organisation de la liste.'));
   }, []);
   const customizedGroups = useMemo(
-    () => (currentPlaylist ? applyCustomization(currentPlaylist.groups, customization) : []),
+    () => (currentPlaylist ? orderFrenchGroupsForTnt(applyCustomization(currentPlaylist.groups, customization), customization) : []),
     [currentPlaylist, customization],
   );
   const customGroupOrder = !!customization.groupOrder?.length;
@@ -861,7 +862,49 @@ export function IPTVPlayer() {
     );
   }
 
-  // En-tête : sur TV, une seule ligne (logo, rubriques, liste, recherche) — repliable.
+  // Choix de la liste : dans l'en-tête sur téléphone ; sur TV, en tête de « Plus » pour
+  // garder la ligne d'en-tête aux seules rubriques (on change rarement de liste).
+  const playlistMenu = (
+  <DropdownMenu onOpenChange={open => {
+    if (open) void getPlaylistsFromDB().then(setAllPlaylists).catch(() => toast.error('Impossible de lire les listes enregistrées.'));
+  }}>
+    <DropdownMenuTrigger asChild>
+      {tvMode ? <button type="button" className="flex min-h-[64px] w-full items-center gap-4 rounded-[20px] border border-neutral-900 bg-card px-4 py-3 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary" title={playlistDisplayName(currentPlaylist)} aria-label="Changer de liste">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-secondary text-primary"><ListVideo aria-hidden="true" className="h-[18px] w-[18px] stroke-[1.8]" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] text-muted-foreground">Liste en cours</span>
+          <span className="block truncate text-[15px] font-medium text-foreground">{playlistDisplayName(currentPlaylist)}</span>
+        </span>
+        <span className="shrink-0 font-mono text-[13px] text-muted-foreground">{currentPlaylist.channels.length}</span>
+        <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button> : <Button variant="outline" size="sm" className="min-h-11 min-w-0 border-neutral-800 text-white hover:bg-neutral-900 px-3 gap-1.5" title={playlistDisplayName(currentPlaylist)} aria-label="Changer de liste">
+        <span className="min-w-0 truncate max-w-[200px] sm:max-w-[240px]">{playlistDisplayName(currentPlaylist)}</span>
+        <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 opacity-70" />
+      </Button>}
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="start" className="w-72 max-h-[70vh] overflow-y-auto">
+      <DropdownMenuLabel>Changer de liste</DropdownMenuLabel>
+      <DropdownMenuRadioGroup value={currentPlaylist.id} onValueChange={(id) => {
+        const pl = allPlaylists.find(p => p.id === id);
+        if (pl && pl.id !== currentPlaylist.id) void openPlaylist(pl);
+      }}>
+        {allPlaylists.map(pl => (
+          <DropdownMenuRadioItem key={pl.id} value={pl.id}>
+            <span className="truncate flex-1">{playlistDisplayName(pl)}</span>
+            <span className="ml-auto pl-2 text-xs text-muted-foreground shrink-0">{pl.channels.length}</span>
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator />
+      {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => void openPublicPlaylist()}>Chaînes gratuites</DropdownMenuItem>}
+      <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
+      {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
+      <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
+    </DropdownMenuContent>
+  </DropdownMenu>
+  );
+
+  // En-tête : sur TV, une seule ligne (logo, rubriques, recherche) — repliable.
   const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
       <div className={tvMode ? 'tv-header-main min-w-0 flex-1 items-center gap-3' : 'flex items-center gap-2 min-w-0 flex-1'}>
         <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
@@ -870,35 +913,7 @@ export function IPTVPlayer() {
           <span>Ced<span className="text-[#FF5A36]">Play</span></span>
         </h1>
         {tvMode && <MainNavigation tv onNavigate={navigate} />}
-        <DropdownMenu onOpenChange={open => {
-          if (open) void getPlaylistsFromDB().then(setAllPlaylists).catch(() => toast.error('Impossible de lire les listes enregistrées.'));
-        }}>
-          <DropdownMenuTrigger asChild>
-            <Button variant={tvMode ? 'ghost' : 'outline'} size="sm" className={tvMode ? 'tv-chip h-10 w-full min-w-0 gap-1.5 rounded-full px-3 text-[14px] font-normal text-muted-foreground' : 'min-h-11 min-w-0 border-neutral-800 text-white hover:bg-neutral-900 px-3 gap-1.5'} title={playlistDisplayName(currentPlaylist)} aria-label="Changer de liste">
-              <span className={`min-w-0 truncate ${tvMode ? 'flex-1' : 'max-w-[200px] sm:max-w-[240px]'}`}>{playlistDisplayName(currentPlaylist)}</span>
-              <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 opacity-70" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72 max-h-[70vh] overflow-y-auto">
-            <DropdownMenuLabel>Changer de liste</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={currentPlaylist.id} onValueChange={(id) => {
-              const pl = allPlaylists.find(p => p.id === id);
-              if (pl && pl.id !== currentPlaylist.id) void openPlaylist(pl);
-            }}>
-              {allPlaylists.map(pl => (
-                <DropdownMenuRadioItem key={pl.id} value={pl.id}>
-                  <span className="truncate flex-1">{playlistDisplayName(pl)}</span>
-                  <span className="ml-auto pl-2 text-xs text-muted-foreground shrink-0">{pl.channels.length}</span>
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => void openPublicPlaylist()}>Chaînes gratuites</DropdownMenuItem>}
-            <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
-            {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
-            <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {!tvMode && playlistMenu}
         {!tvMode && currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
           <Badge variant="outline" className="hidden sm:inline-flex border-neutral-800 text-amber-300 text-xs shrink-0">
             {currentPlaylist.channels.length}/{currentPlaylist.totalChannelsBeforeDedup}
@@ -957,7 +972,7 @@ export function IPTVPlayer() {
             {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={() => setSearchOpen(true)} /></Suspense></div>}
           </TabsContent>
           <TabsContent value="more" className="screen-enter space-y-4">
-            {activeTab === 'more' && <div className="screen-enter"><MorePanel onOpen={openMore} /></div>}
+            {activeTab === 'more' && <div className="screen-enter"><MorePanel onOpen={openMore}>{tvMode && playlistMenu}</MorePanel></div>}
             {activeTab === 'replay' && <div key="replay" className={`screen-enter space-y-4 ${tvMode ? '' : 'mx-auto max-w-2xl'}`}>
               <div className="flex items-center gap-1 text-foreground">
                 <Button variant="ghost" size="icon" className="-ml-2 h-11 w-11 shrink-0 rounded-full" onClick={() => setActiveTab('more')} aria-label="Retour à Plus"><ArrowLeft aria-hidden="true" className="h-5 w-5" /></Button>

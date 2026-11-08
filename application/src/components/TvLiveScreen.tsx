@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useVirtualizer, defaultRangeExtractor } from '@tanstack/react-virtual';
 import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, ListChecks, Lock, Pencil, Play, Search, SlidersHorizontal, Star } from 'lucide-react';
 import type { FavoriteList } from '@/utils/favoriteLists';
-import { byChannelName } from '@/utils/channelCustomization';
+import { byChannelName, byGroupName } from '@/utils/channelCustomization';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData, EPGProgram } from '@/types/epg';
@@ -199,7 +199,7 @@ export function TvLiveScreen({
     }
     list.push({ kind: 'category', id: 'recent', label: 'Récentes', count: recents.length, locked: false });
     list.push({ kind: 'category', id: 'all', label: 'Toutes', count: allChannels.filter(allowed).length, locked: false });
-    for (const g of customGroupOrder ? groups : [...groups].sort((a, b) => a.name.localeCompare(b.name, 'fr'))) {
+    for (const g of customGroupOrder ? groups : [...groups].sort(byGroupName)) {
       const locked = parentalLocked && lockedSet.has(g.name);
       list.push({ kind: 'category', id: `group:${g.name}`, label: g.name, count: g.channels.length, locked });
     }

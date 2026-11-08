@@ -1,5 +1,6 @@
 import { getMeta, setMeta } from '@/utils/idb';
 import type { Channel, ChannelGroup } from '@/types/channel';
+import { compareChannelNames, compareGroupNames } from '@/utils/tntOrdering';
 
 /**
  * Personnalisation d'une liste, sans toucher à la liste source : nom, logo et numéro
@@ -101,8 +102,9 @@ function orderBy<T>(items: T[], order: string[] | undefined, keyOf: (item: T) =>
   return [...listed, ...(fallback ? rest.sort(fallback) : rest)];
 }
 
-export const byGroupName = (a: ChannelGroup, b: ChannelGroup) => a.name.localeCompare(b.name, 'fr');
-export const byChannelName = (a: Channel, b: Channel) => a.name.localeCompare(b.name, 'fr', { numeric: true, sensitivity: 'base' });
+// Groupes : français en tête, symboles après le z ; chaînes : généralistes TNT d'abord (voir tntOrdering).
+export const byGroupName = (a: ChannelGroup, b: ChannelGroup) => compareGroupNames(a.name, b.name);
+export const byChannelName = (a: Channel, b: Channel) => compareChannelNames(a.name, b.name);
 
 /**
  * Groupes affichés après personnalisation. Sans ordre de groupes choisi, l'ordre

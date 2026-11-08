@@ -27,6 +27,7 @@ import { createSearchIndex, searchChannels } from '@/utils/channelSearch';
 import { focusRemote } from '@/utils/remoteNavigation';
 import type { FavoriteList } from '@/utils/favoriteLists';
 import { byChannelName } from '@/utils/channelCustomization';
+import { compareGroupNames, tntDisplayName } from '@/utils/tntOrdering';
 
 /** Surligne les occurrences de la recherche dans un nom (fonction pure, partagée par toutes les cartes). */
 const highlight = (text: string, rawQuery: string): React.ReactNode => {
@@ -147,7 +148,8 @@ const ChannelCard = React.memo(function ChannelCard({
                 {/* Channel Info */}
                 <div className="flex-1 min-w-0">
                   <h3 className={`font-semibold tracking-tight truncate flex items-center gap-2 ${compactMode ? 'text-sm' : 'text-[15px]'} ${isPlaying ? 'text-primary' : ''}`}>
-                    <span className="truncate">{highlight(channel.name, searchTerm)}</span>
+                    {/* Numéro TNT devant le nom, sauf si la ligne affiche déjà un numéro personnalisé. */}
+                    <span className="truncate">{highlight(selectedGroup !== 'favorites' && channel.chno ? channel.name : tntDisplayName(channel.name), searchTerm)}</span>
                     {channel.quality && (
                       <Badge
                         variant={channel.quality === '4K' || channel.quality === 'UHD' ? 'default' : 'outline'}
@@ -682,7 +684,7 @@ const ChannelCard = React.memo(function ChannelCard({
         const lists = (favoriteLists ?? []).map(l => `fav:${l.id}`);
         if (!groups) return ['all', 'favorites', ...lists, 'recent'];
         const names = groups.map(g => g.name);
-        return ['all', 'favorites', ...lists, 'recent', ...(customGroupOrder ? names : names.sort((a, b) => a.localeCompare(b, 'fr')))];
+        return ['all', 'favorites', ...lists, 'recent', ...(customGroupOrder ? names : names.sort(compareGroupNames))];
       }, [groups, favoriteLists, customGroupOrder]);
       // Liste de favoris supprimée pendant qu'elle était affichée : revenir à « Toutes ».
       useEffect(() => {

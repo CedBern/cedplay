@@ -59,17 +59,18 @@ it('gauche passe aux catégories ; la liste suit après une pause, droite l’ap
   expect(active().closest('[data-tv-col]')?.getAttribute('data-tv-col')).toBe('cat');
   expect(active()).toHaveTextContent('Toutes');
   key('ArrowDown');
-  expect(active()).toHaveTextContent('Adulte');
+  expect(active()).toHaveTextContent('France');
   key('ArrowDown');
   expect(active()).toHaveTextContent('Belgique');
   // Un passage rapide ne change pas la liste ; une pause l'affiche sans appui sur OK.
   expect(screen.getByRole('heading', { name: 'Toutes' })).toBeVisible();
   expect(await screen.findByRole('heading', { name: 'Belgique' })).toBeVisible();
   key('ArrowDown');
-  expect(active()).toHaveTextContent('France');
+  expect(active()).toHaveTextContent('Adulte');
   key('ArrowRight');
-  expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
-  expect(active()).toHaveAccessibleName('1. Info');
+  expect(screen.getByRole('heading', { name: 'Adulte' })).toBeVisible();
+  // Numérotation canonique : Nuit garde le numéro 5 de la liste complète.
+  expect(active()).toHaveAccessibleName('5. Nuit');
 });
 
 it('droite ouvre l’aperçu : Regarder lance la chaîne mise en avant', () => {
@@ -119,7 +120,7 @@ it('groupe protégé : liste vide, OK demande le code', () => {
   for (let i = 0; i < 6; i++) key('ArrowDown');
   // La chaîne adulte n'apparaît pas dans Toutes : la dernière ligne est Bruxelles.
   expect(active()).toHaveAccessibleName('4. Bruxelles');
-  key('ArrowLeft'); key('ArrowDown');
+  key('ArrowLeft'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown');
   expect(active()).toHaveTextContent('Adulte');
   key('ArrowRight');
   expect(screen.getByText(/Groupe protégé/)).toBeVisible();
@@ -177,8 +178,8 @@ it('un numéro d’une autre catégorie rejoint la chaîne et sa catégorie', ()
   vi.useFakeTimers();
   try {
     setup({ zapList: [...fr, ...be] });
-    // Partir d'une catégorie sans Bruxelles : la liste France (catégories triées : Adulte, Belgique, France).
-    key('ArrowLeft'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowRight');
+    // Partir d'une catégorie sans Bruxelles : la liste France (catégories triées : France, Belgique, Adulte).
+    key('ArrowLeft'); key('ArrowDown'); key('ArrowRight');
     act(() => { vi.advanceTimersByTime(600); }); // laisse la sélection de catégorie s'appliquer
     expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
     key('4');
@@ -191,7 +192,7 @@ it('un numéro d’une autre catégorie rejoint la chaîne et sa catégorie', ()
 it('entrer dans une catégorie qui contient la chaîne en cours : le focus va sur elle', () => {
   const { onPlay } = setup({ currentChannel: fr[2] });
   key('ArrowLeft');
-  key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); // Adulte, Belgique, France
+  key('ArrowDown'); // France, première catégorie et celle de la chaîne en cours
   key('ArrowRight');
   expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
   expect(active()).toHaveAccessibleName('3. Sport');

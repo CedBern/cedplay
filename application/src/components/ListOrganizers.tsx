@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import { getFavoritesFromDB, getMeta, saveFavoritesToDB, setMeta } from '@/utils/idb';
-import { displayGroupOrder, duplicateNumbers, moveInList, numberChannels, type ListCustomization } from '@/utils/channelCustomization';
+import { byGroupName, displayGroupOrder, duplicateNumbers, moveInList, numberChannels, type ListCustomization } from '@/utils/channelCustomization';
 import { createFavoriteList, deleteFavoriteList, loadFavoriteLists, updateFavoriteList, FAVORITE_LISTS_EVENT, type FavoriteList } from '@/utils/favoriteLists';
 import type { Channel, ChannelGroup } from '@/types/channel';
 
@@ -52,7 +52,7 @@ export function GroupManagerDialog({ open, onOpenChange, groups, hidden, onChang
   useEffect(() => { setQuery(''); setFirstNumber(''); }, [view]);
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const visibleCount = groups.length - groups.filter(g => hiddenSet.has(g.name)).length;
-  const ordered = useMemo(() => (custom ? displayGroupOrder(groups, custom) : [...groups].sort((a, b) => a.name.localeCompare(b.name, 'fr'))), [groups, custom]);
+  const ordered = useMemo(() => (custom ? displayGroupOrder(groups, custom) : [...groups].sort(byGroupName)), [groups, custom]);
   const q = query.trim().toLocaleLowerCase('fr');
   const filtered = useMemo(() => (q ? ordered.filter(g => g.name.toLocaleLowerCase('fr').includes(q)) : ordered), [ordered, q]);
   const toggle = (name: string) => onChange(hiddenSet.has(name) ? hidden.filter(g => g !== name) : [...hidden, name]);

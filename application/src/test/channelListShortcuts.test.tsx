@@ -36,7 +36,7 @@ describe('ChannelList shortcuts et favoris', () => {
       />
     );
 
-    await screen.findByRole('heading', { name: /^TF1 HD/ });
+    await screen.findByRole('heading', { name: /^1\. TF1 HD/ });
 
     // Bouton ajouter aux favoris pour TF1 HD
     const favBtn = screen.getByRole('button', { name: 'Ajouter TF1 HD aux favoris' });
@@ -80,7 +80,7 @@ describe('ChannelList shortcuts et favoris', () => {
       />
     );
 
-    await screen.findByRole('heading', { name: /^TF1 HD/ });
+    await screen.findByRole('heading', { name: /^1\. TF1 HD/ });
     fireEvent.keyDown(window, { key: 'r' });
 
     await waitFor(async () => {
@@ -96,7 +96,7 @@ describe('ChannelList shortcuts et favoris', () => {
       />
     );
 
-    await screen.findByRole('heading', { name: /^TF1 HD/ });
+    await screen.findByRole('heading', { name: /^1\. TF1 HD/ });
 
     // Cycle: all -> 4K
     fireEvent.keyDown(window, { key: 'q' });
