@@ -1,5 +1,22 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Lot A de l'audit — contrôle parental VOD et quota IndexedDB, 8 novembre 2026
+
+- Corrige les deux P0 de l'audit : le contrôle parental couvre désormais le catalogue VOD/séries Xtream, la recherche globale, « Continuer » et les favoris publiés au lanceur Android TV ; le cache EPG est plafonné et purgé, et un échec d'écriture IndexedDB n'est plus présenté comme une panne réseau.
+- Nouveaux fichiers : `src/utils/parentalVod.ts` (registre de session des catégories adultes par liste et par type, alimenté seulement après une lecture réussie), `src/hooks/useAdultVodCategories.ts` (verdict fermé tant que les catégories sont inconnues).
+- Modifiés : `VodLibrary.tsx` (catégories, titres, Ma liste et « Pour toi » filtrés ; catégorie par défaut jamais verrouillée ; fiche fermée si elle devient interdite), `GlobalSearchDialog.tsx`, `ContinuePanel.tsx`, `MoviesPanel.tsx`, `IPTVPlayer.tsx` (favoris filtrés par `playableChannels`), `epg.ts` (écriture du cache isolée du téléchargement, plafond 12 M caractères), `idb.ts` (`deletePlaylistFromDB` purge 11 familles de clés `meta`), `ChannelList.tsx` (favori non enregistré annulé et signalé).
+- Vérifié : `tsc` app+node 0 erreur, `eslint ./src` complet 0 erreur / 18 avertissements (inchangé), **685/685 tests** sur 106 fichiers (13 nouveaux : registre, hook, purge, quota EPG, catégorie adulte masquée dans le catalogue), `vite build` OK, `dist/` 2,7 Mo. Rien n'est encore versionné ni empaqueté : pas de montée en 1.12.7 et aucun APK produit.
+- Non vérifié : recette sur appareil avec une catégorie adulte Xtream réelle, et comportement du quota quand IndexedDB est réellement plein.
+
+## Audit intégral 1.12.6 — corrections et améliorations à planifier, 8 novembre 2026
+
+- Rapport : `AUDIT_INTEGRAL_2026-11-08.md` (racine). Aucun code modifié. Base revérifiée sur l'état courant : tsc app+node 0 erreur, `eslint ./src` complet 0 erreur / 18 avertissements, 672/672 tests (102 fichiers), `vite build` 12,6 s et `dist/` 2,7 Mo sans média de test, APK 1.12.6 code 54 (aapt).
+- Deux P0 : (1) contrôle parental absent sur tout le VOD/séries Xtream, la recherche VOD, la reprise VOD et les favoris publiés au lanceur Android TV ; (2) caches EPG jamais purgés et échec d'écriture IndexedDB (quota) présenté comme panne réseau, avec perte silencieuse des favoris et réglages.
+- Neuf P1 : `getDb()` qui mémorise une ouverture bloquée, re-parse EPG synchrone après timeout worker, M3U/XMLTV sans plafond ni détection d'encodage, XMLTV entièrement en mémoire avant filtrage, fetch web sans timeout sur l'import Xtream, `scroll` non throttlé dans le guide TV, flash sombre en thème clair (`iptv_settings` plus jamais écrit), proxy de dev SSRF/CORS `*`, et `AGENTS.md` non versionné et périmé (1.12.3/code 51/661 tests annoncés).
+- 21 P2 documentés (sauvegarde exportant des secrets non re-masqués, mot de passe Xtream pré-rempli, PIN SHA-256 nu, caches non purgés à la suppression d'une liste, DVR perdu après force-stop, URI non validées dans le pont natif, couverture limitée à utils+hooks, 42 APK / 300 Mo à la racine).
+- Faux positifs écartés et consignés pour éviter de futures « corrections » : pas de XSS, proxy non embarqué dans l'APK, règles ProGuard OK, APK non versionnés, pas de fuite de listeners, virtualisation en place, warnings `currentPlaylist` d'`IPTVPlayer` sans conséquence.
+- Plan proposé en cinq lots (A sécurité fonctionnelle, B démarrage/robustesse, C perf TV, D livraison/hygiène, E couverture). Aucun essai sur appareil ni flux réel dans cette session : la recette physique reste ouverte.
+
 ## Jeton TMDB accepte - 7 novembre 2026
 
 - Retour utilisateur : long API Read Access Token. Deux defauts reproduits par 10 nouveaux tests : envoi comme cle v3 et troncature a 200 caracteres dans les reglages.
@@ -696,3 +713,16 @@ Points ouverts pour continuer :
 **Session concurrente.** Bump effectué après re-vérification `git status` (1.12.5/code 53 commitée par l'autre session en `6646a40`, rien en vol) ; commits par pathspec explicite ; ses fichiers racine non touchés.
 
 **Installation 1.12.6 (8 novembre 2026, sur demande « sur les 2 »).** `adb install -r CedPlay-1.12.6.apk` réussi sur Motorola Edge 70 (ZY22MBQQW7) et Hisense HiSmartTV A4 (192.168.100.2:5555), sans désinstallation ; `dumpsys package com.lecteur.iptv` : `versionCode=54 versionName=1.12.6` des deux côtés. Reste à confirmer à l'usage : l'ouverture effective des apps officielles (Netflix, YouTube, TF1+) depuis Direct → Plateformes.
+
+## Retours appareil sur l'ouverture des plateformes et corrections TV — 1.12.7 / code 55, 8 novembre 2026
+
+**Retours utilisateur (Motorola)** : Netflix OK, YouTube OK, france.tv OK ; TF1+ et M6+ ouvertes sur le navigateur car les applications ne sont pas encore installées (comportement attendu) ; Prime « ne fonctionne pas », Max « connexion non privée » (page navigateur), Arte renvoie vers le site.
+
+**Diagnostic sur la Hisense (dumpsys)** — trois causes réelles trouvées et corrigées :
+1. **Netflix TV = `com.netflix.ninja`** (pas `mediaclient`) : ajouté comme second candidat (la TV et le téléphone partagent www.netflix.com en App Link, la tuile ouvre donc l'app des deux côtés).
+2. **Max et Prime TV n'ont que `LEANBACK_LAUNCHER`** : le repli « accueil de l'app » via `getLaunchIntentForPackage` (catégorie LAUNCHER) renvoyait null sur TV — `openWeb` essaie maintenant aussi `getLeanbackLaunchIntentForPackage`.
+3. **`www.primevideo.com` et `www.max.com` ne sont PAS des App Links des apps** (dumpsys : Max déclare `play.max.com`/`play.hbomax.com`, Prime déclare `app.primevideo.com`) : l'URL Prime passe à `https://app.primevideo.com` (ouvre l'app directement ; sans app, la page officielle « obtenir l'application »). Max garde www.max.com et s'ouvre à l'accueil via le paquet (`com.wbd.hbomax` ajouté en variante TV).
+
+Sur le téléphone : Prime/Max/Arte semblent **non installées** (le navigateur s'est ouvert) — installer les apps ou me redonner la main adb pour confirmer ; « connexion non privée » sur www.max.com est un incident TLS du réseau du téléphone (depuis le PC, le TLS de max.com est sain).
+
+**Vérification.** 686/686 tests (vitest), tsc app+node 0, ESLint 0 erreur (18 avertissements), vite build 8,9 s, cap sync, assembleRelease OK. APK **CedPlay-1.12.7.apk** (4 605 463 octets, SHA-256 `99bf1cc43b1880e12f99c37a…`, aapt code 55) installée sur la Hisense (dumpsys code 55 / 1.12.7) ; **Motorola débranché** — à installer dès qu'il est reconnecté (`adb install -r CedPlay-1.12.7.apk`).
