@@ -17,6 +17,12 @@ export interface ReplayPlatform {
    * directe du programme (TF1+, qui n'expose pas de page de recherche publique).
    */
   programUrl: (query: string) => string;
+  /**
+   * Paquets Android des applications officielles (IDs vérifiés sur le Play Store le
+   * 8 novembre 2026). Pour la recherche, l'app officielle n'est ouverte que si elle
+   * gère l'URL exacte : jamais de lancement « à l'aveugle » qui perdrait la requête.
+   */
+  androidPackages?: string[];
 }
 
 /**
@@ -50,10 +56,10 @@ export interface ReplayChannel {
 
 export const replayPlatforms: ReplayPlatform[] = [
   // TF1+ n'a pas de page de recherche publique : on ouvre directement la page du programme (slug).
-  { id: 'tf1plus', label: 'TF1+', color: '#1565c0', programUrl: q => `https://www.tf1.fr/tf1/${slugify(q)}` },
-  { id: 'm6plus', label: 'M6+', color: '#6a1b9a', programUrl: q => `https://www.m6.fr/recherche?query=${encodeURIComponent(q)}` },
-  { id: 'francetv', label: 'france.tv', color: '#c62828', programUrl: q => `https://www.france.tv/recherche/?q=${encodeURIComponent(q)}` },
-  { id: 'arte', label: 'Arte', color: '#ef6c00', programUrl: q => `https://www.arte.tv/fr/videos/recherche/?query=${encodeURIComponent(q)}` },
+  { id: 'tf1plus', label: 'TF1+', color: '#1565c0', programUrl: q => `https://www.tf1.fr/tf1/${slugify(q)}`, androidPackages: ['fr.tf1.mytf1'] },
+  { id: 'm6plus', label: 'M6+', color: '#6a1b9a', programUrl: q => `https://www.m6.fr/recherche?query=${encodeURIComponent(q)}`, androidPackages: ['fr.m6.m6replay'] },
+  { id: 'francetv', label: 'france.tv', color: '#c62828', programUrl: q => `https://www.france.tv/recherche/?q=${encodeURIComponent(q)}`, androidPackages: ['fr.francetv.pluzz'] },
+  { id: 'arte', label: 'Arte', color: '#ef6c00', programUrl: q => `https://www.arte.tv/fr/videos/recherche/?query=${encodeURIComponent(q)}`, androidPackages: ['tv.arte.plus7'] },
 ];
 
 export const replayChannels: ReplayChannel[] = [

@@ -5,6 +5,38 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- Visibilité des applications officielles de streaming (Android 11+, package visibility) :
+         ouvrir une plateforme dans son app installée avant de retomber sur le navigateur.
+         IDs vérifiés sur le Play Store le 8 novembre 2026 (voir src/data/streamingPlatforms.ts). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.amazon.avod.thirdpartyclient" />
+        <package android:name="com.amazon.amazonvideo.livingroom" />
+        <package android:name="com.disney.disneyplus" />
+        <package android:name="com.wbd.stream" />
+        <package android:name="com.apple.atve.androidtv.appletv" />
+        <package android:name="com.canal.android.canal" />
+        <package android:name="com.cbs.app" />
+        <package android:name="com.crunchyroll.crunchyroid" />
+        <package android:name="fr.anidn" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.youtube.tv" />
+        <package android:name="tv.twitch.android.app" />
+        <package android:name="tv.pluto.android" />
+        <package android:name="tv.wuaki" />
+        <package android:name="com.plexapp.android" />
+        <package android:name="tv.molotov.app" />
+        <package android:name="fr.tf1.mytf1" />
+        <package android:name="fr.m6.m6replay" />
+        <package android:name="fr.francetv.pluzz" />
+        <package android:name="tv.arte.plus7" />
+        <package android:name="com.dazn" />
+    </queries>
+
     <application
         android:banner="@drawable/tv_banner"
         android:allowBackup="false"

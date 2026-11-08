@@ -35,10 +35,15 @@ const siteSearchHint: Record<string, string> = {
   arte: 'Résultats de recherche',
 };
 
-/** Application officielle si elle est installée (Android), sinon le navigateur. */
-function openExternal(url: string, label: string, name: string) {
+/**
+ * Application officielle si elle est installée (Android), sinon le navigateur.
+ * `packages` : paquets Android à essayer ; `allowAppHome` : quand la page exacte n'est pas
+ * gérée par l'app, l'ouvrir quand même à son accueil (tuiles de plateformes) — sinon
+ * navigateur (recherche sur site officiel, où perdre la requête serait pire).
+ */
+function openExternal(url: string, label: string, name: string, packages?: string[], allowAppHome = false) {
   if (NativePlayerBridge.isAvailable()) {
-    void NativePlayerBridge.openWeb(url, label).catch(() => toast.error(`Impossible d’ouvrir ${name}.`));
+    void NativePlayerBridge.openWeb(url, label, packages, allowAppHome).catch(() => toast.error(`Impossible d’ouvrir ${name}.`));
     return;
   }
   // « noopener » ferait toujours renvoyer null : on coupe le lien à la main.
@@ -121,7 +126,8 @@ export function ReplayHub({ channels, epgData, catchupDays, onCatchup, tvMode = 
   };
 
   const focus = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary';
-  const openPlatform = (p: StreamingPlatform) => openExternal(p.url, p.name, p.name);
+  // allowAppHome : la racine du site n'est pas toujours un App Link de l'app, on l'ouvre à l'accueil.
+  const openPlatform = (p: StreamingPlatform) => openExternal(p.url, p.name, p.name, p.androidPackages, true);
   const openChannel = (ch: ReplayChannel) => openExternal(ch.url, `Replay ${ch.name}`, ch.name);
 
   const sectionTitle = (id: string, title: string, hint?: string, action?: ReactNode) => (
@@ -282,7 +288,7 @@ export function ReplayHub({ channels, epgData, catchupDays, onCatchup, tvMode = 
               <button
                 type="button"
                 disabled={!term}
-                onClick={() => openExternal(platform.programUrl(term), `Recherche ${platform.label}`, platform.label)}
+                onClick={() => openExternal(platform.programUrl(term), `Recherche ${platform.label}`, platform.label, platform.androidPackages)}
                 className={`flex min-h-[60px] w-full items-center gap-3 px-3.5 py-2 text-left transition-colors hover:bg-accent/60 ${tvMode ? 'rounded-2xl border border-border bg-card' : `${focus} focus-visible:ring-inset`}`}
               >
                 <PlatformLogo platformId={platform.id} name={platform.label} size="md" className="h-10 w-10 rounded-xl" />

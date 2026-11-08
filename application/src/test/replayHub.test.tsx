@@ -209,7 +209,21 @@ describe('Replay et plateformes', () => {
     renderHub();
     await user.click(screen.getByRole('button', { name: 'Plateformes' }));
     await user.click(screen.getByRole('button', { name: /^Netflix/ }));
-    expect(openWeb).toHaveBeenCalledWith('https://www.netflix.com', 'Netflix');
+    // allowAppHome : si l'app ne gère pas la page exacte, on l'ouvre quand même à son accueil.
+    expect(openWeb).toHaveBeenCalledWith('https://www.netflix.com', 'Netflix', ['com.netflix.mediaclient'], true);
+  });
+
+  it('Android : la recherche sur site officiel passe les paquets, sans ouverture à l’aveugle', async () => {
+    const user = userEvent.setup();
+    vi.mocked(NativePlayerBridge.isAvailable).mockReturnValue(true);
+    const openWeb = vi.spyOn(NativePlayerBridge, 'openWeb').mockResolvedValue(true);
+    renderHub();
+    await user.type(screen.getByRole('searchbox', { name: 'Chercher un programme' }), 'Koh');
+    const sites = screen.getByRole('region', { name: 'Sur les sites officiels' });
+    const siteButton = await within(sites).findByRole('button', { name: /TF1\+/ });
+    await user.click(siteButton);
+    // Pas d'allowAppHome : si l'app ne gère pas la page de recherche, navigateur (requête conservée).
+    expect(openWeb).toHaveBeenCalledWith('https://www.tf1.fr/tf1/koh', 'Recherche TF1+', ['fr.tf1.mytf1'], false);
   });
 
   it('TV : une seule page en rangées, sans sélecteur de vue', () => {

@@ -86,7 +86,8 @@ it('trouve une plateforme de streaming et déclenche openWeb', async () => {
   expect(netflixBtn).toBeTruthy();
 
   await user.click(netflixBtn);
-  expect(openWebSpy).toHaveBeenCalledWith('https://www.netflix.com');
+  // Application officielle d'abord (allowAppHome), sinon navigateur : paquets transmis au pont natif.
+  expect(openWebSpy).toHaveBeenCalledWith('https://www.netflix.com', undefined, ['com.netflix.mediaclient'], true);
   expect(onOpenChange).toHaveBeenCalledWith(false);
 });
 

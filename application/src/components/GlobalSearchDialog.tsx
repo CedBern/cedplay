@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import { PlatformLogo } from '@/components/PlatformLogo';
 import { streamingPlatforms } from '@/data/streamingPlatforms';
-import { replayChannels } from '@/data/replayChannels';
+import { replayChannels, replayPlatforms } from '@/data/replayChannels';
 import { getVodWatchlistFromDB, type VodWatchlistItem } from '@/utils/idb';
 import { getXtreamAccount } from '@/utils/xtreamCatalog';
 import { invalidateSearchCatalog, searchCatalogSource } from '@/utils/catalogSearch';
@@ -137,8 +137,17 @@ export function GlobalSearchDialog({
 
   const hasResults = matchedChannels.length > 0 || matchedLockedChannels.length > 0 || matchedStreaming.length > 0 || matchedReplay.length > 0 || matchedVod.length > 0;
 
-  const handleOpenPlatform = (url: string) => {
-    void NativePlayerBridge.openWeb(url);
+  const handleOpenPlatform = (platform: (typeof streamingPlatforms)[number]) => {
+    // Application officielle d'abord (accueil si la page n'est pas un App Link), sinon navigateur.
+    void NativePlayerBridge.openWeb(platform.url, undefined, platform.androidPackages, true);
+    onOpenChange(false);
+  };
+
+  // Page d'un programme de replay : l'app officielle seulement si elle gère l'URL exacte,
+  // sinon navigateur — un lancement à l'aveugle perdrait la recherche du programme.
+  const handleOpenReplay = (url: string, platformId: string) => {
+    const packages = replayPlatforms.find(rp => rp.id === platformId)?.androidPackages;
+    void NativePlayerBridge.openWeb(url, undefined, packages);
     onOpenChange(false);
   };
 
@@ -276,7 +285,7 @@ export function GlobalSearchDialog({
                 <button
                   key={platform.id}
                   type="button"
-                  onClick={() => handleOpenPlatform(platform.url)}
+                  onClick={() => handleOpenPlatform(platform)}
                   className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
@@ -304,7 +313,7 @@ export function GlobalSearchDialog({
                 <button
                   key={ch.id}
                   type="button"
-                  onClick={() => handleOpenPlatform(ch.url)}
+                  onClick={() => handleOpenReplay(ch.url, ch.platform)}
                   className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">

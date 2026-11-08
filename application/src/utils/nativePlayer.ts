@@ -47,7 +47,7 @@ export interface ScheduledRecording {
 interface NativePlayerPluginType {
   open(options: { url: string; title?: string | undefined; tvUi?: boolean | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; channelLogos?: string[] | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
-  openWeb(options: { url: string; title?: string | undefined }): Promise<void>;
+  openWeb(options: { url: string; title?: string | undefined; packages?: string[] | undefined; allowAppHome?: boolean | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
   openVod(options: { url: string; title: string; tvUi?: boolean | undefined; mediaId: string; startPositionMs: number; restart: boolean; subtitleUrl?: string | undefined; subtitleContent?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; episodeIds?: string[] | undefined; channelIndex?: number | undefined }): Promise<VodResult>;
   pickFolder(): Promise<{ uri: string; name: string } | null>;
@@ -441,11 +441,11 @@ export const NativePlayerBridge = {
   async openExternal(url: string, title?: string): Promise<boolean> {
     return openPlayer('openExternal', url, title);
   },
-  async openWeb(url: string, title?: string): Promise<boolean> {
+  async openWeb(url: string, title?: string, packages?: string[], allowAppHome?: boolean): Promise<boolean> {
     if (!isAvailable() || isPlaybackDelegated()) return false;
     try { if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error(); }
     catch { toast.error('Adresse de lien invalide.'); return false; }
-    try { await NativePlayer.openWeb({ url, title }); return true; }
+    try { await NativePlayer.openWeb({ url, title, packages, allowAppHome }); return true; }
     catch { toast.error('Impossible d’ouvrir le lien sur Android.'); return false; }
   }
 };

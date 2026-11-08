@@ -6,6 +6,7 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.util.JsonWriter;
@@ -312,9 +313,55 @@ public class NativePlayerPlugin extends Plugin {
             call.reject("URL HTTP ou HTTPS requise");
             return;
         }
+        Uri uri = Uri.parse(url);
+        // Paquets candidats transmis par le web (applications officielles de la plateforme).
+        JSArray packages = call.getArray("packages", null);
+        java.util.List<String> candidates = new ArrayList<>();
+        if (packages != null) {
+            try {
+                for (int i = 0; i < packages.length(); i++) {
+                    String pkg = packages.getString(i);
+                    if (pkg != null && !pkg.trim().isEmpty()) candidates.add(pkg.trim());
+                }
+            } catch (Exception e) {
+                // JSON illisible : on retombe sur le navigateur seul.
+            }
+        }
+        Boolean allowAppHome = call.getBoolean("allowAppHome");
+        PackageManager pm = getContext().getPackageManager();
+        for (String pkg : candidates) {
+            // 1. La page exacte est gérée par l'app (App Links vérifiés) : on l'ouvre dedans.
+            try {
+                Intent appIntent = new Intent(Intent.ACTION_VIEW, uri);
+                appIntent.setPackage(pkg);
+                if (appIntent.resolveActivity(pm) != null) {
+                    appIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    getContext().startActivity(appIntent);
+                    call.resolve();
+                    return;
+                }
+            } catch (Exception ignored) {
+                // App non résolue : on passe au paquet suivant ou au navigateur.
+            }
+            // 2. Page non gérée : quand c'est demandé (tuile de plateforme), ouvrir quand
+            //    même l'application à son accueil plutôt que la page web.
+            if (Boolean.TRUE.equals(allowAppHome)) {
+                try {
+                    Intent home = pm.getLaunchIntentForPackage(pkg);
+                    if (home != null) {
+                        home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        getContext().startActivity(home);
+                        call.resolve();
+                        return;
+                    }
+                } catch (Exception ignored) {
+                    // Paquet suivant ou navigateur.
+                }
+            }
+        }
         try {
-            // Ouvre le lien dans l'app officielle (deep link) ou le navigateur par défaut.
-            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            // Aucune app officielle (ou page gérée) : navigateur par défaut, comme avant.
+            Intent intent = new Intent(Intent.ACTION_VIEW, uri);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             getContext().startActivity(intent);
             call.resolve();
