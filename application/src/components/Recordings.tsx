@@ -219,7 +219,7 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm text-white">{s.title}</span>
                   <span className="block text-xs text-neutral-400">
-                    {formatDate(s.startTimeMs)} · {formatDuration(s.durationMs)}
+                    {formatDate(s.startTimeMs)} · <span className="font-mono">{formatDuration(s.durationMs)}</span>
                   </span>
                 </span>
                 <button

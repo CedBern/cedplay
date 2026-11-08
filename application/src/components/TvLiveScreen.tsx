@@ -688,7 +688,7 @@ export function TvLiveScreen({
               </div>
             </div> : <p className="text-muted-foreground">Pas d’information de programme.</p>}
             {upcoming && <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Ensuite · {formatTime(upcoming.startTime)}</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Ensuite · <span className="font-mono">{formatTime(upcoming.startTime)}</span></p>
               <p className="mt-0.5 line-clamp-2">{upcoming.title}</p>
             </div>}
           </div>

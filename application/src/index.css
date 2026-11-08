@@ -57,30 +57,33 @@
     --background: 240 8% 5%;      /* #0B0B0D Fond   */
     --foreground: 40 20% 94%;     /* #F3F1ED Texte  */
 
-    --card: 240 7% 8%;            /* #141417 Carte  */
+    /* Couches calibrées : environ 5 points de luminance (L*) entre deux couches,
+       pour que cartes et colonnes restent distinctes sur une TV aux noirs écrasés.
+       Fond 3,1 → carte 8,4 → élevé 13,5 → piste 19,2. */
+    --card: 240 8% 10%;           /* #18181C Carte  (texte 15,7:1, secondaire 7,1:1) */
     --card-foreground: 40 20% 94%;
 
-    --popover: 240 8% 10%;
+    --popover: 240 8% 12%;
     --popover-foreground: 40 20% 94%;
 
     --primary: 11 100% 61%;       /* #FF5A36 Logo   */
     --primary-foreground: 240 6% 5%;
 
-    --secondary: 240 8% 12%;      /* #1C1C21 Élevé  */
+    --secondary: 240 8% 15%;      /* #222228 Élevé  */
     --secondary-foreground: 40 20% 94%;
 
-    --muted: 240 8% 12%;
-    --muted-foreground: 38 6% 63%; /* #A7A39C Secondaire */
+    --muted: 240 8% 15%;
+    --muted-foreground: 38 6% 63%; /* #A7A39C Secondaire (6,3:1 sur l'élevé) */
 
-    --accent: 240 8% 16%;         /* #26262D Piste  */
+    --accent: 240 8% 20%;         /* #2E2E36 Piste  (secondaire 5,4:1) */
     --accent-foreground: 40 20% 94%;
 
     --destructive: 358 75% 59%;   /* #E5484D Erreur */
     --destructive-foreground: 0 0% 100%;
     --live: 11 100% 61%;          /* #FF5A36 Direct */
 
-    --border: 240 6% 14%;
-    --input: 240 6% 18%;
+    --border: 240 7% 18%;         /* #2A2A31 : visible sur la carte comme sur l'élevé */
+    --input: 240 7% 22%;
     --ring: 11 100% 61%;
 
     --radius: 1rem;

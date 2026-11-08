@@ -198,7 +198,7 @@ const ChannelCard = React.memo(function ChannelCard({
                         ) : (
                           <div className={`${upcomingProgram ? '' : 'channel-empty-program '}text-xs text-muted-foreground`}>
                             {upcomingProgram ? (
-                              <span>Next: {upcomingProgram.title} at {formatTime(upcomingProgram.startTime)}</span>
+                              <span>Next: {upcomingProgram.title} at <span className="font-mono">{formatTime(upcomingProgram.startTime)}</span></span>
                             ) : (
                               <span>Aucune information de programme</span>
                             )}

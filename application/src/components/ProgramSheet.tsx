@@ -138,7 +138,7 @@ export function ProgramSheet({ playlistId, target, onClose, epgData, channels, c
             <p className="text-xs uppercase tracking-wide text-primary">{channel.name}</p>
             <DialogTitle className="text-xl leading-tight">{program.title}</DialogTitle>
             <DialogDescription className="text-sm text-neutral-300">
-              <span className="capitalize">{dayLabel(program.startTime)}</span> · {formatTime(program.startTime)} – {formatTime(program.endTime)} · {durationLabel(program.endTime.getTime() - program.startTime.getTime())}
+              <span className="capitalize">{dayLabel(program.startTime)}</span> · <span className="font-mono">{formatTime(program.startTime)} – {formatTime(program.endTime)}</span> · {durationLabel(program.endTime.getTime() - program.startTime.getTime())}
               {program.category ? ` · ${program.category}` : null}
             </DialogDescription>
           </DialogHeader>

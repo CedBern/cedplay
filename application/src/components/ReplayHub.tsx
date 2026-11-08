@@ -172,7 +172,7 @@ export function ReplayHub({ channels, epgData, catchupDays, onCatchup, tvMode = 
     >
       <span className="relative block aspect-video w-full overflow-hidden rounded-xl border border-border bg-secondary">
         <span className="absolute left-2 top-2 rounded-md bg-background/85 px-1.5 py-0.5 text-[11px] font-semibold text-foreground">{item.replayChannel.name}</span>
-        <span className="absolute bottom-2 left-2 rounded-md bg-background/85 px-1.5 py-0.5 text-[11px] text-foreground">{formatDuration(item.program)}</span>
+        <span className="absolute bottom-2 left-2 rounded-md bg-background/85 px-1.5 py-0.5 font-mono text-[11px] text-foreground">{formatDuration(item.program)}</span>
         <span className="absolute left-1/2 top-1/2 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-background/85 text-primary">
           <RotateCcw aria-hidden="true" className="h-[18px] w-[18px]" />
         </span>
@@ -254,7 +254,7 @@ export function ReplayHub({ channels, epgData, catchupDays, onCatchup, tvMode = 
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[15px] font-semibold text-foreground">{item.program.title}</span>
-          <span className="block truncate text-[13px] text-muted-foreground">{formatReplayDate(item.program.startTime, new Date(now))} · {item.channel.name} · {formatDuration(item.program)}</span>
+          <span className="block truncate text-[13px] text-muted-foreground">{formatReplayDate(item.program.startTime, new Date(now))} · {item.channel.name} · <span className="font-mono">{formatDuration(item.program)}</span></span>
         </span>
         <span className="shrink-0 text-[13px] font-semibold text-primary">Revoir</span>
       </button>
