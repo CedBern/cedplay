@@ -210,7 +210,7 @@ describe('Replay et plateformes', () => {
     await user.click(screen.getByRole('button', { name: 'Plateformes' }));
     await user.click(screen.getByRole('button', { name: /^Netflix/ }));
     // allowAppHome : si l'app ne gère pas la page exacte, on l'ouvre quand même à son accueil.
-    expect(openWeb).toHaveBeenCalledWith('https://www.netflix.com', 'Netflix', ['com.netflix.mediaclient'], true);
+    expect(openWeb).toHaveBeenCalledWith('https://www.netflix.com', 'Netflix', ['com.netflix.mediaclient', 'com.netflix.ninja'], true);
   });
 
   it('Android : la recherche sur site officiel passe les paquets, sans ouverture à l’aveugle', async () => {

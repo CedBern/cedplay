@@ -344,10 +344,12 @@ public class NativePlayerPlugin extends Plugin {
                 // App non résolue : on passe au paquet suivant ou au navigateur.
             }
             // 2. Page non gérée : quand c'est demandé (tuile de plateforme), ouvrir quand
-            //    même l'application à son accueil plutôt que la page web.
+            //    même l'application à son accueil plutôt que la page web. Les applications
+            //    TV ne déclarent que LEANBACK_LAUNCHER : essayer les deux.
             if (Boolean.TRUE.equals(allowAppHome)) {
                 try {
                     Intent home = pm.getLaunchIntentForPackage(pkg);
+                    if (home == null) home = pm.getLeanbackLaunchIntentForPackage(pkg);
                     if (home != null) {
                         home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                         getContext().startActivity(home);

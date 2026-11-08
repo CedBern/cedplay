@@ -29,10 +29,13 @@ export interface StreamingPlatform {
 
 export const streamingPlatforms: StreamingPlatform[] = [
   // — SVOD & Cinéma —
-  { id: 'netflix', name: 'Netflix', url: 'https://www.netflix.com', androidPackages: ['com.netflix.mediaclient'], color: '#e50914', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },
-  { id: 'primevideo', name: 'Prime Video', url: 'https://www.primevideo.com', androidPackages: ['com.amazon.avod.thirdpartyclient', 'com.amazon.amazonvideo.livingroom'], color: '#00a8e1', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },
+  { id: 'netflix', name: 'Netflix', url: 'https://www.netflix.com', androidPackages: ['com.netflix.mediaclient', 'com.netflix.ninja'], color: '#e50914', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },
+  // app.primevideo.com est le domaine App Link des apps Prime (www.primevideo.com n'y est pas
+  // déclaré) ; sans l'app, ce domaine renvoie la page officielle « obtenir l'application ».
+  { id: 'primevideo', name: 'Prime Video', url: 'https://app.primevideo.com', androidPackages: ['com.amazon.avod.thirdpartyclient', 'com.amazon.amazonvideo.livingroom'], color: '#00a8e1', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },
   { id: 'disneyplus', name: 'Disney+', url: 'https://www.disneyplus.com', androidPackages: ['com.disney.disneyplus'], color: '#113ccf', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },
-  { id: 'max', name: 'Max', url: 'https://www.max.com', androidPackages: ['com.wbd.stream'], color: '#002be7', category: 'svod', badge: 'SVOD', note: 'Abonnement requis (ex-HBO Max)' },
+  // Max ne déclare pas www.max.com en App Link : l'app s'ouvre à son accueil via le paquet.
+  { id: 'max', name: 'Max', url: 'https://www.max.com', androidPackages: ['com.wbd.stream', 'com.wbd.hbomax'], color: '#002be7', category: 'svod', badge: 'SVOD', note: 'Abonnement requis (ex-HBO Max)' },
   { id: 'appletv', name: 'Apple TV+', url: 'https://tv.apple.com', androidPackages: ['com.apple.atve.androidtv.appletv'], color: '#1d1d1f', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },
   { id: 'canalplus', name: 'Canal+', url: 'https://www.canalplus.com', androidPackages: ['com.canal.android.canal'], color: '#111111', category: 'svod', badge: 'Cinéma & Séries', note: 'Abonnement requis (myCANAL)' },
   { id: 'paramountplus', name: 'Paramount+', url: 'https://www.paramountplus.com', androidPackages: ['com.cbs.app'], color: '#0064ff', category: 'svod', badge: 'SVOD', note: 'Abonnement requis' },

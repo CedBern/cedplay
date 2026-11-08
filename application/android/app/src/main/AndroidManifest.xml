@@ -14,10 +14,12 @@
             <data android:scheme="https" />
         </intent>
         <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.netflix.ninja" />
         <package android:name="com.amazon.avod.thirdpartyclient" />
         <package android:name="com.amazon.amazonvideo.livingroom" />
         <package android:name="com.disney.disneyplus" />
         <package android:name="com.wbd.stream" />
+        <package android:name="com.wbd.hbomax" />
         <package android:name="com.apple.atve.androidtv.appletv" />
         <package android:name="com.canal.android.canal" />
         <package android:name="com.cbs.app" />
