@@ -51,6 +51,51 @@ afterEach(() => {
 });
 
 describe('XtreamLoginDialog', () => {
+  it('TV : Droite rejoint Importer depuis le milieu de 289 catégories et Haut revient à la même ligne', async () => {
+    const user = userEvent.setup();
+    const loaded = vi.fn();
+    const categories = Array.from({ length: 289 }, (_, i) => ({ category_id: String(i + 1), category_name: i === 5 ? 'FR ENFANT' : `Catégorie ${i + 1}` }));
+    fetchMock.mockImplementation(async (url: unknown) => String(url).includes('/xtream/categories')
+      ? jsonResponse(categories) : jsonResponse([{ stream_id: 99, name: 'Chaîne test' }]));
+    function Television() {
+      useRemoteNavigation();
+      return <XtreamLoginDialog tvMode onPlaylistLoaded={loaded} />;
+    }
+    render(<Television />);
+    await ouvrirEtRemplir(user);
+    await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tout' })).toHaveFocus());
+    const row = screen.getByRole('checkbox', { name: 'FR ENFANT' });
+    // Même état que la photo : la sélection est déjà au milieu des catégories.
+    row.focus();
+    expect(row).toHaveFocus();
+    const importer = screen.getByRole('button', { name: 'Importer les chaînes sélectionnées' });
+    fireEvent.keyDown(row, { key: 'ArrowRight' });
+    expect(importer).toHaveFocus();
+    expect(loaded).not.toHaveBeenCalled();
+    fireEvent.keyDown(importer, { key: 'ArrowLeft' });
+    expect(screen.getByRole('button', { name: 'Changer de compte' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+    expect(importer).toHaveFocus();
+    fireEvent.keyDown(importer, { key: 'ArrowUp' });
+    expect(row).toHaveFocus();
+    expect(row).toHaveAttribute('aria-checked', 'true');
+    fireEvent.keyDown(row, { key: 'ArrowLeft' });
+    expect(screen.getByRole('button', { name: 'Tout' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    expect(row).toHaveFocus();
+    // Un seul pays choisi pour vérifier la validation réelle sans 289 requêtes.
+    await user.click(screen.getByRole('button', { name: 'Aucun' }));
+    row.focus();
+    fireEvent.keyDown(row, { key: 'ArrowRight' });
+    expect(screen.getByRole('button', { name: 'Changer de compte' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+    expect(row).toHaveFocus();
+    await user.keyboard('{Enter}{ArrowRight}{Enter}');
+    await waitFor(() => expect(loaded).toHaveBeenCalledTimes(1));
+    expect(loaded.mock.calls[0][0].groups.map((g: { name: string }) => g.name)).toEqual(['FR ENFANT']);
+  });
+
   it('TV : rejoint le choix des catégories, parcourt une longue liste et coche avec OK', async () => {
     const user = userEvent.setup();
     const loaded = vi.fn();

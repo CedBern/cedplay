@@ -43,6 +43,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
   const fieldId = useId();
   const returnFocus = useRef<HTMLElement | null>(null);
   const selectionRef = useRef<HTMLDivElement>(null);
+  const lastCategory = useRef<string | null>(null);
   const [localOpen, setLocalOpen] = useState(false);
   const open = controlledOpen ?? localOpen;
   const setOpen = (value: boolean) => { setLocalOpen(value); onOpenChange?.(value); };
@@ -315,20 +316,39 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
             <div ref={selectionRef} data-remote-self className="space-y-3 pt-2"
               onKeyDown={event => {
                 if (!event.key.startsWith('Arrow')) return;
-                const controls = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
-                const index = controls.indexOf(document.activeElement as HTMLButtonElement);
+                const active = document.activeElement as HTMLButtonElement | null;
+                const region = active?.closest<HTMLElement>('[data-xtream-region]');
+                if (!region) return;
+                const controls = Array.from(region.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+                const index = controls.indexOf(active!);
                 if (index < 0) return;
                 event.preventDefault(); event.stopPropagation();
-                const offset = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1;
-                const next = controls[index + offset];
+                const root = event.currentTarget;
+                const filters = root.querySelector<HTMLButtonElement>('[data-xtream-region="filters"] button:not(:disabled)') ?? undefined;
+                const importer = root.querySelector<HTMLButtonElement>('[data-xtream-import]:not(:disabled)') ?? undefined;
+                const action = importer ?? root.querySelector<HTMLButtonElement>('[data-xtream-region="actions"] button:not(:disabled)') ?? undefined;
+                let next: HTMLButtonElement | undefined;
+                if (region.dataset.xtreamRegion === 'categories') {
+                  // Sortir immédiatement de la liste, même au milieu de 289 lignes.
+                  if (event.key === 'ArrowRight') next = action;
+                  else if (event.key === 'ArrowLeft') next = filters;
+                  else if (event.key === 'ArrowUp') next = controls[index - 1] ?? filters;
+                  else if (event.key === 'ArrowDown') next = controls[index + 1] ?? action;
+                } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                  next = controls[index + (event.key === 'ArrowLeft' ? -1 : 1)];
+                } else if ((region.dataset.xtreamRegion === 'filters' && event.key === 'ArrowDown') ||
+                  (region.dataset.xtreamRegion === 'actions' && event.key === 'ArrowUp')) {
+                  const rows = Array.from(root.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]:not(:disabled)'));
+                  next = rows.find(row => row.dataset.categoryId === lastCategory.current) ?? rows[0];
+                }
                 if (next) focusRemote(next);
               }}>
-              <p className="text-xs text-neutral-400">Flèches : parcourir · OK : cocher ou décocher · Importer : valider</p>
+              <p className="text-xs text-neutral-400">Dans la liste : ↑ ↓ parcourir · → Importer · OK cocher ou décocher</p>
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="font-semibold text-neutral-200">
                   {categories.length} catégories trouvées ({selectedCats.size} sélectionnée(s))
                 </span>
-                <div className="flex flex-wrap gap-1">
+                <div data-xtream-region="filters" className="flex flex-wrap gap-1">
                   <Button variant="ghost" size="sm" onClick={selectAll} disabled={busy} className="min-h-10 text-xs">
                     Tout
                   </Button>
@@ -341,7 +361,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
                 </div>
               </div>
 
-              <div role="group" aria-label="Catégories à importer" className="dark-surface max-h-[35vh] overflow-y-auto border border-neutral-800 rounded-md p-2 bg-black">
+              <div data-xtream-region="categories" role="group" aria-label="Catégories à importer" className="dark-surface max-h-[35vh] overflow-y-auto border border-neutral-800 rounded-md p-2 bg-black">
                 <div className="space-y-2">
                   {categories.map(cat => {
                     const checked = selectedCats.has(cat.category_id);
@@ -350,9 +370,11 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
                         key={cat.category_id}
                         type="button"
                         role="checkbox"
+                        data-category-id={cat.category_id}
                         aria-checked={checked}
                         disabled={busy}
                         onClick={() => toggleCategory(cat.category_id)}
+                        onFocus={() => { lastCategory.current = cat.category_id; }}
                         onKeyDown={event => {
                           // Radix Checkbox ignore Entrée. Les télécommandes Android
                           // envoient précisément Entrée pour OK : le traiter ici.
@@ -380,7 +402,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
                 </div>
               )}
 
-              <div className="flex space-x-2 pt-2">
+              <div data-xtream-region="actions" className="flex space-x-2 pt-2">
                 <Button
                   variant="outline"
                   onClick={() => setCategories([])}
@@ -390,6 +412,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
                   Changer de compte
                 </Button>
                 <Button
+                  data-xtream-import
                   className="w-2/3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
                   disabled={busy || selectedCats.size === 0}
                   onClick={importChannels}

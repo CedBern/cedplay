@@ -552,3 +552,12 @@ Points ouverts pour continuer :
 - Vérifié : tests de reproduction en échec avant correction, puis 9 tests ciblés et 574/574 tests complets (89 fichiers), tsc app+node et ESLint src (0 erreur/18 avertissements existants). Test du réimport adapté à l'étape protocole sans changer les assertions de persistance.
 - Build web / cap sync / assembleRelease OK ; 359 sources inchangées, 73 fichiers web conformes, même certificat habituel. APK CedPlay-1.11.14.apk / code 43 : 4583354 octets, SHA-256 80c563a4237c91dd6c344fb853cf089c54f6ead1694a14da2bb0a2094a05cae5.
 - Pas installée, pas d'essai télécommande physique ni de mesure de fluidité. Aucune modification automatique des données privées. Rapport : preuves/xtream-selection-tv-2026-11-07/RAPPORT.md.
+
+
+## Bouton Importer inaccessible dans les catégories Xtream — 7 novembre 2026
+
+- Photo utilisateur sur TV : 289 catégories, focus FR ENFANT, bouton vert inaccessible. Le parcours linéaire de 1.11.14 faisait descendre Droite vers la catégorie suivante et exigeait de traverser la liste entière. La recette précédente ne couvrait que la sortie en fin de liste.
+- Correction : Droite depuis toute catégorie rejoint Importer, Haut depuis les actions retrouve la même catégorie ; Gauche rejoint les filtres, Bas depuis les filtres revient à la catégorie visitée. Navigation horizontale entre les deux boutons du bas. Si Importer est désactivé, sortie vers Changer de compte puis retour possible.
+- Reproduction exacte à 289 catégories en échec avant correction, verte ensuite ; 10 tests ciblés, 575/575 tests complets (89 fichiers), tsc app+node OK et ESLint src 0 erreur/18 avertissements existants. Build web/Capacitor/assembleRelease et signature OK.
+- APK CedPlay-1.11.15.apk / code 44 : 4583603 octets, SHA-256 76b57ad82361bef0832890db876d4eae21aee87eed348e60cac67af6c50b6014. 359 sources inchangées et 73 fichiers web conformes. Anciennes APK conservées, données privées non modifiées à distance, pas de push.
+- Défaut observé sur TV par l'utilisateur ; correction encore non essayée sur sa télécommande. Rapport : preuves/xtream-bouton-importer-2026-11-07/RAPPORT.md.
