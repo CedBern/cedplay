@@ -1,4 +1,4 @@
-import { Clapperboard, Film, Headphones, House, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
+import { Clapperboard, Film, Headphones, House, Ellipsis, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' | 'podcasts' | 'more';
@@ -20,7 +20,8 @@ const tvSections: Section[] = [
   { value: 'movies', label: 'Films', Icon: Film },
   { value: 'series', label: 'Séries', Icon: MonitorPlay },
   { value: 'podcasts', label: 'Écouter', Icon: Headphones },
-  { value: 'more', label: 'Plus', Icon: LayoutGrid },
+  // Points de suspension, pas une grille : sur TV, la grille se confondait avec la mosaïque.
+  { value: 'more', label: 'Plus', Icon: Ellipsis },
 ];
 
 /** Onglet de navigation correspondant à un écran de l'application. */
@@ -49,9 +50,9 @@ export function MainNavigation({ onNavigate, tv = false }: { onNavigate: (sectio
       key={value}
       value={value}
       onClick={() => onNavigate(value)}
-      className="tv-nav-tab relative h-10 gap-2 rounded-full bg-transparent px-3.5 text-[15px] font-medium text-muted-foreground shadow-none ring-offset-0 transition-colors duration-200 hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+      className="tv-nav-tab relative h-10 gap-2 rounded-full bg-transparent px-3.5 text-[17px] font-medium text-foreground/75 shadow-none ring-offset-0 transition-colors duration-200 hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
     >
-      <Icon aria-hidden="true" className="h-[17px] w-[17px] shrink-0 stroke-[1.8]" />
+      <Icon aria-hidden="true" className="h-[19px] w-[19px] shrink-0 stroke-[1.8]" />
       <span>{label}</span>
     </TabsTrigger>)}
   </TabsList>;

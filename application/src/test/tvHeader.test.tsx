@@ -100,7 +100,10 @@ it('le menu ne propose qu’une entrée pour la sélection officielle déjà enr
     const user = userEvent.setup();
     render(<IPTVPlayer />);
     await screen.findByText('Reprise test');
-    const button = within(header()).getByRole('button', { name: 'Changer de liste' });
+    // TV : l'en-tête ne garde que les rubriques ; la liste se change depuis « Plus ».
+    expect(within(header()).queryByRole('button', { name: 'Changer de liste' })).toBeNull();
+    await user.click(within(header()).getByRole('tab', { name: 'Plus' }));
+    const button = await screen.findByRole('button', { name: 'Changer de liste' });
     expect(button).toHaveAttribute('title', 'Chaînes gratuites');
     await user.click(button);
     expect(await screen.findAllByRole('menuitemradio')).toHaveLength(1);

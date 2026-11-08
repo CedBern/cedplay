@@ -1,5 +1,6 @@
 import { Activity, ChevronRight, CircleDot, CirclePlay, History, ListVideo, Settings } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 export type MoreDestination = 'free' | 'replay' | 'recordings' | 'lists' | 'xtream' | 'health' | 'settings';
 
@@ -14,9 +15,11 @@ const entries: { key: MoreDestination; label: string; hint: string; Icon: Lucide
 ];
 
 /** Rubrique « Plus » : tout ce qui ne sert pas à chaque visionnage. */
-export function MorePanel({ onOpen }: { onOpen: (destination: MoreDestination) => void }) {
+export function MorePanel({ onOpen, children }: { onOpen: (destination: MoreDestination) => void; children?: ReactNode }) {
   return <nav aria-label="Autres rubriques" className="mx-auto max-w-2xl">
     <h2 className="mb-3 px-1 text-[26px] font-semibold tracking-tight text-foreground">Plus</h2>
+    {/* TV : la liste en cours et son menu, sortis de l'en-tête. */}
+    {children && <div className="mb-3">{children}</div>}
     <ul className="overflow-hidden rounded-[20px] border border-neutral-900 bg-card">
       {entries.map(({ key, label, hint, Icon }, index) => <li key={key} className={index > 0 ? 'border-t border-neutral-900' : ''}>
         <button

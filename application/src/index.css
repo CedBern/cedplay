@@ -301,7 +301,7 @@ html.tv-mode .tv-vod { transition: height 240ms cubic-bezier(.2, .8, .2, 1); }
 @media (prefers-reduced-motion: reduce) { html.tv-mode [data-app-header], html.tv-mode .tv-vod { transition: none; } }
 
 /* Rubriques TV : texte et icône, l'active soulignée d'un trait orange. */
-.tv-header-main { display: grid; grid-template-columns: max-content minmax(0, 1fr) minmax(84px, 160px); }
+.tv-header-main { display: grid; grid-template-columns: max-content minmax(0, 1fr); }
 .tv-nav { width: 100%; min-width: 0; justify-content: flex-start; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .tv-nav::-webkit-scrollbar { display: none; }
 .tv-nav-tab { flex: none; }
