@@ -11,9 +11,9 @@ import { XtreamLoginDialog } from '@/components/XtreamLoginDialog';
 import { StalkerLoginDialog } from '@/components/StalkerLoginDialog';
 import { stalkerAvailable } from '@/utils/stalker';
 
-interface PlaylistLoaderProps { onPlaylistLoaded: (playlist: PlaylistInfo) => void | Promise<void>; }
+interface PlaylistLoaderProps { onPlaylistLoaded: (playlist: PlaylistInfo) => void | Promise<void>; tvMode?: boolean; }
 
-export function PlaylistLoader({ onPlaylistLoaded }: PlaylistLoaderProps) {
+export function PlaylistLoader({ onPlaylistLoaded, tvMode = false }: PlaylistLoaderProps) {
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -70,7 +70,7 @@ export function PlaylistLoader({ onPlaylistLoaded }: PlaylistLoaderProps) {
             <h4 className="font-semibold text-sm text-neutral-100">Abonnement Xtream Codes</h4>
             <p className="text-xs text-neutral-400">Connexion directe par serveur, identifiant et mot de passe.</p>
           </div>
-          <XtreamLoginDialog onPlaylistLoaded={onPlaylistLoaded} />
+          <XtreamLoginDialog tvMode={tvMode} onPlaylistLoaded={onPlaylistLoaded} />
         </div>
       </div>
 

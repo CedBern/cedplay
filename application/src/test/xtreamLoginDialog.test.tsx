@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { XtreamLoginDialog } from '@/components/XtreamLoginDialog';
 import { toast } from 'sonner';
 import { fetchXtreamLimits, saveXtreamAccount } from '@/utils/xtreamCatalog';
+import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }));
 vi.mock('@/utils/xtreamCatalog', () => ({ saveXtreamAccount: vi.fn(), getXtreamAccount: vi.fn(() => null), fetchXtreamLimits: vi.fn(() => Promise.resolve({ maxConnections: 2, activeCons: 0, fetchedAt: 0 })) }));
@@ -50,6 +51,69 @@ afterEach(() => {
 });
 
 describe('XtreamLoginDialog', () => {
+  it('TV : rejoint le choix des catégories, parcourt une longue liste et coche avec OK', async () => {
+    const user = userEvent.setup();
+    const loaded = vi.fn();
+    const categories = Array.from({ length: 40 }, (_, i) => ({ category_id: String(i + 1), category_name: `Pays ${i + 1}` }));
+    fetchMock.mockImplementation(async (url: unknown) => String(url).includes('/xtream/categories')
+      ? jsonResponse(categories)
+      : jsonResponse([{ stream_id: 99, name: 'Chaîne du dernier pays' }]));
+    function Television() {
+      useRemoteNavigation();
+      return <XtreamLoginDialog tvMode onPlaylistLoaded={loaded} />;
+    }
+    render(<Television />);
+    await ouvrirEtRemplir(user);
+    await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tout' })).toHaveFocus());
+    expect(screen.getByText('40 catégories trouvées (40 sélectionnée(s))')).toBeVisible();
+    expect(screen.queryByPlaceholderText('Identifiant')).toBeNull();
+    const none = screen.getByRole('button', { name: 'Aucun' });
+    await user.keyboard('{ArrowRight}{ArrowRight}{Enter}');
+    expect(none).toHaveFocus();
+    expect(screen.getByRole('checkbox', { name: 'Pays 1' })).toHaveAttribute('aria-checked', 'false');
+    // Les lignes hors écran sont atteintes par index, sans dépendre de leur géométrie.
+    for (let i = 0; i < 40; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    const last = screen.getByRole('checkbox', { name: 'Pays 40' });
+    expect(last).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(last).toHaveAttribute('aria-checked', 'true');
+    fireEvent.keyDown(last, { key: 'Enter', repeat: true });
+    expect(last).toHaveAttribute('aria-checked', 'true');
+    await user.keyboard('{ArrowDown}{ArrowRight}{Enter}');
+    await waitFor(() => expect(loaded).toHaveBeenCalledTimes(1));
+    expect(loaded.mock.calls[0][0].groups.map((g: { name: string }) => g.name)).toEqual(['Pays 40']);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/xtream/streams'))).toHaveLength(1);
+  });
+
+  it('permet de revenir aux identifiants sans les perdre et de choisir à nouveau', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async () => jsonResponse([{ category_id: '1', category_name: 'Mexique' }]));
+    render(<XtreamLoginDialog onPlaylistLoaded={vi.fn()} />);
+    await ouvrirEtRemplir(user);
+    await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
+    await user.click(await screen.findByRole('button', { name: 'Changer de compte' }));
+    expect(screen.getByPlaceholderText('Identifiant')).toHaveValue('user');
+    await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
+    expect(await screen.findByRole('checkbox', { name: 'Mexique' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('TV : les champs attendent OK et Retour quitte la saisie sans fermer le dialogue', async () => {
+    const user = userEvent.setup();
+    render(<XtreamLoginDialog tvMode onPlaylistLoaded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Connexion Xtream' }));
+    const input = screen.getByPlaceholderText('Identifiant');
+    expect(input).toHaveAttribute('readonly');
+    input.focus();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input).not.toHaveAttribute('readonly');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input).toHaveAttribute('readonly');
+    expect(screen.getByRole('dialog')).toBeVisible();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
   it('refuse la connexion sans identifiants complets', async () => {
     const onPlaylistLoaded = vi.fn();
     const user = userEvent.setup();
@@ -91,7 +155,7 @@ describe('XtreamLoginDialog', () => {
     expect(boutonConnexion).toBeEnabled();
   });
 
-  it('charge les catégories et présélectionne la France', async () => {
+  it('charge toutes les catégories sans limiter le compte à la France', async () => {
     const onPlaylistLoaded = vi.fn();
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: unknown) => {
@@ -109,16 +173,19 @@ describe('XtreamLoginDialog', () => {
     await ouvrirEtRemplir(user);
     await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
 
-    expect(await screen.findByText('2 catégories trouvées (1 sélectionnée(s))')).toBeVisible();
+    expect(await screen.findByText('2 catégories trouvées (2 sélectionnée(s))')).toBeVisible();
     expect(toastMock.success).toHaveBeenCalledWith('2 catégories chargées.');
 
-    // La catégorie FR est cochée, l'anglaise non.
-    const labelFr = screen.getByText('FR | Généralistes').closest('label')!;
-    const checkboxFr = labelFr.querySelector('button[role="checkbox"]') as HTMLElement;
+    // Aucun pays n'est exclu sans choix explicite de l'utilisateur.
+    const checkboxFr = screen.getByRole('checkbox', { name: 'FR | Généralistes' });
     expect(checkboxFr).toHaveAttribute('aria-checked', 'true');
-    const labelUk = screen.getByText('UK').closest('label')!;
-    const checkboxUk = labelUk.querySelector('button[role="checkbox"]') as HTMLElement;
+    const checkboxUk = screen.getByRole('checkbox', { name: 'UK' });
+    expect(checkboxUk).toHaveAttribute('aria-checked', 'true');
+    await user.click(screen.getByRole('button', { name: 'France uniquement' }));
+    expect(checkboxFr).toHaveAttribute('aria-checked', 'true');
     expect(checkboxUk).toHaveAttribute('aria-checked', 'false');
+    await user.click(screen.getByRole('button', { name: 'Tout' }));
+    expect(checkboxUk).toHaveAttribute('aria-checked', 'true');
 
     // Requête passée par le relais avec les identifiants encodés.
     expect(fetchMock).toHaveBeenCalledWith(

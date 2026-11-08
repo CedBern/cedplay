@@ -184,9 +184,11 @@ describe('Réimport d’une connexion Xtream', () => {
       await user.type(await screen.findByPlaceholderText('http://serveur.com:8080'), account.server);
       await user.type(screen.getByPlaceholderText('Identifiant'), account.username);
       await user.type(screen.getByPlaceholderText('Mot de passe'), account.password);
-      await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
+      // Le protocole se choisit dans l'étape connexion ; la sélection des
+      // catégories est désormais une étape dédiée, sans les identifiants.
       await user.click(await screen.findByRole('button', { name: /MPEG-TS/ }));
-      await user.click(screen.getByRole('button', { name: 'Importer les chaînes sélectionnées' }));
+      await user.click(screen.getByRole('button', { name: 'Se connecter & charger les catégories' }));
+      await user.click(await screen.findByRole('button', { name: 'Importer les chaînes sélectionnées' }));
       // Mêmes adresses (principale et secours échangées) : c'est un réimport de p1.
       await waitFor(() => expect(idb.savePlaylistToDB).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' })));
       expect(JSON.parse(localStorage.getItem('xtream_live_selection_p1') ?? 'null')).toEqual({ categoryIds: ['1'], format: 'ts' });

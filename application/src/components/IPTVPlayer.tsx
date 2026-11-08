@@ -802,7 +802,7 @@ export function IPTVPlayer() {
             /></Suspense>
           </div>}
           <div className="flex justify-center">
-            <Suspense fallback={<PanelFallback className="h-16 w-64" />}><LazyPlaylistLoader onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>
+            <Suspense fallback={<PanelFallback className="h-16 w-64" />}><LazyPlaylistLoader tvMode={tvMode} onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>
           </div>
 
           <div className="mt-12 text-center">
@@ -1078,7 +1078,7 @@ export function IPTVPlayer() {
                 /></Suspense>
               </div>
               <div className="order-1 md:order-2">
-                <Suspense fallback={<PanelFallback className="h-16" />}><LazyPlaylistLoader onPlaylistLoaded={(pl) => handlePlaylistLoaded(pl)} /></Suspense>
+                <Suspense fallback={<PanelFallback className="h-16" />}><LazyPlaylistLoader tvMode={tvMode} onPlaylistLoaded={(pl) => handlePlaylistLoaded(pl)} /></Suspense>
               </div>
             </div>
           </section>}
@@ -1187,7 +1187,7 @@ export function IPTVPlayer() {
         </DialogContent>
       </Dialog>
 
-      {xtreamOpen && <Suspense fallback={null}><LazyXtreamLoginDialog open onOpenChange={setXtreamOpen} hideTrigger onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
+      {xtreamOpen && <Suspense fallback={null}><LazyXtreamLoginDialog open onOpenChange={setXtreamOpen} hideTrigger tvMode={tvMode} onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {stalkerOpen && <Suspense fallback={null}><LazyStalkerLoginDialog open onOpenChange={setStalkerOpen} hideTrigger onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {/* Recherche globale unifiée */}
       {currentPlaylist && <GroupManagerDialog

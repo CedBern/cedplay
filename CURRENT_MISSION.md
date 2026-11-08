@@ -542,3 +542,13 @@ Points ouverts pour continuer :
 - Nouveau catalogue vérifié de 12 chaînes, dont 9 mexicaines issues des lecteurs officiels et de SPR/MXPlus. L'ancien catalogue communautaire non vérifié reste sur disque et les listes importées ne sont pas changées.
 - Vérifié : 571/571 tests (89 fichiers), tsc app+node OK, eslint src 0 erreur/18 avertissements existants, web/Capacitor/assembleRelease OK. 359 sources inchangées pendant la construction, 74 fichiers web conformes dans l'APK, même certificat habituel.
 - APK CedPlay-1.11.13.apk / code 42 : 4 584 860 octets ; SHA-256 0d61688848c7edad9b615587b058cea4d90f0840aa35eb9daf55cecef3c35667. Pas installée, rien poussé. Navigateur de contrôle désactivé ; aucun FPS/temps par appui ni comparaison physique avec TiviMate. Rapport : preuves/tv-navigation-gratuites-2026-11-07/RAPPORT.md.
+
+
+## Choix des catégories Xtream à la télécommande — 7 novembre 2026
+
+- Retour utilisateur : impossible de choisir au réimport pour récupérer tous les pays.
+- Étape de catégories dédiée, focus sur Tout, tous les pays cochés au départ ; France uniquement explicite. Lignes accessibles aux flèches par index ; OK coche/décoche et ignore les répétitions. Le checkbox Radix précédent empêchait Entrée.
+- Champs TV sur OK, Retour quitte d'abord la saisie. Mode transmis à tous les points d'accès Xtream ; connexion/protocole et catégories séparés, identifiants conservés au retour.
+- Vérifié : tests de reproduction en échec avant correction, puis 9 tests ciblés et 574/574 tests complets (89 fichiers), tsc app+node et ESLint src (0 erreur/18 avertissements existants). Test du réimport adapté à l'étape protocole sans changer les assertions de persistance.
+- Build web / cap sync / assembleRelease OK ; 359 sources inchangées, 73 fichiers web conformes, même certificat habituel. APK CedPlay-1.11.14.apk / code 43 : 4583354 octets, SHA-256 80c563a4237c91dd6c344fb853cf089c54f6ead1694a14da2bb0a2094a05cae5.
+- Pas installée, pas d'essai télécommande physique ni de mesure de fluidité. Aucune modification automatique des données privées. Rapport : preuves/xtream-selection-tv-2026-11-07/RAPPORT.md.

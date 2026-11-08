@@ -1,11 +1,10 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { toast } from 'sonner';
 import { getProxyBase } from '@/utils/proxy';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -14,12 +13,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
 import type { PlaylistInfo } from '@/types/channel';
 import { fetchXtreamLimits, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { fetchLiveChannels, saveLiveSelection } from '@/utils/xtreamLive';
 import { httpGetJson } from '@/utils/userAgent';
+import { focusRemote } from '@/utils/remoteNavigation';
 
 interface Category {
   category_id: string;
@@ -31,6 +30,7 @@ interface XtreamLoginDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   hideTrigger?: boolean;
+  tvMode?: boolean;
   onPlaylistLoaded: (playlist: PlaylistInfo) => void | Promise<void>;
 }
 
@@ -39,9 +39,10 @@ interface ErrorDetails {
   hints?: string[];
 }
 
-export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOpenChange, hideTrigger = false }: XtreamLoginDialogProps) {
+export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOpenChange, hideTrigger = false, tvMode = false }: XtreamLoginDialogProps) {
   const fieldId = useId();
   const returnFocus = useRef<HTMLElement | null>(null);
+  const selectionRef = useRef<HTMLDivElement>(null);
   const [localOpen, setLocalOpen] = useState(false);
   const open = controlledOpen ?? localOpen;
   const setOpen = (value: boolean) => { setLocalOpen(value); onOpenChange?.(value); };
@@ -54,6 +55,15 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
   const [importProgress, setImportProgress] = useState<number | null>(null);
   const [lastError, setLastError] = useState<ErrorDetails | null>(null);
   const [streamFormat, setStreamFormat] = useState<'m3u8' | 'ts'>('m3u8');
+
+  useEffect(() => {
+    if (open && categories.length && !busy) {
+      // Le bouton de connexion vient de disparaître : rejoindre explicitement
+      // la nouvelle étape plutôt que laisser le focus repartir dans les champs.
+      const first = selectionRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
+      if (first) focusRemote(first);
+    }
+  }, [open, categories.length, busy]);
 
   const fetchCategories = async () => {
     const cleanServer = server.trim().replace(/\/+$/, '');
@@ -94,10 +104,11 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
       if (!Array.isArray(data)) {
         throw new Error('Réponse inattendue du fournisseur. Vérifiez vos identifiants.');
       }
-      setCategories(data);
-      // Preselect French categories if available
-      const frIds = data.filter(c => /^FR\b|FRANCE/i.test(c.category_name)).map(c => c.category_id);
-      setSelectedCats(new Set(frIds.length > 0 ? frIds : data.slice(0, 10).map(c => c.category_id)));
+      if (!data.length) throw new Error('Aucune catégorie renvoyée par le fournisseur.');
+      const available = data.map(c => ({ ...c, category_id: String(c.category_id) })) as Category[];
+      setCategories(available);
+      // Un compte international doit conserver tous ses pays par défaut.
+      setSelectedCats(new Set(available.map(c => c.category_id)));
       toast.success(`${data.length} catégories chargées.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Connexion impossible au serveur Xtream.');
@@ -185,6 +196,9 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
         </Button>
       </DialogTrigger>}
       <DialogContent className="max-w-xl bg-neutral-950 text-white border-neutral-800 max-h-[90vh] overflow-y-auto"
+        onEscapeKeyDown={event => {
+          if (tvMode && document.activeElement?.matches('input[data-remote-input]:not([readonly])')) event.preventDefault();
+        }}
         onOpenAutoFocus={() => { returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }}
         onCloseAutoFocus={event => {
           if (!hideTrigger) return;
@@ -195,14 +209,16 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
         <DialogHeader>
           <DialogTitle>Connexion Xtream Codes</DialogTitle>
           <DialogDescription className="text-neutral-400">
-            Connecte-toi directement à ton fournisseur pour charger tes catégories et tes flux (HLS recommandé, MPEG-TS en secours).
+            {categories.length ? 'Choisis les catégories de ton abonnement. Tous les pays sont sélectionnés au départ.' : 'Connecte-toi à ton fournisseur, puis choisis les catégories à importer.'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 text-sm">
+          {categories.length === 0 && <>
           <div className="space-y-1">
             <label htmlFor={`${fieldId}-server`} className="text-xs text-neutral-300">Adresse du serveur (avec port)</label>
             <Input
+              remoteActivation={tvMode}
               id={`${fieldId}-server`}
               value={server}
               onChange={e => setServer(e.target.value)}
@@ -216,6 +232,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
             <div className="space-y-1">
               <label htmlFor={`${fieldId}-user`} className="text-xs text-neutral-300">Nom d'utilisateur</label>
               <Input
+                remoteActivation={tvMode}
                 id={`${fieldId}-user`}
                 value={username}
                 onChange={e => setUsername(e.target.value)}
@@ -228,6 +245,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
             <div className="space-y-1">
               <label htmlFor={`${fieldId}-password`} className="text-xs text-neutral-300">Mot de passe</label>
               <Input
+                remoteActivation={tvMode}
                 id={`${fieldId}-password`}
                 type="password"
                 value={password}
@@ -270,6 +288,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
           <p className="rounded-md border border-neutral-800 p-3 text-xs text-neutral-400">
             Le nombre de lectures simultanées dépend de ton abonnement. En cas d’échec, vérifie les identifiants, la connexion réseau et les connexions déjà ouvertes.
           </p>
+          </>}
 
           {lastError && (
             <div className="rounded-md border border-rose-900/70 bg-rose-950/40 p-3 text-xs text-rose-200 space-y-2">
@@ -293,46 +312,66 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
               {busy ? 'Connexion en cours…' : 'Se connecter & charger les catégories'}
             </Button>
           ) : (
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between text-xs">
+            <div ref={selectionRef} data-remote-self className="space-y-3 pt-2"
+              onKeyDown={event => {
+                if (!event.key.startsWith('Arrow')) return;
+                const controls = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+                const index = controls.indexOf(document.activeElement as HTMLButtonElement);
+                if (index < 0) return;
+                event.preventDefault(); event.stopPropagation();
+                const offset = event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 1;
+                const next = controls[index + offset];
+                if (next) focusRemote(next);
+              }}>
+              <p className="text-xs text-neutral-400">Flèches : parcourir · OK : cocher ou décocher · Importer : valider</p>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="font-semibold text-neutral-200">
                   {categories.length} catégories trouvées ({selectedCats.size} sélectionnée(s))
                 </span>
-                <div className="space-x-1">
-                  <Button variant="ghost" size="sm" onClick={selectFrenchOnly} disabled={busy} className="h-7 text-xs">
-                    France uniquement
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={selectAll} disabled={busy} className="h-7 text-xs">
+                <div className="flex flex-wrap gap-1">
+                  <Button variant="ghost" size="sm" onClick={selectAll} disabled={busy} className="min-h-10 text-xs">
                     Tout
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={deselectAll} disabled={busy} className="h-7 text-xs">
+                  <Button variant="ghost" size="sm" onClick={selectFrenchOnly} disabled={busy} className="min-h-10 text-xs">
+                    France uniquement
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={deselectAll} disabled={busy} className="min-h-10 text-xs">
                     Aucun
                   </Button>
                 </div>
               </div>
 
-              <ScrollArea className="dark-surface h-48 border border-neutral-800 rounded-md p-2 bg-black">
+              <div role="group" aria-label="Catégories à importer" className="dark-surface max-h-[35vh] overflow-y-auto border border-neutral-800 rounded-md p-2 bg-black">
                 <div className="space-y-2">
                   {categories.map(cat => {
                     const checked = selectedCats.has(cat.category_id);
                     return (
-                      <label
+                      <button
                         key={cat.category_id}
-                        className="flex items-center space-x-2 text-xs hover:bg-neutral-900/60 p-1 rounded cursor-pointer"
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked}
+                        disabled={busy}
+                        onClick={() => toggleCategory(cat.category_id)}
+                        onKeyDown={event => {
+                          // Radix Checkbox ignore Entrée. Les télécommandes Android
+                          // envoient précisément Entrée pour OK : le traiter ici.
+                          if (event.key === 'Enter') {
+                            event.preventDefault(); event.stopPropagation();
+                            if (!event.repeat) toggleCategory(cat.category_id);
+                          }
+                        }}
+                        className="flex w-full min-h-11 items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-neutral-900/60 focus-visible:bg-white focus-visible:text-black focus-visible:outline-none"
                       >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={() => toggleCategory(cat.category_id)}
-                          disabled={busy}
-                        />
-                        <span className={checked ? 'text-white font-medium' : 'text-neutral-400'}>
+                        <span aria-hidden="true" className="w-5 shrink-0 text-center">{checked ? '✓' : '□'}</span>
+                        <span>
                           {cat.category_name}
                         </span>
-                      </label>
+                      </button>
                     );
                   })}
                 </div>
-              </ScrollArea>
+              </div>
 
               {importProgress !== null && (
                 <div className="space-y-1">
