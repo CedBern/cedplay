@@ -62,4 +62,6 @@ export const streamingPlatforms: StreamingPlatform[] = [
 
   // — Sport —
   { id: 'dazn', name: 'DAZN', url: 'https://www.dazn.com', androidPackages: ['com.dazn'], color: '#f8ff00', category: 'sport', badge: 'Sport & Ligue 1', note: 'Abonnement requis' },
+  // Paquet inhabituel mais officiel : l'app L'Équipe s'appelle « lequipe.fr » (L'Equipe 24/24).
+  { id: 'lequipe', name: 'L’Équipe', url: 'https://www.lequipe.fr', androidPackages: ['lequipe.fr'], color: '#e30613', category: 'sport', badge: 'Sport & Directs', note: 'Gratuit (option Premium)' },
 ];

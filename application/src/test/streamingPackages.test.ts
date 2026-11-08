@@ -42,6 +42,8 @@ describe('Paquets Android des plateformes de streaming', () => {
     expect(byId.get('arte')).toContain('tv.arte.plus7');
     expect(byId.get('rakutentv')).toContain('tv.wuaki');
     expect(byId.get('adn')).toContain('fr.anidn');
+    // Paquet inhabituel mais officiel de l'app L'Équipe (éditeur L'Equipe 24/24).
+    expect(byId.get('lequipe')).toEqual(['lequipe.fr']);
   });
 
   it('URLs appuyées sur les domaines réellement déclarés par les apps (dumpsys Hisense)', () => {

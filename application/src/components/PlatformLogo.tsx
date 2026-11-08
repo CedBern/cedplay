@@ -351,6 +351,16 @@ export const PlatformLogo: React.FC<PlatformLogoProps> = ({
         </div>
       );
 
+    case 'lequipe':
+      return (
+        <div className={containerClass} title={name || 'L’Équipe'}>
+          <svg viewBox="0 0 48 48" className="w-full h-full" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect width="48" height="48" rx="8" fill="#E30613" />
+            <text x="24" y="28" fill="#FFFFFF" fontFamily="system-ui, sans-serif" fontWeight="900" fontStyle="italic" fontSize="7" textAnchor="middle" letterSpacing="0.5">L’ÉQUIPE</text>
+          </svg>
+        </div>
+      );
+
     default:
       // Monogramme fallback propre
       return (
