@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TvVodScreen, type TvVodScreenProps } from '@/components/TvVodScreen';
 import { clearVodCategoryCache } from '@/utils/vodPosterCache';
 import { VodLibrary } from '@/components/VodLibrary';
@@ -45,6 +45,13 @@ function setup(overrides: Partial<TvVodScreenProps> = {}) {
   render(<TvVodScreen {...props} />);
   return props;
 }
+
+it('place Toutes puis Ma Liste avant les catégories dans leur ordre fournisseur et les outils', () => {
+  setup({ categories: [{ id: 'z', name: 'Z Séries' }, { id: 'n', name: '01 Films' }, { id: 'f', name: 'FR Films' }], onShowLocal: vi.fn() });
+  expect(within(screen.getByRole('navigation', { name: 'Catégories' })).getAllByRole('button').map(button => button.textContent)).toEqual([
+    'Toutes les catégories', 'Ma Liste2', 'Z Séries', '01 Films', 'FR Films', 'Rechercher', 'Actualiser', 'USB / SD',
+  ]);
+});
 
 it('arrive sur la grille, se déplace et OK ouvre la fiche', () => {
   const { onOpen } = setup();

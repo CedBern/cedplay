@@ -130,7 +130,7 @@ it('les panneaux Radix ne constituent plus un arrêt de navigation clavier ou TV
   expect(screen.getByRole('button', { name: 'Lire' })).toHaveFocus();
 });
 
-it('Bas depuis Direct rejoint Rechercher, puis Guide TV et Organiser sans lancer de chaîne', () => {
+it('Bas depuis Direct traverse Toutes, Favoris et les catégories avant les outils sans lancer de chaîne', () => {
   geometry();
   const channel = { id: 'test', name: 'Chaîne test', url: 'https://example.test/live' };
   const onPlay = vi.fn(), onSearch = vi.fn(), onGuide = vi.fn(), onOrganize = vi.fn();
@@ -146,6 +146,14 @@ it('Bas depuis Direct rejoint Rechercher, puis Guide TV et Organiser sans lancer
   render(<Direct />);
   screen.getByRole('tab', { name: 'Direct' }).focus();
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: /^Toutes/ })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: /^Favoris/ })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: /^Récentes/ })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: /^Test/ })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('button', { name: 'Rechercher' })).toHaveFocus();
   fireEvent.click(document.activeElement!);
   expect(onSearch).toHaveBeenCalledOnce();
@@ -157,9 +165,7 @@ it('Bas depuis Direct rejoint Rechercher, puis Guide TV et Organiser sans lancer
   expect(screen.getByRole('button', { name: 'Organiser' })).toHaveFocus();
   fireEvent.click(document.activeElement!);
   expect(onOrganize).toHaveBeenCalledOnce();
-  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
-  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
-  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  for (let index = 0; index < 7; index++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
   expect(screen.getByRole('tab', { name: 'Direct' })).toHaveFocus();
   expect(onPlay).not.toHaveBeenCalled();
 });

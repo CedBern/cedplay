@@ -9,7 +9,7 @@ Ce fichier définit le cadre technique et les règles de travail pour tout agent
 - **Racine du dépôt** : `C:\Users\C2k\Documents\ChatGPT\Lecteur IPTV`
 - **Code applicatif (Web + Capacitor)** : `application/` (`src/`, `tests/`, `android/`)
 - **Branche consolidée de référence** : `consolidate/v1.11.4`
-- **Version actuelle livrée** : **1.12.9** (`versionCode 57`, du 08/11/2026) — APK de référence à la racine : `CedPlay-1.12.9.apk` (4 396 428 octets). `CedPlay.apk` en est une copie et doit rester aligné sur la dernière version.
+- **Version actuelle livrée** : **1.12.10** (`versionCode 58`, du 08/11/2026) — APK de référence à la racine : `CedPlay-1.12.10.apk` (4 399 008 octets). `CedPlay.apk` en est une copie et doit rester aligné sur la dernière version.
 - **Fiche de suivi transversal (Second Cerveau)** : [CedPlay.md](C:/Users/C2k/Documents/Second%20Cerveau/10%20Projets/CedPlay.md)
 - **Dernier rapport d'audit et preuves** : [AUDIT_INTEGRAL_2026-11-08.md](AUDIT_INTEGRAL_2026-11-08.md) (rapport antérieur : `AUDIT_INTEGRAL_2026-11-07.md`), dossier `preuves/`
 - **Outillage Android** : AGP **8.9.1**, Gradle wrapper **8.11.1**, `compileSdk`/`targetSdk` **35** (`android/variables.gradle`), `minSdk 22`.
@@ -26,7 +26,7 @@ Ce fichier définit le cadre technique et les règles de travail pour tout agent
    ou séquentiellement :
    - `pnpm exec tsc -p tsconfig.app.json --noEmit` et `pnpm exec tsc -p tsconfig.node.json --noEmit` (0 erreur)
    - `pnpm exec eslint ./src` (**sans** `--quiet`, ne pas limiter aux seuls fichiers modifiés : les avertissements doivent rester visibles — 0 erreur / 18 avertissements au 08/11/2026)
-   - `pnpm exec vitest run` (tous les tests verts ; **779/779** Web + 30/30 Android au 08/11/2026)
+   - `pnpm exec vitest run` (tous les tests verts ; **791/791** Web + 35/35 Android au 08/11/2026)
    - `pnpm build` (vérifier qu'aucun média lourd de test n'est copié dans `dist/`)
    Le script `pnpm verify` enchaîne ces quatre étapes ; `pnpm lint` reste volontairement silencieux (`--quiet`) pour un usage courant.
 2. **Synchronisation des numéros de version** :

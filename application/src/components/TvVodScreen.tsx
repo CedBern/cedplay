@@ -201,13 +201,14 @@ export function TvVodScreen({
   const requestFocus = useCallback(() => { pendingFocus.current = true; setFocusTick(t => t + 1); }, []);
 
   const catItems = useMemo<CatItem[]>(() => {
-    const list: CatItem[] = [];
+    const list: CatItem[] = [
+      { kind: 'category', id: '', label: 'Toutes les catégories' },
+      { kind: 'action', id: 'watchlist', label: 'Ma Liste' },
+    ];
+    for (const c of categories) list.push({ kind: 'category', id: c.id, label: c.name });
     if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
-    list.push({ kind: 'action', id: 'watchlist', label: 'Ma Liste' });
     list.push({ kind: 'action', id: 'refresh', label: 'Actualiser' });
     if (onShowLocal) list.push({ kind: 'action', id: 'local', label: 'USB / SD' });
-    list.push({ kind: 'category', id: '', label: 'Toutes les catégories' });
-    for (const c of categories) list.push({ kind: 'category', id: c.id, label: c.name });
     return list;
   }, [onSearch, onShowLocal, categories]);
 

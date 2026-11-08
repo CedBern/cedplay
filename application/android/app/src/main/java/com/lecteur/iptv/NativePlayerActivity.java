@@ -197,6 +197,11 @@ public class NativePlayerActivity extends AppCompatActivity {
     private ChannelPanelAdapter channelAdapter;
     private LinearLayout groupChips;
     private String panelGroup = null;
+    private boolean panelFavorites;
+    private int[] favoriteChannels = new int[0];
+    private ChannelPanelIndex panelIndex;
+    private HorizontalScrollView groupChipsScroll;
+    private NativeFavoriteStore favoriteStore;
     private boolean pipActive = false;
     private final SimpleDateFormat hourFormat = new SimpleDateFormat("HH:mm", Locale.FRANCE);
     /** Bouton recevant la sélection télécommande à l'ouverture des commandes (aucun effet de bord sur la lecture). */
@@ -396,6 +401,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         streamUrl = getIntent().getStringExtra(EXTRA_URL);
         streamTitle = getIntent().getStringExtra(EXTRA_TITLE);
         vod = getIntent().getBooleanExtra("vod", false);
+        favoriteStore = new NativeFavoriteStore(this);
         // La page transmet le mode d'interface choisi (Auto, TV, Mobile) ; sinon, détection.
         tvUi = getIntent().hasExtra("tvUi") ? getIntent().getBooleanExtra("tvUi", false) : detectTelevision();
         orientationMode = vod && !tvUi ? 1 : 0;
@@ -792,7 +798,10 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
         if (tvUi) buildTvBand(root);
         // Liste des chaînes (direct) ou des épisodes (série).
-        if (channelUrls != null && (!vod || episodeIds != null)) buildChannelPanel(root);
+        if (channelUrls != null && (!vod || episodeIds != null)) {
+            panelIndex = new ChannelPanelIndex(channelUrls.size(), channelGroups, channelUrls);
+            buildChannelPanel(root);
+        }
         if (!vod && channelUrls != null) { buildNumberOverlay(root); buildZapOverlay(root); }
         buildCornerBadge(root);
         if (!tvUi) {
@@ -1040,20 +1049,29 @@ public class NativePlayerActivity extends AppCompatActivity {
                 return; // la fenêtre reste en place
             }
             final HashMap<String, Integer> builtIndex = ChannelNumberInput.buildNumberIndex(numbers);
-            runOnUiThread(() -> publishFullList(urls, titles, groups, numbers, builtIndex, windowStart, started));
+            final ChannelPanelIndex builtPanelIndex = new ChannelPanelIndex(urls.size(), groups, urls);
+            runOnUiThread(() -> publishFullList(urls, titles, groups, numbers, builtIndex, builtPanelIndex, windowStart, started));
         });
     }
 
     /** Publie sur le thread UI les listes lues hors thread : mêmes gardes et mêmes
      *  transpositions que adoptFullList, mais à partir de l'état courant — un zap P+/P−
      *  peut avoir eu lieu pendant la lecture du fichier. */
-    private void publishFullList(ArrayList<String> urls, ArrayList<String> titles, ArrayList<String> groups, ArrayList<String> numbers, HashMap<String, Integer> builtIndex, int windowStart, long started) {
+    private void publishFullList(ArrayList<String> urls, ArrayList<String> titles, ArrayList<String> groups, ArrayList<String> numbers, HashMap<String, Integer> builtIndex, ChannelPanelIndex builtPanelIndex, int windowStart, long started) {
         if (isFinishing() || isDestroyed() || channelUrls == null || channelTitles == null || channelIndex < 0) return;
         if (urls.isEmpty() || windowStart + channelUrls.size() > urls.size()) return;
         // Indices de la fenêtre → indices de la liste complète, à partir de l'état courant.
         int current = windowStart + channelIndex;
         int previous = previousIndex < 0 ? -1 : windowStart + previousIndex;
         if (current >= urls.size()) return;
+        boolean panelOpen = isChannelPanelOpen();
+        boolean listHadFocus = panelOpen && channelListView.hasFocus();
+        boolean chipHadFocus = panelOpen && groupChips != null && groupChips.hasFocus();
+        View focusedChip = chipHadFocus ? getCurrentFocus() : null;
+        Object focusedChipTag = focusedChip != null ? focusedChip.getTag() : null;
+        int selected = panelOpen ? channelListView.getSelectedItemPosition() : -1;
+        int selectedChannel = selected >= 0 && selected < channelAdapter.getCount()
+            ? windowStart + channelAdapter.channelAt(selected) : current;
         ArrayList<JSONArray> programs = new ArrayList<>(urls.size());
         for (int i = 0; i < urls.size(); i++) programs.add(UNKNOWN_EPG);
         if (channelPrograms != null) for (int i = 0; i < channelPrograms.size(); i++) programs.set(windowStart + i, channelPrograms.get(i));
@@ -1062,7 +1080,11 @@ public class NativePlayerActivity extends AppCompatActivity {
         for (int i = 0; i < urls.size(); i++) logos.add("");
         if (channelLogos != null) for (int i = 0; i < channelLogos.size(); i++) logos.set(windowStart + i, channelLogos.get(i));
         // La chaîne lancée peut être une variante (autre qualité) de la ligne de la liste.
-        if (streamUrl != null) { urls.set(current, streamUrl); if (streamTitle != null) titles.set(current, streamTitle); }
+        if (streamUrl != null) {
+            builtPanelIndex.replaceUrl(current, urls.get(current), streamUrl);
+            urls.set(current, streamUrl);
+            if (streamTitle != null) titles.set(current, streamTitle);
+        }
         channelUrls = urls; channelTitles = titles; channelGroups = groups; channelNumbers = numbers; channelPrograms = programs; channelLogos = logos;
         channelIndex = current; previousIndex = previous; channelTotal = urls.size();
         if (pendingZapTarget >= 0) pendingZapTarget = windowStart + pendingZapTarget;
@@ -1070,6 +1092,22 @@ public class NativePlayerActivity extends AppCompatActivity {
         numberIndex.clear();
         if (builtIndex != null) numberIndex.putAll(builtIndex);
         fullListAdopted = true;
+        panelIndex = builtPanelIndex;
+        refreshFavoriteChannels();
+        if (channelAdapter != null) {
+            rebuildPanelGroups();
+            channelAdapter.rebuild();
+            if (panelOpen) {
+                channelListView.setSelection(Math.max(0, channelAdapter.positionOf(selectedChannel)));
+                if (listHadFocus) channelListView.requestFocus();
+                else if (chipHadFocus) {
+                    for (int i = 0; i < groupChips.getChildCount(); i++) {
+                        View chip = groupChips.getChildAt(i);
+                        if (java.util.Objects.equals(focusedChipTag, chip.getTag())) { chip.requestFocus(); break; }
+                    }
+                }
+            }
+        }
         android.util.Log.i("IPTV-Playback", "zap_full_list channels=" + urls.size() + " load_ms=" + (SystemClock.elapsedRealtime() - started));
     }
 
@@ -1146,7 +1184,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         // En direct, le bandeau affiche déjà le nom de la chaîne ; sur TV, le bandeau du film aussi.
         if (vod && !tvUi) Toast.makeText(this, streamTitle, Toast.LENGTH_SHORT).show();
         updatePreviousButton();
-        if (channelAdapter != null) channelAdapter.notifyDataSetChanged();
+        if (channelAdapter != null && isChannelPanelOpen()) channelAdapter.notifyDataSetChanged();
         if (player != null) {
             zapCount++;
             prepareMedia(streamUrl);
@@ -1155,7 +1193,10 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
         if (!vod) showZapOverlay(next);
         // TV : bandeau de commandes ouvert, il le reste ; sinon le bandeau de zap avec logo suffit, sans doublon en bas.
-        if (tvUi && !isControlsVisible) {
+        if (tvUi && isChannelPanelOpen()) {
+            updateInfoBar();
+            updateCornerBadge();
+        } else if (tvUi && !isControlsVisible) {
             if (vod) showInfoOnly();
             else { updateInfoBar(); updateCornerBadge(); }
         } else {
@@ -1613,25 +1654,14 @@ public class NativePlayerActivity extends AppCompatActivity {
         header.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
         channelSheet.addView(header);
 
-        // Filtres par groupe, dans l'ordre de la liste.
-        ArrayList<String> groups = new ArrayList<>();
-        if (channelGroups != null) {
-            // Ensemble ordonné : sur une liste complète de 20 000 chaînes, contains() sur la liste coûterait trop.
-            java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
-            for (String g : channelGroups) if (!g.isEmpty()) seen.add(g);
-            groups.addAll(seen);
-        }
-        if (groups.size() > 1) {
-            HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
-            chipsScroll.setHorizontalScrollBarEnabled(false);
-            groupChips = new LinearLayout(this);
-            groupChips.setOrientation(LinearLayout.HORIZONTAL);
-            groupChips.setPadding(dp(16), dp(4), dp(16), dp(10));
-            groupChips.addView(groupChip("Toutes", null));
-            for (String g : groups) groupChips.addView(groupChip(g, g));
-            chipsScroll.addView(groupChips);
-            channelSheet.addView(chipsScroll);
-        }
+        groupChipsScroll = new HorizontalScrollView(this);
+        groupChipsScroll.setHorizontalScrollBarEnabled(false);
+        groupChips = new LinearLayout(this);
+        groupChips.setOrientation(LinearLayout.HORIZONTAL);
+        groupChips.setPadding(dp(16), dp(4), dp(16), dp(10));
+        groupChipsScroll.addView(groupChips);
+        channelSheet.addView(groupChipsScroll);
+        rebuildPanelGroups();
 
         channelListView = new ListView(this);
         channelListView.setDivider(null);
@@ -1643,7 +1673,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         channelListView.setAdapter(channelAdapter);
         channelListView.setOnItemClickListener((parent, view, position, id) -> {
             int target = channelAdapter.channelAt(position);
-            closeChannelPanel();
+            if (!tvUi) closeChannelPanel();
             if (target != channelIndex) switchTo(target);
         });
         channelSheet.addView(channelListView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -1653,7 +1683,20 @@ public class NativePlayerActivity extends AppCompatActivity {
         root.addView(channelPanel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
-    private Button groupChip(String label, String group) {
+    private void rebuildPanelGroups() {
+        if (groupChips == null || panelIndex == null) return;
+        List<String> groups = panelIndex.groups();
+        if (panelGroup != null && !groups.contains(panelGroup)) panelGroup = null;
+        groupChips.removeAllViews();
+        groupChips.addView(groupChip("Toutes", null));
+        if (!vod) groupChips.addView(groupChip("Favoris", null, true));
+        for (String group : groups) groupChips.addView(groupChip(group, group));
+        groupChipsScroll.setVisibility(!vod || groups.size() > 1 ? View.VISIBLE : View.GONE);
+    }
+
+    private Button groupChip(String label, String group) { return groupChip(label, group, false); }
+
+    private Button groupChip(String label, String group, boolean favorites) {
         Button chip = new Button(this);
         chip.setText(label);
         chip.setAllCaps(false);
@@ -1661,8 +1704,9 @@ public class NativePlayerActivity extends AppCompatActivity {
         chip.setSingleLine(true);
         chip.setMinWidth(0); chip.setMinimumWidth(0); chip.setMinHeight(0); chip.setMinimumHeight(0);
         chip.setPadding(dp(14), 0, dp(14), 0);
-        chip.setTag(group == null ? "" : group);
+        chip.setTag(favorites ? Boolean.TRUE : group == null ? "" : group);
         chip.setOnClickListener(v -> {
+            panelFavorites = favorites;
             panelGroup = group;
             refreshGroupChips();
             channelAdapter.rebuild();
@@ -1671,8 +1715,18 @@ public class NativePlayerActivity extends AppCompatActivity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36));
         params.setMargins(0, 0, dp(8), 0);
         chip.setLayoutParams(params);
-        styleChip(chip, group == null ? panelGroup == null : group.equals(panelGroup));
+        styleChip(chip, isPanelChipActive(chip));
         return chip;
+    }
+
+    private boolean isPanelChipActive(Button chip) {
+        Object tag = chip.getTag();
+        if (Boolean.TRUE.equals(tag)) return panelFavorites;
+        return !panelFavorites && (panelGroup == null ? "".equals(tag) : panelGroup.equals(tag));
+    }
+
+    private void refreshFavoriteChannels() {
+        favoriteChannels = panelIndex == null || vod ? new int[0] : panelIndex.favorites(favoriteStore.favoriteUrls());
     }
 
     /** Catégorie active : contour et texte orange (elle signale) ; focus : pastille blanche. */
@@ -1696,8 +1750,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (groupChips == null) return;
         for (int i = 0; i < groupChips.getChildCount(); i++) {
             Button chip = (Button) groupChips.getChildAt(i);
-            String tag = (String) chip.getTag();
-            if (panelGroup == null ? tag.isEmpty() : tag.equals(panelGroup)) { chip.requestFocus(); return; }
+            if (isPanelChipActive(chip)) { chip.requestFocus(); return; }
         }
     }
 
@@ -1705,8 +1758,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (groupChips == null) return;
         for (int i = 0; i < groupChips.getChildCount(); i++) {
             Button chip = (Button) groupChips.getChildAt(i);
-            String tag = (String) chip.getTag();
-            styleChip(chip, panelGroup == null ? tag.isEmpty() : tag.equals(panelGroup));
+            styleChip(chip, isPanelChipActive(chip));
         }
     }
 
@@ -1720,14 +1772,17 @@ public class NativePlayerActivity extends AppCompatActivity {
         hideControls();
         // Ouvrir sur le groupe de la chaîne en cours.
         String group = channelGroups != null && channelIndex >= 0 && channelIndex < channelGroups.size() ? channelGroups.get(channelIndex) : "";
+        panelFavorites = false;
         panelGroup = groupChips != null && !group.isEmpty() ? group : null;
+        refreshFavoriteChannels();
         refreshGroupChips();
         channelAdapter.rebuild();
+        channelSheet.animate().cancel();
         channelPanel.setVisibility(View.VISIBLE);
         channelSheet.setTranslationX(-channelSheet.getLayoutParams().width);
         channelSheet.animate().translationX(0).setDuration(180).start();
         int position = channelAdapter.positionOf(channelIndex);
-        channelListView.setSelection(Math.max(0, position - 2));
+        channelListView.setSelection(Math.max(0, position));
         channelListView.requestFocus();
         startPanelFrameSampling();
     }
@@ -1735,8 +1790,10 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void closeChannelPanel() {
         if (!isChannelPanelOpen()) return;
         stopPanelFrameSampling();
-        channelSheet.animate().translationX(-channelSheet.getWidth()).setDuration(150)
-            .withEndAction(() -> { channelPanel.setVisibility(View.GONE); hideSystemUI(); }).start();
+        channelSheet.animate().cancel();
+        channelPanel.setVisibility(View.GONE);
+        channelSheet.setTranslationX(-channelSheet.getWidth());
+        hideSystemUI();
     }
 
     // ── Mesure de fluidité du panneau (protocole box : appui prolongé Haut/Bas) ──
@@ -1776,26 +1833,21 @@ public class NativePlayerActivity extends AppCompatActivity {
     };
 
     private class ChannelPanelAdapter extends BaseAdapter {
-        private final ArrayList<Integer> visible = new ArrayList<>();
+        private int[] visible = new int[0];
 
         ChannelPanelAdapter() { rebuild(); }
 
         void rebuild() {
-            visible.clear();
-            if (channelUrls != null) {
-                for (int i = 0; i < channelUrls.size(); i++) {
-                    if (panelGroup == null || (channelGroups != null && panelGroup.equals(channelGroups.get(i)))) visible.add(i);
-                }
-            }
+            visible = panelFavorites ? favoriteChannels : panelIndex == null ? new int[0] : panelIndex.channels(panelGroup);
             notifyDataSetChanged();
         }
 
-        int channelAt(int position) { return visible.get(position); }
-        int positionOf(int channel) { return visible.indexOf(channel); }
+        int channelAt(int position) { return visible[position]; }
+        int positionOf(int channel) { return java.util.Arrays.binarySearch(visible, channel); }
 
-        @Override public int getCount() { return visible.size(); }
-        @Override public Object getItem(int position) { return visible.get(position); }
-        @Override public long getItemId(int position) { return visible.get(position); }
+        @Override public int getCount() { return visible.length; }
+        @Override public Object getItem(int position) { return visible[position]; }
+        @Override public long getItemId(int position) { return visible[position]; }
 
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
@@ -1834,7 +1886,7 @@ public class NativePlayerActivity extends AppCompatActivity {
                 texts.addView(program, pp);
                 row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
             }
-            int channel = visible.get(position);
+            int channel = visible[position];
             boolean current = channel == channelIndex;
             name.setText(channelTitles.get(channel));
             name.setTextColor(current ? C_ACCENT : C_TEXT);
@@ -3452,6 +3504,9 @@ public class NativePlayerActivity extends AppCompatActivity {
             list.add(PlayerOption.action("previous", "Revenir à", () -> { if (previousIndex >= 0) switchTo(previousIndex); })
                 .value(() -> previousIndex >= 0 && channelTitles != null && previousIndex < channelTitles.size() ? channelTitles.get(previousIndex) : null)
                 .visible(() -> previousIndex >= 0 && previousIndex != channelIndex && channelTitles != null && previousIndex < channelTitles.size()).build());
+            list.add(PlayerOption.action("reload", "Relancer le flux", this::reloadCurrentLive).build());
+            list.add(PlayerOption.action("favorite", "Ajouter aux favoris", this::toggleCurrentFavorite)
+                .label(() -> favoriteStore.isFavorite(streamUrl) ? "Retirer des favoris" : "Ajouter aux favoris").build());
             list.add(recordOption("Enregistrer"));
         } else {
             list.add(PlayerOption.action("episodes", "Épisodes", this::openChannelPanel)
@@ -3464,6 +3519,29 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
         list.add(PlayerOption.action("openWith", "Ouvrir avec…", this::openInVlc).build());
         return list;
+    }
+
+    private void reloadCurrentLive() {
+        if (vod || streamUrl == null || casting) return;
+        cancelPendingZap();
+        reconnectLive(false);
+        android.util.Log.i("IPTV-Playback", "manual_live_reload");
+        Toast.makeText(this, "Flux relancé", Toast.LENGTH_SHORT).show();
+    }
+
+    private void toggleCurrentFavorite() {
+        if (vod || streamUrl == null) return;
+        boolean favorite = !favoriteStore.isFavorite(streamUrl);
+        try {
+            favoriteStore.setFavorite(streamUrl, favorite);
+        } catch (IllegalStateException failure) {
+            Toast.makeText(this, "Impossible d’enregistrer le favori", Toast.LENGTH_LONG).show();
+            return;
+        }
+        refreshFavoriteChannels();
+        if (panelFavorites && channelAdapter != null) channelAdapter.rebuild();
+        refreshControls();
+        Toast.makeText(this, favorite ? "Chaîne ajoutée aux favoris" : "Chaîne retirée des favoris", Toast.LENGTH_SHORT).show();
     }
 
     private boolean hasNextEpisode() {

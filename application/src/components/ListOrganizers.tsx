@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import { getFavoritesFromDB, getMeta, saveFavoritesToDB, setMeta } from '@/utils/idb';
-import { byGroupName, displayGroupOrder, duplicateNumbers, moveInList, numberChannels, type ListCustomization } from '@/utils/channelCustomization';
+import { displayGroupOrder, duplicateNumbers, moveInList, numberChannels, type ListCustomization } from '@/utils/channelCustomization';
 import { createFavoriteList, deleteFavoriteList, loadFavoriteLists, updateFavoriteList, FAVORITE_LISTS_EVENT, type FavoriteList } from '@/utils/favoriteLists';
 import type { Channel, ChannelGroup } from '@/types/channel';
 
@@ -52,7 +52,7 @@ export function GroupManagerDialog({ open, onOpenChange, groups, hidden, onChang
   useEffect(() => { setQuery(''); setFirstNumber(''); }, [view]);
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const visibleCount = groups.length - groups.filter(g => hiddenSet.has(g.name)).length;
-  const ordered = useMemo(() => (custom ? displayGroupOrder(groups, custom) : [...groups].sort(byGroupName)), [groups, custom]);
+  const ordered = useMemo(() => (custom ? displayGroupOrder(groups, custom) : groups), [groups, custom]);
   const q = query.trim().toLocaleLowerCase('fr');
   const filtered = useMemo(() => (q ? ordered.filter(g => g.name.toLocaleLowerCase('fr').includes(q)) : ordered), [ordered, q]);
   const toggle = (name: string) => onChange(hiddenSet.has(name) ? hidden.filter(g => g !== name) : [...hidden, name]);
@@ -115,7 +115,7 @@ export function GroupManagerDialog({ open, onOpenChange, groups, hidden, onChang
           <Button type="button" variant="outline" size="sm" onClick={() => setMany(filtered.map(g => g.name), true)}>Tout masquer{query ? ' (filtrés)' : ''}</Button>
           {canOrder && <Button type="button" variant="outline" size="sm" aria-pressed={custom?.channelSort === 'name'} onClick={() => onCustomChange!({ ...custom!, channelSort: 'name' })}>Chaînes A–Z</Button>}
           {canOrder && custom?.channelSort === 'name' && <Button type="button" variant="outline" size="sm" onClick={() => { const { channelSort: _sort, ...rest } = custom; onCustomChange!(rest); }}>Ordre de la liste</Button>}
-          {canOrder && custom?.groupOrder && <Button type="button" variant="outline" size="sm" onClick={() => { const { groupOrder: _g, ...rest } = custom; onCustomChange!(rest); }}>Ordre alphabétique</Button>}
+          {canOrder && custom?.groupOrder && <Button type="button" variant="outline" size="sm" onClick={() => { const { groupOrder: _g, ...rest } = custom; onCustomChange!(rest); }}>Ordre de la liste</Button>}
           {hiddenChannels.length > 0 && <Button type="button" variant="outline" size="sm" onClick={() => setView({ kind: 'hidden' })}><EyeOff className="mr-1.5 h-4 w-4" aria-hidden="true" />{hiddenChannels.length} chaîne{hiddenChannels.length > 1 ? 's' : ''} masquée{hiddenChannels.length > 1 ? 's' : ''}</Button>}
         </div>
         <ul className="-mx-2 min-h-0 flex-1 overflow-y-auto">

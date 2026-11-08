@@ -42,12 +42,15 @@ function Harness({ onCustom }: { onCustom: (c: ListCustomization) => void }) {
 it('range les groupes, puis l’ordre et les numéros des chaînes d’un groupe', () => {
   const onCustom = vi.fn();
   render(<Harness onCustom={onCustom} />);
-  // Ordre alphabétique au départ : Info puis Sport.
+  // L'ordre d'origine de la liste est conservé : Sport puis Info.
   const names = () => screen.getAllByRole('switch').map(s => s.getAttribute('aria-label'));
-  expect(names()).toEqual(['Info', 'Sport']);
-  fireEvent.click(screen.getByRole('button', { name: 'Monter le groupe Sport' }));
   expect(names()).toEqual(['Sport', 'Info']);
-  expect(onCustom).toHaveBeenLastCalledWith(expect.objectContaining({ groupOrder: ['Sport', 'Info'] }));
+  fireEvent.click(screen.getByRole('button', { name: 'Monter le groupe Info' }));
+  expect(names()).toEqual(['Info', 'Sport']);
+  expect(onCustom).toHaveBeenLastCalledWith(expect.objectContaining({ groupOrder: ['Info', 'Sport'] }));
+  fireEvent.click(screen.getByRole('button', { name: 'Ordre de la liste' }));
+  expect(names()).toEqual(['Sport', 'Info']);
+  expect(onCustom.mock.calls.at(-1)![0]).not.toHaveProperty('groupOrder');
 
   fireEvent.click(screen.getByRole('button', { name: 'Organiser les chaînes de Sport' }));
   fireEvent.click(screen.getByRole('button', { name: 'Monter S2' }));

@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -15,6 +17,7 @@ import java.io.OutputStreamWriter;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import androidx.activity.result.ActivityResult;
+import androidx.core.content.ContextCompat;
 import androidx.documentfile.provider.DocumentFile;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -985,15 +988,49 @@ public class NativePlayerPlugin extends Plugin {
         notifyListeners("audioState", snapshotToJS(snapshot));
     };
 
+    private final BroadcastReceiver favoriteReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            notifyListeners("favoritesChanged", new JSObject());
+        }
+    };
+
+    @PluginMethod
+    public void getFavoriteChanges(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("entries", new NativeFavoriteStore(getContext()).changes());
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void acknowledgeFavoriteChanges(PluginCall call) {
+        new NativeFavoriteStore(getContext()).acknowledge(call.getArray("entries", new JSArray()));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void setFavoritesSnapshot(PluginCall call) {
+        JSArray urls = call.getArray("urls", new JSArray());
+        HashSet<String> valid = new HashSet<>();
+        for (int i = 0; i < urls.length(); i++) {
+            String url = urls.optString(i);
+            if (isHttpUrl(url)) valid.add(url);
+        }
+        new NativeFavoriteStore(getContext()).setSnapshot(valid);
+        call.resolve();
+    }
+
     @Override
     public void load() {
         super.load();
         AudioPlaybackService.addListener(audioListener);
+        ContextCompat.registerReceiver(getContext(), favoriteReceiver,
+            new IntentFilter(NativeFavoriteStore.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
     }
 
     @Override
     protected void handleOnDestroy() {
         AudioPlaybackService.removeListener(audioListener);
+        getContext().unregisterReceiver(favoriteReceiver);
         if (preview != null) preview.hide();
         super.handleOnDestroy();
     }

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useVirtualizer, defaultRangeExtractor } from '@tanstack/react-virtual';
 import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, ListChecks, Lock, Pencil, Play, Search, SlidersHorizontal, Star } from 'lucide-react';
 import type { FavoriteList } from '@/utils/favoriteLists';
-import { byChannelName, byGroupName } from '@/utils/channelCustomization';
+import { byChannelName } from '@/utils/channelCustomization';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData, EPGProgram } from '@/types/epg';
@@ -33,7 +33,7 @@ const CategoryButton = React.memo(function CategoryButton({ item, index, selecte
     : item.id === 'all' ? <List className="h-4 w-4" aria-hidden="true" />
     : item.locked ? <Lock className="h-4 w-4" aria-hidden="true" /> : null;
   return <React.Fragment>
-    {item.kind === 'category' && item.id === 'favorites' && index > 0 && <div className="mx-2 my-1.5 border-t border-neutral-900" aria-hidden="true" />}
+    {item.kind === 'action' && item.id === 'search' && index > 0 && <div className="mx-2 my-1.5 border-t border-neutral-900" aria-hidden="true" />}
     <button type="button" aria-current={selected ? 'true' : undefined} data-tv-item data-tv-cat={index}
       data-remote-entry={index === 0 ? '' : undefined} tabIndex={focused ? 0 : -1}
       className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] ${selected ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}>
@@ -141,7 +141,7 @@ function useClock(): Date {
 export function TvLiveScreen({
   playlistId, groups, zapList, favoriteIds, epgData, currentChannel, lockedGroups, unlocked = false,
   onPlay, onLockedGroupSelect, onSearch, onGuide, onMosaic, onRecord, preview = false, previewMode = 'auto',
-  onEdit, onOrganize, favoriteLists, customGroupOrder = false, alphabetical = false, onToggleSort,
+  onEdit, onOrganize, favoriteLists, alphabetical = false, onToggleSort,
 }: TvLiveScreenProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const catRef = useRef<HTMLDivElement>(null);
@@ -188,23 +188,24 @@ export function TvLiveScreen({
   }, [numberingSource]);
 
   const items = useMemo<CategoryItem[]>(() => {
-    const list: CategoryItem[] = [];
-    if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
-    if (onGuide) list.push({ kind: 'action', id: 'guide', label: 'Guide TV' });
-    if (onOrganize) list.push({ kind: 'action', id: 'organize', label: 'Organiser' });
-    if (onToggleSort) list.push({ kind: 'action', id: 'sort', label: alphabetical ? 'Tri : A–Z' : 'Tri : liste' });
-    list.push({ kind: 'category', id: 'favorites', label: 'Favoris', count: favorites.length, locked: false });
+    const list: CategoryItem[] = [
+      { kind: 'category', id: 'all', label: 'Toutes', count: allChannels.filter(allowed).length, locked: false },
+      { kind: 'category', id: 'favorites', label: 'Favoris', count: favorites.length, locked: false },
+    ];
     for (const l of favoriteLists ?? []) {
       list.push({ kind: 'category', id: `favlist:${l.id}`, label: l.name, count: l.channelIds.filter(id => { const c = byId.get(id); return !!c && allowed(c); }).length, locked: false });
     }
     list.push({ kind: 'category', id: 'recent', label: 'Récentes', count: recents.length, locked: false });
-    list.push({ kind: 'category', id: 'all', label: 'Toutes', count: allChannels.filter(allowed).length, locked: false });
-    for (const g of customGroupOrder ? groups : [...groups].sort(byGroupName)) {
+    for (const g of groups) {
       const locked = parentalLocked && lockedSet.has(g.name);
       list.push({ kind: 'category', id: `group:${g.name}`, label: g.name, count: g.channels.length, locked });
     }
+    if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
+    if (onGuide) list.push({ kind: 'action', id: 'guide', label: 'Guide TV' });
+    if (onOrganize) list.push({ kind: 'action', id: 'organize', label: 'Organiser' });
+    if (onToggleSort) list.push({ kind: 'action', id: 'sort', label: alphabetical ? 'Tri : A–Z' : 'Tri : liste' });
     return list;
-  }, [onSearch, onGuide, onOrganize, onToggleSort, alphabetical, favorites.length, favoriteLists, byId, recents.length, allChannels, allowed, groups, customGroupOrder, parentalLocked, lockedSet]);
+  }, [onSearch, onGuide, onOrganize, onToggleSort, alphabetical, favorites.length, favoriteLists, byId, recents.length, allChannels, allowed, groups, parentalLocked, lockedSet]);
 
   const [category, setCategory] = useState<string>(() => storedCategory(playlistId) ?? (favoriteIds.length ? 'favorites' : 'all'));
   useEffect(() => {

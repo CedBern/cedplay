@@ -16,7 +16,7 @@ export interface ChannelEdit {
 
 export interface ListCustomization {
   edits: Record<string, ChannelEdit>;
-  /** Ordre choisi des groupes ; absent = ordre alphabétique. */
+  /** Ordre choisi des groupes ; absent = ordre de la liste source. */
   groupOrder?: string[];
   /** Ordre choisi des chaînes, par nom de groupe (ids). */
   channelOrder?: Record<string, string[]>;
@@ -108,7 +108,7 @@ export const byChannelName = (a: Channel, b: Channel) => compareChannelNames(a.n
 
 /**
  * Groupes affichés après personnalisation. Sans ordre de groupes choisi, l'ordre
- * d'origine est conservé (l'affichage les trie alors par nom, comme avant).
+ * d'origine est conservé.
  */
 export function applyCustomization(groups: ChannelGroup[], custom: ListCustomization): ChannelGroup[] {
   const hasEdits = Object.keys(custom.edits).length > 0;
@@ -120,12 +120,12 @@ export function applyCustomization(groups: ChannelGroup[], custom: ListCustomiza
     const edited = hasEdits ? group.channels.map(c => applyEdit(c, custom.edits[c.id])) : group.channels;
     return { ...group, channels: custom.channelSort === 'name' ? [...edited].sort(byChannelName) : orderBy(edited, order, c => c.id) };
   });
-  return custom.groupOrder ? orderBy(mapped, custom.groupOrder, g => g.name, byGroupName) : mapped;
+  return custom.groupOrder ? orderBy(mapped, custom.groupOrder, g => g.name) : mapped;
 }
 
-/** Ordre d'affichage des groupes : choisi, sinon alphabétique. */
+/** Ordre d'affichage des groupes : choisi, sinon celui de la liste source. */
 export function displayGroupOrder(groups: ChannelGroup[], custom: ListCustomization): ChannelGroup[] {
-  return orderBy(groups, custom.groupOrder, g => g.name, byGroupName);
+  return orderBy(groups, custom.groupOrder, g => g.name);
 }
 
 /** Déplace un élément d'une case (delta -1 / +1) ou en tête (delta = -Infinity). */

@@ -1,4 +1,5 @@
 import { NativePlayerBridge, AudioBridge, buildNativeZap, setNativeEpg, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
+import { watchNativeFavorites } from '@/utils/nativeFavorites';
 import { findExistingPlaylist, reconcilePlaylist } from '@/utils/playlistIdentity';
 import { getXtreamAccount, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { canRefreshPlaylist, downloadXtreamLive, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
@@ -444,6 +445,8 @@ export function IPTVPlayer() {
   }, [currentPlaylist, playableChannels, favoriteIds]);
 
   // Liste complète pour le zapping Android : transmise au calme, une fois par changement de liste.
+  useEffect(() => watchNativeFavorites(playableChannels), [playableChannels]);
+
   useEffect(() => {
     if (!NativePlayerBridge.isAvailable() || !playableChannels.length) return;
     const t = window.setTimeout(() => { void syncNativeZapList(playableChannels); }, 1500);

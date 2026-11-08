@@ -27,7 +27,7 @@ import { createSearchIndex, searchChannels } from '@/utils/channelSearch';
 import { focusRemote } from '@/utils/remoteNavigation';
 import type { FavoriteList } from '@/utils/favoriteLists';
 import { byChannelName } from '@/utils/channelCustomization';
-import { compareGroupNames, tntDisplayName } from '@/utils/tntOrdering';
+import { tntDisplayName } from '@/utils/tntOrdering';
 
 /** Surligne les occurrences de la recherche dans un nom (fonction pure, partagée par toutes les cartes). */
 const highlight = (text: string, rawQuery: string): React.ReactNode => {
@@ -405,7 +405,6 @@ const ChannelCard = React.memo(function ChannelCard({
       onOrganizeFavorites,
       onEditChannel,
       favoriteLists,
-      customGroupOrder = false,
       alphabetical = false
     }: ChannelListProps) {
   const now = useNow();
@@ -702,8 +701,8 @@ const ChannelCard = React.memo(function ChannelCard({
         const lists = (favoriteLists ?? []).map(l => `fav:${l.id}`);
         if (!groups) return ['all', 'favorites', ...lists, 'recent'];
         const names = groups.map(g => g.name);
-        return ['all', 'favorites', ...lists, 'recent', ...(customGroupOrder ? names : names.sort(compareGroupNames))];
-      }, [groups, favoriteLists, customGroupOrder]);
+        return ['all', 'favorites', ...lists, 'recent', ...names];
+      }, [groups, favoriteLists]);
       // Liste de favoris supprimée pendant qu'elle était affichée : revenir à « Toutes ».
       useEffect(() => {
         if (preferencesLoaded && selectedGroup.startsWith('fav:') && favoriteLists && !favoriteLists.some(l => `fav:${l.id}` === selectedGroup)) setSelectedGroup('all');

@@ -40,10 +40,14 @@ describe('personnalisation de la liste', () => {
     expect(out[0]!.channels.map(c => c.id)).toEqual(['s3', 's1', 's2']);
   });
 
-  it('applique l’ordre des groupes ; un groupe nouveau arrive à la fin, par ordre alphabétique', () => {
+  it('applique l’ordre des groupes ; les groupes nouveaux gardent leur ordre d’origine', () => {
     const out = applyCustomization(groups, { edits: {}, groupOrder: ['Info', 'Sport'] });
     expect(out.map(g => g.name)).toEqual(['Info', 'Sport', 'Cinéma']);
-    expect(displayGroupOrder(groups, { edits: {} }).map(g => g.name)).toEqual(['Cinéma', 'Info', 'Sport']);
+    expect(displayGroupOrder(groups, { edits: {} }).map(g => g.name)).toEqual(['Sport', 'Info', 'Cinéma']);
+    const expanded = [...groups, { name: '01 Nouveauté', channels: [] }, { name: 'France', channels: [] }];
+    const custom = { edits: {}, groupOrder: ['Info'] };
+    expect(displayGroupOrder(expanded, custom).map(g => g.name)).toEqual(['Info', 'Sport', 'Cinéma', '01 Nouveauté', 'France']);
+    expect(applyCustomization(expanded, custom).map(g => g.name)).toEqual(['Info', 'Sport', 'Cinéma', '01 Nouveauté', 'France']);
   });
 
   it('numérote un groupe et le zapping numérique suit ces numéros', () => {

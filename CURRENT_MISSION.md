@@ -1,5 +1,14 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Retours d'usage TV — 8 novembre 2026 — 1.12.10/code 58
+
+- Demande : Toutes/Favoris en tête puis ordre fournisseur, relance explicite du flux, zapping depuis le panneau transparent et favori depuis le lecteur. L'ordre manuel des catégories est conservé. Les outils passent après les catégories ; VOD : Toutes puis Ma Liste.
+- Corrigé : index du panneau construit une fois, publication cohérente des indices fenêtre/liste complète, sélection et focus conservés, OK sur TV change de chaîne en gardant le panneau, commandes « Relancer le flux » et ajout/retrait favori. Journal privé des mutations de favoris réconcilié avec IndexedDB, y compris les variantes et les actions successives ; aucune clé ni URL fournisseur dans les nouveaux journaux de diagnostic.
+- 791/791 tests Web, 35/35 Java, typage app/node, lint complet (0 erreur/18 avertissements), build web, synchronisation Capacitor, assembleDebug et assembleRelease réussis. Quatre défauts P2 du premier candidat reproduits puis corrigés lors des contre-revues (variantes/révisions, alias et focus après publication).
+- **Hisense physique** : panneau fermé à la sélection sur 1.12.9, conservé avec focus liste sur le candidat ; Toutes/Favoris en tête ; image réelle après zap. Relance explicite : première image ~2,5 s après la commande sur un essai. Ajout favori depuis lecteur visible dans le filtre natif (3 au lieu de 2), puis retrait ; 47 favoris globaux initiaux retrouvés exactement, ordre compris. Essais instrumentés en diagnostic, puis APK release signée installée sans désinstallation, 58/1.12.10 confirmé, Direct et image de chaîne réelle vérifiés en release. Téléphone absent d'ADB, non mis à jour.
+- **TMDB non résolu** : clé actuellement absente des réglages de la Hisense ; trois tests d'intégration clé refusée/panne réseau conservent le catalogue et la lecture. Aucun correctif spéculatif, aucune clé modifiée ; disparition historique à reproduire avec sa configuration. Fluidité prolongée à confirmer à l'usage.
+- Référence et alias : 4 399 008 octets, SHA-256 `a0252b916c1f2b5674322858478710e43f7e3b2710f7ded06fd054f3bd631038`, même certificat. Rapport `RETOURS_TV_1.12.10_2026-11-08.md`, preuves `preuves/retour-tv/`. Pas de push.
+
 ## 1.12.9 — lots figés et reconnexion du direct, 8 novembre 2026
 
 - Lots A→E figés dans `96f74e2` ; changement concurrent des logos (`3ebf54c`) préservé. Reconnexion native dans `63adb42` : fenêtre 180 s, délais 1,5/3,5/7/15 s plafonnés, une tentative en vol, accélération au retour réseau ; annulation pause effective, zap, cast, sortie et erreur permanente. Politique VOD conservée. Deux défauts de contre-relecture (pause système et Stalker nul en cours de récupération) reproduits puis corrigés.
