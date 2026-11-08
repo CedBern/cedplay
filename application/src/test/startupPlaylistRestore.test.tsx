@@ -203,6 +203,16 @@ describe('Réimport d’une connexion Xtream', () => {
 });
 
 describe('Chaînes gratuites au premier lancement', () => {
+  it('remplace la petite sélection enregistrée au démarrage', async () => {
+    const small = { ...playlist, id: 'cedplay-public-v1', name: 'Chaînes gratuites',
+      channels: Array.from({ length: 13 }, (_, i) => ({ ...channels[0], id: `small-${i}` })) };
+    state.playlists = [small];
+    state.meta = { lastPlaylistId: small.id, publicPlaylistInitialized: true };
+    render(<IPTVPlayer />);
+    await screen.findByRole('button', { name: 'Changer de liste' });
+    expect(loadPublicPlaylist).toHaveBeenCalledOnce();
+    expect(idb.savePlaylistToDB).toHaveBeenCalledWith(expect.objectContaining({ id: small.id, channels: expect.arrayContaining([expect.objectContaining({ id: 'free' })]) }));
+  });
   it('installe la sélection embarquée sans compte puis ouvre Direct sans lancer de lecture', async () => {
     state.playlists = []; state.meta = {};
     render(<IPTVPlayer />);
@@ -232,9 +242,6 @@ describe('Chaînes gratuites au premier lancement', () => {
     render(<IPTVPlayer />);
     await user.click(await screen.findByRole('tab', { name: 'Plus' }));
     await user.click(screen.getByRole('button', { name: /Chaînes gratuites/ }));
-    // La consultation des sources ne remplace pas la liste personnelle sans action explicite.
-    expect(idb.savePlaylistToDB).not.toHaveBeenCalled();
-    await user.click(await screen.findByRole('button', { name: 'Ouvrir / actualiser la sélection' }));
     await waitFor(() => expect(idb.savePlaylistToDB).toHaveBeenCalledWith(expect.objectContaining({ id: 'cedplay-public-v1' })));
     expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
   });

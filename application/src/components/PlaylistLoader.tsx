@@ -58,7 +58,7 @@ export function PlaylistLoader({ onPlaylistLoaded, tvMode = false }: PlaylistLoa
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h4 className="font-semibold text-sm text-white">Chaînes gratuites</h4>
-            <p className="text-xs text-neutral-400">Sélection de diffuseurs officiels : Mexique, France et Allemagne.</p>
+            <p className="text-xs text-neutral-400">Catalogue complet de plus de 1 000 chaînes, classées par pays.</p>
           </div>
           <Button type="button" variant="default" size="sm" disabled={busy} onClick={loadDemo} className="shrink-0">Charger</Button>
         </div>

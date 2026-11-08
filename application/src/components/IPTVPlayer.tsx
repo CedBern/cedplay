@@ -24,7 +24,7 @@ import type { VodResumeRequest } from '@/components/VodLibrary';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
-import { LazyBackupPanel, LazyPublicCatalogueDialog, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayHub, LazySettingsPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
+import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayHub, LazySettingsPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
 import { downloadStalkerPlaylist, stalkerAvailable } from '@/utils/stalker';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2 } from 'lucide-react';
@@ -47,7 +47,7 @@ import { applySeriesRules } from '@/utils/recordingRules';
 import { EpgSettingsDialog } from '@/components/EpgSettingsDialog';
 import type { EPGProgram } from '@/types/epg';
 import { isPlaybackDelegated } from '@/utils/playbackOwnership';
-import { loadPublicPlaylist, playlistDisplayName, reconcilePublicPlaylist, PUBLIC_PLAYLIST_ID, PUBLIC_PLAYLIST_INITIALIZED } from '@/utils/publicPlaylist';
+import { loadPublicPlaylist, isLegacyPublicPlaylist, playlistDisplayName, reconcilePublicPlaylist, PUBLIC_PLAYLIST_ID, PUBLIC_PLAYLIST_INITIALIZED } from '@/utils/publicPlaylist';
 /** Date de la dernière actualisation réussie d'une liste par adresse (manuelle, automatique ou import). */
 const playlistRefreshedKey = (playlistId: string) => `playlistRefreshedAt:${playlistId}`;
 // Dynamic telemetry import helper
@@ -192,6 +192,12 @@ export function IPTVPlayer() {
           }
         }
         if (cancelled) return;
+        // Remplacer uniquement notre petite sélection embarquée, jamais une liste personnelle.
+        if (playlist?.id === PUBLIC_PLAYLIST_ID && [12, 13].includes(playlist.channels.length)) {
+          playlist = reconcilePublicPlaylist(playlist, await loadPublicPlaylist());
+          if (cancelled) return;
+          await savePlaylistToDB(playlist);
+        }
         if (playlist && (firstUse || settings.autoLoadLastPlaylist !== false)) {
           setCurrentPlaylist(playlist);
           if (firstUse) setActiveTab('channels');
@@ -273,13 +279,15 @@ export function IPTVPlayer() {
     }
   };
 
-  const [publicCatalogueOpen, setPublicCatalogueOpen] = useState(false);
   const publicLoading = useRef(false);
   const openPublicPlaylist = async () => {
     if (publicLoading.current) return false;
     publicLoading.current = true;
     try {
-      await handlePlaylistLoaded(await loadPublicPlaylist());
+      const saved = await getPlaylistsFromDB();
+      const existing = saved.find(isLegacyPublicPlaylist) ?? saved.find(p => p.id === PUBLIC_PLAYLIST_ID && p.channels.length > 13);
+      if (existing) await openPlaylist(existing);
+      else await handlePlaylistLoaded(await loadPublicPlaylist());
       await setMeta(PUBLIC_PLAYLIST_INITIALIZED, true);
       return true;
     } catch (error) { toast.error(error instanceof Error ? error.message : 'Chargement impossible.'); return false; }
@@ -744,7 +752,7 @@ export function IPTVPlayer() {
     else setActiveTab(section);
   };
   const openMore = (destination: MoreDestination) => {
-    if (destination === 'free') { setPublicCatalogueOpen(true); }
+    if (destination === 'free') { void openPublicPlaylist(); }
     else if (destination === 'xtream') setXtreamOpen(true);
     else if (destination === 'replay') setActiveTab('replay');
     else if (destination === 'recordings') { setRecordingsChannel(null); setRecordingsOpen(true); }
@@ -885,7 +893,7 @@ export function IPTVPlayer() {
               ))}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => setPublicCatalogueOpen(true)}>Chaînes gratuites officielles</DropdownMenuItem>}
+            {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => void openPublicPlaylist()}>Chaînes gratuites</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
             {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
             <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
@@ -1208,7 +1216,6 @@ export function IPTVPlayer() {
         </DialogContent>
       </Dialog>
 
-      {publicCatalogueOpen && <Suspense fallback={null}><LazyPublicCatalogueDialog onOpenChange={setPublicCatalogueOpen} onOpen={openPublicPlaylist} tvMode={tvMode} /></Suspense>}
       {xtreamOpen && <Suspense fallback={null}><LazyXtreamLoginDialog open onOpenChange={setXtreamOpen} hideTrigger tvMode={tvMode} onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {stalkerOpen && <Suspense fallback={null}><LazyStalkerLoginDialog open onOpenChange={setStalkerOpen} hideTrigger onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {/* Recherche globale unifiée */}

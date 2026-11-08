@@ -9,7 +9,7 @@ import { deletePlaylistFromDB, savePlaylistToDB } from '@/utils/idb';
 import { StorageManager } from '@/utils/storage';
 import { toast } from 'sonner';
 import { canRefreshPlaylist } from '@/utils/xtreamLive';
-import { isLegacyPublicPlaylist, playlistDisplayName } from '@/utils/publicPlaylist';
+import { playlistDisplayName } from '@/utils/publicPlaylist';
 import { cleanUserAgent, DEFAULT_USER_AGENT } from '@/utils/userAgent';
 
 interface PlaylistManagerProps {
@@ -90,7 +90,6 @@ export const PlaylistManager: React.FC<PlaylistManagerProps> = ({ playlists, onS
             <div className="flex flex-col min-w-0">
               <span className={`text-sm truncate ${pl.id === currentId ? 'text-primary font-semibold' : 'text-white'}`}>{playlistDisplayName(pl)}</span>
               <span className="text-xs text-neutral-400">{pl.channels.length} chaînes / {pl.groups.length} groupes</span>
-              {isLegacyPublicPlaylist(pl) && <span className="text-xs text-muted-foreground">Ancienne sélection : relais non vérifiés. La sélection officielle est accessible depuis Plus → Chaînes gratuites.</span>}
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <Button size="icon" variant="ghost" className="h-9 w-9 text-primary" onClick={() => onSelect(pl)} title="Ouvrir la liste" aria-label={`Ouvrir ${pl.name}`}>

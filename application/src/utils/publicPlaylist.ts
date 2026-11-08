@@ -9,13 +9,13 @@ export function isLegacyPublicPlaylist(playlist: PlaylistInfo): boolean {
     (playlist.totalChannelsBeforeDedup === 2465 || playlist.channels.length === 1988);
 }
 
-/** Distingue les anciens catalogues sans renommer les listes personnelles. */
+/** Nomme le catalogue gratuit sans renommer les listes personnelles. */
 export function playlistDisplayName(playlist: PlaylistInfo): string {
-  if (playlist.id === PUBLIC_PLAYLIST_ID) return 'Chaînes gratuites officielles';
-  return isLegacyPublicPlaylist(playlist) ? 'Ancien catalogue communautaire' : playlist.name;
+  if (playlist.id === PUBLIC_PLAYLIST_ID || isLegacyPublicPlaylist(playlist)) return 'Chaînes gratuites';
+  return playlist.name;
 }
 
-/** Le catalogue officiel a un id stable ; une correction d'adresse conserve les favoris. */
+/** Le catalogue gratuit a un id stable ; une correction d'adresse conserve les favoris. */
 export function reconcilePublicPlaylist(previous: PlaylistInfo, incoming: PlaylistInfo): PlaylistInfo {
   const byTvg = new Map(previous.channels.filter(c => c.tvgId).map(c => [c.tvgId, c]));
   const mapped = new Map<string, Channel>(incoming.channels.map(c => {
@@ -29,7 +29,7 @@ export function reconcilePublicPlaylist(previous: PlaylistInfo, incoming: Playli
 
 /** Sélection embarquée : aucun téléchargement de catalogue distant au premier lancement. */
 export async function loadPublicPlaylist(onProgress: (percent: number) => void = () => {}): Promise<PlaylistInfo> {
-  const response = await fetch(`${import.meta.env.BASE_URL}chaines-gratuites.m3u`);
+  const response = await fetch(`${import.meta.env.BASE_URL}flux-legaux.m3u`);
   if (!response.ok) throw new Error('Impossible de charger les chaînes gratuites.');
   const content = await response.text();
   if (!content.trimStart().startsWith('#EXTM3U') || !content.includes('#EXTINF:')) {

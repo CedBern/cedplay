@@ -4,7 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 export type MoreDestination = 'free' | 'replay' | 'recordings' | 'lists' | 'xtream' | 'health' | 'settings';
 
 const entries: { key: MoreDestination; label: string; hint: string; Icon: LucideIcon }[] = [
-  { key: 'free', label: 'Chaînes gratuites', hint: 'Ouvrir la sélection de chaînes officielles, dont le Mexique', Icon: CirclePlay },
+  { key: 'free', label: 'Chaînes gratuites', hint: 'Ouvrir le catalogue complet de plus de 1 000 chaînes', Icon: CirclePlay },
   { key: 'xtream', label: 'Connexion Xtream', hint: 'Ajouter un abonnement : serveur, identifiant, mot de passe', Icon: ListVideo },
   { key: 'replay', label: 'Replay et plateformes', hint: 'Revoir les émissions, ouvrir Netflix, france.tv…', Icon: History },
   { key: 'recordings', label: 'Enregistrements', hint: 'Programmés et terminés', Icon: CircleDot },

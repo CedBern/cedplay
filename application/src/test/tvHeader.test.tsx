@@ -101,10 +101,10 @@ it('le menu ne propose qu’une entrée pour la sélection officielle déjà enr
     render(<IPTVPlayer />);
     await screen.findByText('Reprise test');
     const button = within(header()).getByRole('button', { name: 'Changer de liste' });
-    expect(button).toHaveAttribute('title', 'Chaînes gratuites officielles');
+    expect(button).toHaveAttribute('title', 'Chaînes gratuites');
     await user.click(button);
     expect(await screen.findAllByRole('menuitemradio')).toHaveLength(1);
-    expect(screen.queryByRole('menuitem', { name: 'Chaînes gratuites officielles' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Chaînes gratuites' })).toBeNull();
   } finally { cleanup(); Object.assign(fixture.playlist, previous); }
 });
 

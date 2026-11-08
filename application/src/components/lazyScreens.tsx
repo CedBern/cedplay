@@ -20,7 +20,6 @@ export const LazyGlobalSearchDialog = lazy(() => import('@/components/GlobalSear
 export const LazyXtreamLoginDialog = lazy(() => import('@/components/XtreamLoginDialog').then(m => ({ default: m.XtreamLoginDialog })));
 export const LazyStalkerLoginDialog = lazy(() => import('@/components/StalkerLoginDialog').then(m => ({ default: m.StalkerLoginDialog })));
 export const LazyChannelHealthDialog = lazy(() => import('@/components/ChannelHealthDialog').then(m => ({ default: m.ChannelHealthDialog })));
-export const LazyPublicCatalogueDialog = lazy(() => import('@/components/PublicCatalogueDialog').then(m => ({ default: m.PublicCatalogueDialog })));
 export const LazyPlaylistManager = lazy(() => import('@/components/PlaylistManager').then(m => ({ default: m.PlaylistManager })));
 export const LazyPlaylistLoader = lazy(() => import('@/components/PlaylistLoader').then(m => ({ default: m.PlaylistLoader })));
 export const LazyBackupPanel = lazy(() => import('@/components/BackupPanel').then(m => ({ default: m.BackupPanel })));

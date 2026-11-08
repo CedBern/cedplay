@@ -1,15 +1,27 @@
 import { readFileSync } from 'node:fs';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { M3UParser } from '@/utils/m3uParser';
-import { isLegacyPublicPlaylist, playlistDisplayName, reconcilePublicPlaylist, PUBLIC_PLAYLIST_ID } from '@/utils/publicPlaylist';
+import { loadPublicPlaylist, isLegacyPublicPlaylist, playlistDisplayName, reconcilePublicPlaylist, PUBLIC_PLAYLIST_ID } from '@/utils/publicPlaylist';
 
-it('distingue la sélection officielle de l’ancien catalogue sans renommer les listes privées', () => {
+it('affiche le grand catalogue comme Chaînes gratuites sans renommer les listes privées', () => {
   const base = { id: 'old', name: 'Flux publics légaux', channels: [], groups: [], totalChannelsBeforeDedup: 2465 };
   expect(isLegacyPublicPlaylist(base)).toBe(true);
-  expect(playlistDisplayName(base)).toBe('Ancien catalogue communautaire');
-  expect(playlistDisplayName({ ...base, id: PUBLIC_PLAYLIST_ID, name: 'Chaînes gratuites' })).toBe('Chaînes gratuites officielles');
+  expect(playlistDisplayName(base)).toBe('Chaînes gratuites');
+  expect(playlistDisplayName({ ...base, id: PUBLIC_PLAYLIST_ID, name: 'Chaînes gratuites' })).toBe('Chaînes gratuites');
   expect(playlistDisplayName({ ...base, name: 'Ma liste' })).toBe('Ma liste');
   expect(isLegacyPublicPlaylist({ ...base, totalChannelsBeforeDedup: 20 })).toBe(false);
+});
+
+it('le bouton gratuit charge le grand catalogue embarqué et non une petite sélection', async () => {
+  const content = readFileSync('public/flux-legaux.m3u', 'utf8');
+  const fetchMock = vi.fn(async () => ({ ok: true, text: async () => content }));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const playlist = await loadPublicPlaylist();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/flux-legaux\.m3u$/));
+    expect(playlist.id).toBe(PUBLIC_PLAYLIST_ID);
+    expect(playlist.channels).toHaveLength(1988);
+  } finally { vi.unstubAllGlobals(); }
 });
 
 it('une adresse officielle corrigée conserve l’identité et les favoris de la chaîne', () => {
@@ -32,17 +44,4 @@ it('importe le catalogue public embarqué complet dans les deux chemins du parse
   expect(workerPath.channels).toEqual(sync.channels);
   expect(sync.groups).toHaveLength(8);
   expect(new Set(sync.channels.map(c => c.id)).size).toBe(1988);
-});
-
-it('la sélection par défaut contient les neuf chaînes mexicaines vérifiées et leurs sources', () => {
-  const content = readFileSync('public/chaines-gratuites.m3u', 'utf8');
-  const sources = JSON.parse(readFileSync('public/chaines-gratuites-sources.json', 'utf8')) as { name: string; url: string; source: string; hls: boolean }[];
-  const playlist = M3UParser.parseM3U(content, 'Gratuites');
-  const mexico = playlist.groups.find(g => g.name === 'Mexique')!;
-  expect(mexico.channels.map(c => c.name)).toEqual(expect.arrayContaining(['Canal Once', 'Canal 22', 'MX Nuestro Cine', 'TV UNAM', 'Canal 14', 'TV Migrante', 'Canal 21', 'Televisión Mexiquense', 'SMRTV']));
-  expect(playlist.channels.length).toBe(sources.length);
-  for (const channel of playlist.channels) {
-    expect(sources).toContainEqual(expect.objectContaining({ name: channel.name, url: channel.url, hls: true }));
-    expect(channel.url).toMatch(/^https:\/\//);
-  }
 });

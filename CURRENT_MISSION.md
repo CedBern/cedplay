@@ -591,3 +591,32 @@ Points ouverts pour continuer :
 - Vérifié : 630/630 tests (94 fichiers), 19 tests Java ; tsc app+node et ESLint complet 0 erreur/18 avertissements existants ; build web/Capacitor/assembleRelease OK. 22 tests finaux mosaïque/rappels relancés après correction du typage du mock.
 - APK CedPlay-1.12.0.apk / code 48 : 4604701 octets ; SHA-256 5b24de883b164475bc68ecf3ea72b1380931282247ba957863a6baf2d6ac9aa2. Même certificat habituel, 73 fichiers web conformes et 326 sources inchangées. Ancienne 1.12.0/code 47 conservée dans les preuves.
 - Aucun essai appareil, installation, mesure de fluidité ou test privé/VPN. Recette restante : notification refus/accord/appui à froid, mosaïque protégée, Replay réel et télécommande, sous-titres/enchaînement web. Rapport : preuves/lot-d-replay-1.12.0-2026-11-07/RAPPORT.md.
+
+## Version unifiée installée pour recette - 7 novembre 2026
+
+- L'utilisateur confirme vouloir tout ensemble pour tester : consolidation 59c1b84 conservée avec Lot D + Replay, version 1.12.0/code 48. Aucune branche 1.11.18 séparée créée.
+- APK existante contrôlée : 4604701 octets, SHA-256 5b24de883b164475bc68ecf3ea72b1380931282247ba957863a6baf2d6ac9aa2 ; signature valide et certificat habituel. Aucun nouveau build produit.
+- Mise à jour ADB avec install -r réussie sur le Motorola Edge 70 connecté ; dumpsys confirme 1.12.0/code 48. Aucune désinstallation ni suppression de données demandée.
+- Vérifications rejouées : TypeScript app + node OK ; ESLint complet 0 erreur/18 avertissements. Vitest et build bloqués au démarrage par spawn EPERM (esbuild) dans cette session ; les 630 tests et le build réussis restent ceux du rapport de livraison précédent, pas une validation reproduite ici.
+- Aucun appareil TV connecté et aucune lecture Replay réelle validée. Prochaine action : recette utilisateur de Replay avec liste compatible, navigation télécommande, mosaïques, rappels et enchaînement web.
+- Fiche Second Cerveau et entretien non actualisés : emplacement hors des racines autorisées en écriture de cette session.
+
+## Suppression de la petite sélection et retour du grand catalogue - 7 novembre 2026
+
+- Demande utilisateur : supprimer la sélection de 13 chaînes qui avait relégué son catalogue de plus de 1 000 chaînes.
+- Retirés : sélection M3U/JSON de 13 chaînes, dialogue de sources, utilitaire, scripts et tests liés à cette fonctionnalité supprimée. Le catalogue flux-legaux.m3u reste embarqué (2 465 entrées, 1 988 chaînes après dédoublonnage selon le test de référence).
+- Chaînes gratuites utilise désormais flux-legaux.m3u au premier lancement et dans l'importeur. Plus ouvre directement le grand catalogue, réutilisant une liste historique déjà enregistrée pour conserver son identité et ses favoris. Le libellé Ancien catalogue communautaire et le renvoi vers la petite sélection sont supprimés.
+- Remplacement au démarrage limité à la liste intégrée cedplay-public-v1 de 12 ou 13 chaînes ; les listes personnelles ne sont pas migrées. Régressions ajoutées pour la ressource réellement chargée et le remplacement au démarrage ; tests de navigation adaptés à l'accès direct.
+- Vérifié dans cette session : TypeScript app et node sans erreur ; ESLint complet sans erreur, 18 avertissements existants. Vitest et build web tentés, bloqués au démarrage par spawn EPERM dans esbuild. Ces changements ne sont pas annoncés comme une livraison validée.
+- Aucun nouvel APK produit ni installé : le téléphone reste sur l'APK 1.12.0/code 48 précédente. Pas de recette physique du correctif, pas de commit/push.
+- Fiche Second Cerveau et entretien non actualisés : emplacement hors des racines autorisées en écriture de cette session.
+
+## Livraison 1.12.1 / code 49 - 7 novembre 2026
+
+- Session ZCode (GLM) : reprise des modifications non committées de l'arbre principal (retrait de la petite sélection, retour du grand catalogue « Chaînes gratuites » via flux-legaux.m3u embarqué), relues intégralement avant reprise.
+- Le `spawn EPERM` sur esbuild qui bloquait la session précédente ne s'est jamais reproduit ici : esbuild n'a pas de shim `node_modules/.bin/` sous pnpm (dépendance transitique de vite) et tous les outils passent depuis le shell de cette session.
+- Version montée 1.12.1 / code 49 aux trois emplacements (package.json, build.gradle, pied SettingsPanel).
+- Vérifié sur l'arbre principal : tsc app+node 0 erreur ; ESLint complet 0 erreur / 18 avertissements existants ; vitest 625/625 (93 fichiers — un fichier de moins, retrait des tests de la sélection supprimée) ; vite build 9,1 s (dist 2,7 Mo, flux-legaux.m3u embarqué, plus aucun fichier de la petite sélection) ; cap sync (2 plugins) ; assembleRelease OK.
+- APK CedPlay-1.12.1.apk à la racine : 4 599 277 octets ; SHA-256 da30eda12a7d617f79e79043255862fd2e37bcfb421a578c1879d091343cef44 ; versionCode 49 / versionName 1.12.1 confirmés par aapt dump badging. La 1.12.0/code 48 reste à la racine pour référence.
+- Installation adb réussie : `adb install -r` sur le Motorola Edge 70 (ZY22MBQQW7) sans désinstallation ; dumpsys confirme versionCode 49 / versionName 1.12.1. Premier passage sans appareil (téléphone déconnecté, rebranché entre-temps ; redémarrage du serveur adb sans effet sur la détection).
+- Commit 1.12.1 sur consolidate/v1.11.4 (modifications application + ce journal ; AGENTS.md et export-raster.ps1 laissés hors git).
