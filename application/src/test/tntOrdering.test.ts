@@ -44,6 +44,29 @@ describe('tntNumberFor', () => {
     expect(tntNumberFor('French - M6')).toBe(6);
   });
 
+  it('ne confond pas les chaînes musicales avec leur chaîne TNT homonyme', () => {
+    for (const name of ['M6 MUSIC', 'FR: M6 MUSIC FHD', 'CSTAR HITS', 'FR: CSTAR HITS FHD']) {
+      expect(tntNumberFor(name), name).toBeNull();
+      expect(tntDisplayName(name)).toBe(name);
+    }
+    for (const suffix of ['', ' SD', ' HD', ' FHD', ' UHD', ' 4K', ' HD 50FPS']) {
+      expect(tntNumberFor(`FR: M6${suffix}`)).toBe(6);
+      expect(tntNumberFor(`FR: CSTAR${suffix}`)).toBe(17);
+    }
+  });
+
+  it('conserve la numérotation des généralistes et de leurs variantes TS du catalogue réel', () => {
+    for (const name of ['FR: M6 HD (TS)', 'FR: M6 FHD (TS)', 'FR: M6 INTER FHD', 'FR: M6 INTER FHD (TS)']) {
+      expect(tntNumberFor(name), name).toBe(6);
+    }
+    for (const name of ['FR: CSTAR HD (TS)', 'FR: CSTAR FHD (TS)']) {
+      expect(tntNumberFor(name), name).toBe(17);
+    }
+    for (const name of ['FR: M6 MUSIC (TS)', 'FR: M6 MUSIC FHD (TS)', 'FR: CSTAR HITS FHD (TS)']) {
+      expect(tntNumberFor(name), name).toBeNull();
+    }
+  });
+
   it('ne numérote ni France 24, ni les déclinaisons, ni les noms à symbole ou déjà numérotés', () => {
     expect(tntNumberFor('France 24')).toBeNull();
     expect(tntNumberFor('Gulli Max')).toBeNull();
@@ -140,6 +163,34 @@ describe('tntDisplayName', () => {
 });
 
 describe('orderFrenchGroupsForTnt', () => {
+  it('conserve le titre fournisseur avant les chaînes musicales de la photo', () => {
+    const names = ['FR: -- MUSIQUE / NEWS --', 'FR: M6 MUSIC', 'FR: M6 MUSIC FHD', 'FR: NRJ HITS HD', 'FR: NRJ HITS FHD', 'FR: MCM HD', 'FR: MCM FHD', 'FR: MTV HD', 'FR: CSTAR HITS FHD'];
+    expect(orderFrenchGroupsForTnt([group('FR MUSIQUE', names)])[0].channels.map(c => c.name)).toEqual(names);
+  });
+
+  it('ne déplace aucune chaîne à travers un titre de section fournisseur', () => {
+    const names = ['TV5 Monde', 'W9', 'FR: -- GENERALISTES --', 'M6 HD', 'TF1 FHD', 'FR: -- AUTRES --', 'Arte', 'France 2'];
+    expect(orderFrenchGroupsForTnt([group('FR', names)])[0].channels.map(c => c.name)).toEqual([
+      'W9', 'TV5 Monde', 'FR: -- GENERALISTES --', 'TF1 FHD', 'M6 HD', 'FR: -- AUTRES --', 'France 2', 'Arte',
+    ]);
+  });
+
+  it('respecte les sections sans préfixe pays et les sections vides', () => {
+    const names = ['== EN TETE ==', '-- A SUIVRE --', 'M6', 'TF1', '--- FIN ---'];
+    expect(orderFrenchGroupsForTnt([group('FR', names)])[0].channels.map(c => c.name)).toEqual([
+      '== EN TETE ==', '-- A SUIVRE --', 'TF1', 'M6', '--- FIN ---',
+    ]);
+  });
+
+  it('ne change ni les données sources ni un ordre manuel contenant un titre', () => {
+    const names = ['M6', 'FR: -- GENERALISTES --', 'France 2', 'TF1'];
+    const input = [group('FR', names)];
+    const output = orderFrenchGroupsForTnt(input);
+    expect(input[0].channels.map(c => c.name)).toEqual(names);
+    for (const channel of output[0].channels) expect(channel).toBe(input[0].channels.find(c => c.id === channel.id));
+    expect(orderFrenchGroupsForTnt(input, { channelOrder: { FR: names } })[0]).toBe(input[0]);
+  });
+
   it('place les généralistes TNT en tête des groupes français, le reste garde son ordre', () => {
     const groups = [group('FR', ['TV5 Monde', 'W9', 'TF1', 'France 2']), group('Sports', ['beIN 1', 'Arsenal TV'])];
     const out = orderFrenchGroupsForTnt(groups);

@@ -20,7 +20,7 @@ const TNT_FR: Array<{ num: number; test: RegExp }> = [
   { num: 3, test: /^france[ .·:_|-]*3(?![0-9])/ },
   { num: 4, test: /^france[ .·:_|-]*4(?![0-9])/ },
   { num: 5, test: /^france[ .·:_|-]*5(?![0-9])/ },
-  { num: 6, test: /^m6(?![a-z0-9])/ },
+  { num: 6, test: /^m6(?: inter)?(?: (?:sd|hd|fhd|uhd|4k|8k|50fps|60fps))*(?: \(ts\))?$/ },
   { num: 7, test: /^arte(?![a-z0-9])/ },
   { num: 8, test: /^(lcp|public ?senat)(?![a-z0-9])/ },
   { num: 9, test: /^w9(?![a-z0-9])/ },
@@ -31,7 +31,7 @@ const TNT_FR: Array<{ num: number; test: RegExp }> = [
   { num: 14, test: /^c ?news(?![a-z0-9])/ },
   { num: 15, test: /^lci(?![a-z0-9])/ },
   { num: 16, test: /^france[ .·:_|-]*info/ },
-  { num: 17, test: /^c ?star(?![a-z0-9])/ },
+  { num: 17, test: /^c ?star(?: (?:sd|hd|fhd|uhd|4k|8k|50fps|60fps))*(?: \(ts\))?$/ },
   { num: 18, test: /^t18(?![a-z0-9])/ },
   { num: 19, test: /^novo ?19(?![a-z0-9])/ },
   { num: 21, test: /^l ?'? ?equipe(?![a-z0-9])/ },
@@ -113,21 +113,43 @@ interface OrderGuard {
   channelSort?: 'name' | undefined;
 }
 
+function isProviderSectionTitle(name: string): boolean {
+  const title = normalizeName(name).replace(/^(fr|french)(?:\s+-\s+|[ .·:_|>]+)/, '');
+  return /^[-_=*]{2,}\s*[^\s].*[-_=*]{2,}$/.test(title);
+}
+
 /** Dans un groupe français sans ordre personnalisé, les généralistes TNT passent en tête
  * (1 → 25) et le reste du groupe conserve son ordre d'origine. Le tri A–Z (déjà TNT via
- * le comparateur) et l'ordre choisi dans Organiser priment. */
+ * le comparateur) et l'ordre choisi dans Organiser priment. Les titres de section du
+ * fournisseur délimitent les chaînes qui peuvent être réordonnées ensemble. */
 export function orderFrenchGroupsForTnt(groups: ChannelGroup[], custom?: OrderGuard | undefined): ChannelGroup[] {
   if (custom?.channelSort === 'name') return groups;
   return groups.map(group => {
     if (!isFrenchGroupName(group.name) || custom?.channelOrder?.[group.name]?.length) return group;
-    const numbered: Array<{ channel: Channel; num: number }> = [];
-    const rest: Channel[] = [];
+    let numbered: Array<{ channel: Channel; num: number }> = [];
+    let rest: Channel[] = [];
+    const ordered: Channel[] = [];
+    let hasNumbered = false;
+    const flushSection = () => {
+      numbered.sort((x, y) => x.num - y.num || x.channel.name.localeCompare(y.channel.name, 'fr', { numeric: true, sensitivity: 'base' }));
+      ordered.push(...numbered.map(entry => entry.channel), ...rest);
+      numbered = [];
+      rest = [];
+    };
     for (const channel of group.channels) {
+      if (isProviderSectionTitle(channel.name)) {
+        flushSection();
+        ordered.push(channel);
+        continue;
+      }
       const num = symbolLedName(channel.name) ? null : tntNumberFor(channel.name);
-      if (num) numbered.push({ channel, num }); else rest.push(channel);
+      if (num) {
+        hasNumbered = true;
+        numbered.push({ channel, num });
+      } else rest.push(channel);
     }
-    if (!numbered.length) return group;
-    numbered.sort((x, y) => x.num - y.num || x.channel.name.localeCompare(y.channel.name, 'fr', { numeric: true, sensitivity: 'base' }));
-    return { ...group, channels: [...numbered.map(entry => entry.channel), ...rest] };
+    if (!hasNumbered) return group;
+    flushSection();
+    return { ...group, channels: ordered };
   });
 }

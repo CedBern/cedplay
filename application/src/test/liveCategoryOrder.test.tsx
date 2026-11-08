@@ -6,6 +6,7 @@ import { ChannelList } from '@/components/ChannelList';
 import { TvLiveScreen } from '@/components/TvLiveScreen';
 import { setMeta } from '@/utils/idb';
 import type { ChannelGroup } from '@/types/channel';
+import { orderFrenchGroupsForTnt } from '@/utils/tntOrdering';
 
 const groups: ChannelGroup[] = ['Sport', '01 Films', 'France', '✪ Divers'].map((name, index) => ({
   name,
@@ -48,4 +49,23 @@ it('mobile : les catégories numérotées ou françaises ne passent pas devant l
   await userEvent.click(screen.getByRole('tab', { name: /^01 Films/ }));
   expect(await screen.findByRole('heading', { name: 'Programme 1' })).toBeVisible();
   expect(screen.queryByRole('heading', { name: 'Programme 2' })).toBeNull();
+});
+
+const musicGroup: ChannelGroup = { name: 'FR MUSIQUE', channels: [
+  'FR: -- MUSIQUE / NEWS --', 'FR: M6 MUSIC', 'FR: M6 MUSIC FHD', 'FR: NRJ HITS HD', 'FR: CSTAR HITS FHD',
+].map((name, i) => ({ id: `music-${i}`, name, group: 'FR MUSIQUE', url: `https://example.test/music-${i}` })) };
+
+it('TV : le titre MUSIQUE / NEWS reste la première ligne du groupe après préparation du Direct', () => {
+  render(<TvLiveScreen playlistId="section-order-tv" groups={orderFrenchGroupsForTnt([musicGroup])} favoriteIds={[]}
+    onPlay={() => {}} />);
+  fireEvent.click(screen.getByRole('button', { name: /^FR MUSIQUE/ }));
+  expect([...document.querySelectorAll('[data-channel-row-id]')].map(e => e.getAttribute('data-channel-row-id')))
+    .toEqual(musicGroup.channels.map(c => c.id));
+});
+
+it('mobile : le titre de section précède aussi M6 Music et CStar Hits', async () => {
+  render(<ChannelList playlistId="section-order-mobile" groups={orderFrenchGroupsForTnt([musicGroup])} onChannelSelect={() => {}} />);
+  await screen.findByRole('heading', { name: 'FR: -- MUSIQUE / NEWS --' });
+  expect([...document.querySelectorAll('[data-channel-id]')].map(e => e.getAttribute('data-channel-id')))
+    .toEqual(musicGroup.channels.map(c => c.id));
 });
