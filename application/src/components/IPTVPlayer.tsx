@@ -24,7 +24,7 @@ import type { VodResumeRequest } from '@/components/VodLibrary';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { MiniAudioPlayer } from '@/components/MiniAudioPlayer';
-import { LazyBackupPanel, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
+import { LazyBackupPanel, LazyPublicCatalogueDialog, LazyChannelHealthDialog, LazyChannelList, LazyContinuePanel, LazyEPGGrid, LazyGlobalSearchDialog, LazyMoviesPanel, LazyPlaylistLoader, LazyPlaylistManager, LazyPodcastsPanel, LazyRecordings, LazyReplayPanel, LazySettingsPanel, LazyStreamingPanel, LazyTvLiveScreen, LazyVideoPlayer, LazyVodLibrary, LazyXtreamLoginDialog, LazyStalkerLoginDialog, PanelFallback } from '@/components/lazyScreens';
 import { downloadStalkerPlaylist, stalkerAvailable } from '@/utils/stalker';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Upload, List, Play, Maximize2, X, Download, ArrowLeft, LayoutGrid, ChevronDown, Grid2X2, CircleDot, Search, Loader2 } from 'lucide-react';
@@ -272,14 +272,16 @@ export function IPTVPlayer() {
     }
   };
 
+  const [publicCatalogueOpen, setPublicCatalogueOpen] = useState(false);
   const publicLoading = useRef(false);
   const openPublicPlaylist = async () => {
-    if (publicLoading.current) return;
+    if (publicLoading.current) return false;
     publicLoading.current = true;
     try {
       await handlePlaylistLoaded(await loadPublicPlaylist());
       await setMeta(PUBLIC_PLAYLIST_INITIALIZED, true);
-    } catch (error) { toast.error(error instanceof Error ? error.message : 'Chargement impossible.'); }
+      return true;
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Chargement impossible.'); return false; }
     finally { publicLoading.current = false; }
   };
 
@@ -738,7 +740,7 @@ export function IPTVPlayer() {
     else setActiveTab(section);
   };
   const openMore = (destination: MoreDestination) => {
-    if (destination === 'free') { void openPublicPlaylist(); }
+    if (destination === 'free') { setPublicCatalogueOpen(true); }
     else if (destination === 'xtream') setXtreamOpen(true);
     else if (destination === 'replay' || destination === 'streaming') setActiveTab(destination);
     else if (destination === 'recordings') { setRecordingsChannel(null); setRecordingsOpen(true); }
@@ -879,7 +881,7 @@ export function IPTVPlayer() {
               ))}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => { void openPublicPlaylist(); }}>Chaînes gratuites officielles</DropdownMenuItem>}
+            {currentPlaylist.id !== PUBLIC_PLAYLIST_ID && !allPlaylists.some(pl => pl.id === PUBLIC_PLAYLIST_ID) && <DropdownMenuItem onSelect={() => setPublicCatalogueOpen(true)}>Chaînes gratuites officielles</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => setXtreamOpen(true)}>Ajouter un compte Xtream</DropdownMenuItem>
             {stalkerAvailable() && <DropdownMenuItem onSelect={() => setStalkerOpen(true)}>Ajouter un portail MAC (Stalker)</DropdownMenuItem>}
             <DropdownMenuItem onSelect={handleLoadNewPlaylist}>Gérer et importer les listes</DropdownMenuItem>
@@ -1202,6 +1204,7 @@ export function IPTVPlayer() {
         </DialogContent>
       </Dialog>
 
+      {publicCatalogueOpen && <Suspense fallback={null}><LazyPublicCatalogueDialog onOpenChange={setPublicCatalogueOpen} onOpen={openPublicPlaylist} tvMode={tvMode} /></Suspense>}
       {xtreamOpen && <Suspense fallback={null}><LazyXtreamLoginDialog open onOpenChange={setXtreamOpen} hideTrigger tvMode={tvMode} onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {stalkerOpen && <Suspense fallback={null}><LazyStalkerLoginDialog open onOpenChange={setStalkerOpen} hideTrigger onPlaylistLoaded={handlePlaylistLoaded} /></Suspense>}
       {/* Recherche globale unifiée */}

@@ -572,3 +572,13 @@ Points ouverts pour continuer :
 - NordVPN : utilisateur signale mêmes échecs sans VPN puis avec Paris et Bordeaux (TF1/M6/France TV). Pas de preuve de blocage VPN ; aucun flux privé ni VPN de l'utilisateur testé. Ne pas confondre les anciens relais avec sa liste privée.
 - Vérifié : 581/581 tests (89 fichiers), tsc app+node OK, ESLint src 0 erreur/18 avertissements ; web/Capacitor/assembleRelease et signature OK. 359 sources inchangées, 73 fichiers web conformes. APK CedPlay-1.11.16.apk / code 45 : 4584483 octets ; SHA-256 557b77ef831d4dca0949236975e972970fbc54571b5f7cea0229ab72de5d673a.
 - Pas installée ; géométrie réelle de l'en-tête non mesurée (navigateur de contrôle désactivé). Rapport : preuves/entete-tri-flux-2026-11-07/RAPPORT.md. Aucun push.
+
+
+## Catalogue gratuit sourcé et entretenu — 7 novembre 2026
+
+- Plus → Chaînes gratuites : sources officielles consultables par pays, dates de contrôle et tri A–Z. Ouvrir / actualiser charge l'unique sélection officielle ; consulter les sources ne remplace pas une liste personnelle. Filtre pays de consultation seulement.
+- 13 chaînes dont 10 mexicaines : TV de Puebla ajoutée depuis SPR/MXPlus (H264 720p / AAC reconnus). Les 13 manifestes et échantillons média répondent depuis le poste, sans essai box ni diagnostic privé/VPN.
+- Script public-catalogue.py : JSON source unique, génération M3U et contrôle borné avec dates, conservation des échecs sans suppression automatique. Sources et logos officiels ; pas d'import communautaire massif.
+- Test isolé insuffisant repéré : capture globale des flèches en conflit avec le dialogue. Reproduction rouge avec useRemoteNavigation monté, correction data-remote-self puis test vert, y compris accès au bouton depuis le milieu de 289 sources.
+- Vérifié : 587/587 tests (90 fichiers), tsc app+node OK, ESLint complet 0 erreur/18 avertissements ; web/Capacitor/assembleRelease et même signature. 364 sources inchangées et 74 fichiers web conformes. APK 1.11.17 / code 46 : 4587575 octets, SHA-256 e8981e0c84b583a2f9058fb4b2b6736d039e884b2916e1d3b7f1d77531d13428.
+- Pas d'installation ni de recette physique ou mesure de géométrie. Radios et chapitres/transcriptions non ajoutés dans ce lot. Rapport : preuves/catalogue-gratuit-2026-11-07/RAPPORT.md. Aucun push.

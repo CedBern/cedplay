@@ -232,6 +232,9 @@ describe('Chaînes gratuites au premier lancement', () => {
     render(<IPTVPlayer />);
     await user.click(await screen.findByRole('tab', { name: 'Plus' }));
     await user.click(screen.getByRole('button', { name: /Chaînes gratuites/ }));
+    // La consultation des sources ne remplace pas la liste personnelle sans action explicite.
+    expect(idb.savePlaylistToDB).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole('button', { name: 'Ouvrir / actualiser la sélection' }));
     await waitFor(() => expect(idb.savePlaylistToDB).toHaveBeenCalledWith(expect.objectContaining({ id: 'cedplay-public-v1' })));
     expect(screen.getByRole('tab', { name: 'Direct' })).toHaveAttribute('aria-selected', 'true');
   });

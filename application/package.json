@@ -1,8 +1,10 @@
 {
   "name": "cedplay",
-  "version": "1.11.16",
+  "version": "1.11.17",
   "packageManager": "pnpm@8.10.0",
   "scripts": {
+    "catalogue:check": "python scripts/public-catalogue.py",
+    "catalogue:probe": "python scripts/public-catalogue.py --probe --write",
     "dev": "vite --host 127.0.0.1 --port 5178 --strictPort",
     "build": "vite build",
     "lint": "eslint --quiet ./src",

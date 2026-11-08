@@ -5,10 +5,10 @@
     "url": "https://vivo.canaloncelive.tv/secureoncedos/oncedigital/playlist.m3u8",
     "source": "https://www.canalonce.mx/en-vivo",
     "group": "Mexique",
-    "logo": "",
+    "logo": "https://mxplus.tv/img/logos/canales/white/canal-11.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:22.946707+00:00",
+    "checkedAt": "2026-11-08T02:57:37.123157+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -18,10 +18,10 @@
     "url": "https://5fc584f3f19c9.streamlock.net:443/canal22/videocanal22/playlist.m3u8",
     "source": "https://www.canal22.org.mx/streaming-22-1.html",
     "group": "Mexique",
-    "logo": "",
+    "logo": "https://mxplus.tv/img/logos/canales/white/canal-22.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:22.947466+00:00",
+    "checkedAt": "2026-11-08T02:57:37.124622+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -34,7 +34,7 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:22.948148+00:00",
+    "checkedAt": "2026-11-08T02:57:37.125347+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -44,10 +44,10 @@
     "url": "https://5fc584f3f19c9.streamlock.net/tvunam/videotvunam/playlist.m3u8",
     "source": "https://tv.unam.mx/en-vivo/",
     "group": "Mexique",
-    "logo": "",
+    "logo": "https://mxplus.tv/img/logos/canales/white/tv-unam.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:22.948660+00:00",
+    "checkedAt": "2026-11-08T02:57:37.126333+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -60,7 +60,7 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/canal-14.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:22.949241+00:00",
+    "checkedAt": "2026-11-08T02:57:37.643839+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -73,7 +73,7 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/logo_tvm.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:22.949928+00:00",
+    "checkedAt": "2026-11-08T02:57:38.108569+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -86,7 +86,7 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/capital.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:23.444215+00:00",
+    "checkedAt": "2026-11-08T02:57:38.454529+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -99,7 +99,7 @@
     "logo": "https://mxplus.tv/upload/images/tv/tv_logotipo_1786392146_66b5d3fa.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:23.910998+00:00",
+    "checkedAt": "2026-11-08T02:57:38.476260+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -112,7 +112,20 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/smrtv.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:23.911716+00:00",
+    "checkedAt": "2026-11-08T02:57:38.874157+00:00",
+    "segmentStatus": 200,
+    "segmentSampleBytes": 32768
+  },
+  {
+    "id": "TVPuebla.mx",
+    "name": "TV de Puebla",
+    "url": "https://5d0d1d7a6be9e.streamlock.net/sicom/canal1/playlist.m3u8",
+    "source": "https://mxplus.tv/apiv3/channels",
+    "group": "Mexique",
+    "logo": "https://mxplus.tv/img/logos/canales/white/tv-puebla.png",
+    "checkedAt": "2026-11-08T02:57:39.316736+00:00",
+    "status": 200,
+    "hls": true,
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -125,7 +138,7 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:24.235195+00:00",
+    "checkedAt": "2026-11-08T02:57:39.336479+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -138,7 +151,7 @@
     "logo": "",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:24.309357+00:00",
+    "checkedAt": "2026-11-08T02:57:39.353478+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   },
@@ -151,7 +164,7 @@
     "logo": "https://mxplus.tv/img/logos/canales/white/dw.png",
     "status": 200,
     "hls": true,
-    "checkedAt": "2026-11-08T02:24:24.309676+00:00",
+    "checkedAt": "2026-11-08T02:57:40.118163+00:00",
     "segmentStatus": 200,
     "segmentSampleBytes": 32768
   }
