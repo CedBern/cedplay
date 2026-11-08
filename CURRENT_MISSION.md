@@ -678,3 +678,19 @@ Points ouverts pour continuer :
   - `adb install -r` réussi sans désinstallation ni perte de données sur les deux appareils connectés : Hisense HiSmartTV A4 (`192.168.100.2:5555`) et Motorola Edge 70 (`ZY22MBQQW7`).
   - Vérification physique sur la Hisense TV : ouverture de CedPlay sur l'Accueil, basculement vers l'onglet Films, défilement vers le bas dans la grille (`input keyevent 20`) avec affichage synchrone et complet de toutes les affiches de chaque rangée sans pop-in décalé, panneau d'informations latéral immédiatement illustré, et changement instantané de catégorie vers `(V|FR) IMDb Top 50` avec chargement immédiat de toutes les affiches visibles.
 
+
+## Plateformes : l'application officielle avant le navigateur — 1.12.6 / code 54, 8 novembre 2026
+
+**Demande.** « J'ai un problème quand je veux accéder à mes plateformes de streaming, ça lance la page internet […] J'aimerais que ça renvoie directement à l'application » — les apps officielles (Netflix, TF1+, YouTube…) offrent de meilleures performances et résolutions que leur page web.
+
+**Cause.** `openWeb` côté Java faisait un `ACTION_VIEW` générique sur l'URL https : pour la racine des domaines (netflix.com, tf1.fr…), les filtres App Links des apps officielles ne s'appliquent pas et Android ouvrait le navigateur par défaut.
+
+**Solution (aucune donnée réécrite).**
+- `streamingPlatforms.ts` : champ `androidPackages` par plateforme (IDs vérifiés un à un sur le Play Store le 8 novembre 2026 ; variantes TV en second, ex. YouTube `com.google.android.youtube` puis `com.google.android.youtube.tv`, Prime Video `…thirdpartyclient` puis `…livingroom`). OCS partage le paquet myCANAL ; Rakuten TV = `tv.wuaki`, Max = `com.wbd.stream`, TF1+ = `fr.tf1.mytf1`, M6+ = `fr.m6.m6replay`, france.tv = `fr.francetv.pluzz`, Arte = `tv.arte.plus7`, ADN = `fr.anidn`.
+- `NativePlayerPlugin.openWeb` (Java) : échelle par paquet candidat — 1) `ACTION_VIEW`+`setPackage` si l'app gère l'URL exacte (App Links), 2) si `allowAppHome`, `getLaunchIntentForPackage` (accueil de l'app), 3) sinon navigateur comme avant. La recherche sur sites officiels (ReplayHub + résultats Replay de la recherche globale) reste en mode strict : jamais de lancement à l'aveugle qui perdrait la requête ; les tuiles de plateformes et les résultats Plateformes de la recherche globale passent `allowAppHome`.
+- Manifeste : bloc `<queries>` (visibilité Android 11+) avec requête intent https + les 22 paquets listés ; vérifié dans l'APK final (`aapt dump xmltree`).
+- Passation : `nativePlayer.ts openWeb(url, title?, packages?, allowAppHome?)` ; ReplayHub `openExternal(..., packages, allowAppHome)` ; GlobalSearchDialog `handleOpenPlatform(platform)` + nouveau `handleOpenReplay(url, platformId)`.
+
+**Vérification.** tsc app+node 0 erreur ; `eslint ./src` 0 erreur (18 avertissements préexistants) ; vitest **672/672** (102 fichiers ; +4 `streamingPackages.test.ts`, +1 test recherche/paquets dans replayHub.test.tsx, 2 assertions openWeb mises à jour) ; vite build 9,5 s ; cap sync (2 plugins) ; assembleRelease OK. APK **CedPlay-1.12.6.apk** à la racine (4 602 764 octets, SHA-256 `b7e26f68371ffba98e69758a7709e90f343a560ee81fb3283d29be8d68c11342`, aapt `versionCode='54' versionName='1.12.6'`). **Non installée** : pas demandé pour cette version — la partie résolution « l'app s'ouvre et lit » reste à confirmer sur appareil (apps Netflix/TF1+/YouTube installées).
+
+**Session concurrente.** Bump effectué après re-vérification `git status` (1.12.5/code 53 commitée par l'autre session en `6646a40`, rien en vol) ; commits par pathspec explicite ; ses fichiers racine non touchés.
