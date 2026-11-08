@@ -5,10 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MosaicPicker } from '@/components/MosaicPicker';
+import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import { setMeta } from '@/utils/idb';
 import type { Channel, PlaylistInfo } from '@/types/channel';
 
-const mocks = vi.hoisted(() => ({ available: true, openMosaic: vi.fn(), account: null as unknown, limits: null as unknown }));
+const mocks = vi.hoisted(() => ({ available: true, openMosaic: vi.fn<(channels: Array<{ url: string; title: string }>) => Promise<void>>(), account: null as unknown, limits: null as unknown }));
 vi.mock('@/utils/nativePlayer', () => ({ NativePlayerBridge: { isAvailable: () => mocks.available, openMosaic: mocks.openMosaic } }));
 vi.mock('@/utils/xtreamCatalog', async () => ({
   ...await vi.importActual<typeof import('@/utils/xtreamCatalog')>('@/utils/xtreamCatalog'),
@@ -131,4 +132,51 @@ it('écarte les groupes verrouillés au chargement et au lancement d’une dispo
     { url: 'https://s/2.ts', title: 'Deux' },
   ]));
   expect(mocks.openMosaic.mock.calls[0][0].some(c => c.title === 'X premium')).toBe(false);
+});
+
+it('revérifie le verrouillage parental au lancement après une sélection autorisée', async () => {
+  mocks.account = null;
+  const channels = [ts('1', 'Un', 'https://s/1.ts'), { ...ts('a', 'Protégée', 'https://s/a.ts'), group: 'Adulte' }];
+  const { rerender } = render(<MosaicPicker playlist={playlist(channels)} lockedGroups={['Adulte']} unlocked />);
+  cocher(0); cocher(1);
+  rerender(<MosaicPicker playlist={playlist(channels)} lockedGroups={['Adulte']} unlocked={false} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Lancer la mosaïque (2/8)' }));
+  await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Lancer la mosaïque (2/8)' })).toBeEnabled());
+  expect(mocks.openMosaic).not.toHaveBeenCalled();
+});
+
+it('les deux champs se traversent aux flèches et ne passent en saisie que sur OK', async () => {
+  mocks.account = null;
+  const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const y = Array.prototype.indexOf.call(document.querySelectorAll('*'), this) * 10;
+    return { x: 0, y, left: 0, top: y, right: 80, bottom: y + 8, width: 80, height: 8, toJSON() {} };
+  });
+  function TvPage() {
+    useRemoteNavigation();
+    return <MosaicPicker playlist={playlist([])} />;
+  }
+  try {
+    render(<TvPage />);
+    const name = screen.getByLabelText('Nom de la disposition');
+    const search = screen.getByLabelText('Rechercher une chaîne pour la mosaïque');
+    await vi.waitFor(() => expect(screen.getByText(/0 chaînes/)).toBeInTheDocument());
+    name.focus();
+    expect(name).toHaveAttribute('readonly');
+    fireEvent.keyDown(name, { key: 'ArrowDown' });
+    expect(search).toHaveFocus();
+    expect(search).toHaveAttribute('readonly');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(search).not.toHaveAttribute('readonly');
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(search).toHaveAttribute('readonly');
+    fireEvent.keyDown(search, { key: 'ArrowUp' });
+    expect(name).toHaveFocus();
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(name).not.toHaveAttribute('readonly');
+    fireEvent.keyDown(name, { key: 'Escape' });
+    expect(name).toHaveAttribute('readonly');
+  } finally {
+    cleanup();
+    geometry.mockRestore();
+  }
 });
