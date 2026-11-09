@@ -241,4 +241,9 @@ it('TV : « Pour toi » remplit la grille avec les suggestions du catalogue', as
   const grid = screen.getByRole('region', { name: /Titres : Pour toi/ });
   await waitFor(() => expect(grid).toHaveTextContent('Interstellar'));
   expect(grid).not.toHaveTextContent('Océans');
+  // Revenir sur la catégorie déjà retenue quitte « Pour toi ».
+  await userEvent.click(screen.getByRole('button', { name: 'Docs' }));
+  await screen.findByRole('heading', { name: 'Docs' });
+  expect(screen.getByRole('region', { name: /Titres : Docs/ })).toHaveTextContent('Océans');
+  expect(screen.getByRole('button', { name: 'Pour toi' })).toHaveAttribute('aria-pressed', 'false');
 });

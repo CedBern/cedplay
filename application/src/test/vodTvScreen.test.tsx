@@ -356,3 +356,25 @@ it('« Pour toi » vide explique pourquoi', () => {
   setup({ onToggleForYou: vi.fn(), showForYou: true, items: [], hasMore: false, forYouEmptyText: 'Aucun film vu pour l’instant.' });
   expect(screen.getByText('Aucun film vu pour l’instant.')).toBeVisible();
 });
+
+it.each([
+  ['Pour toi', { showForYou: true, onToggleForYou: vi.fn() }],
+  ['Ma Liste', { showWatchlistOnly: true }],
+] as const)('%s : revenir sur la catégorie déjà retenue quitte la liste', (_label, overrides) => {
+  const { onSelectCategory } = setup({ category: '', ...overrides });
+  // Gauche depuis la grille : l'entrée active est la liste affichée, pas la catégorie.
+  key('ArrowLeft');
+  expect(col()).toBe('cat');
+  expect(active()).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'Toutes les catégories' }));
+  expect(onSelectCategory).toHaveBeenCalledWith('');
+});
+
+it('Pour toi : droite sur la catégorie déjà retenue quitte aussi les suggestions', () => {
+  const { onSelectCategory } = setup({ category: 'c1', showForYou: true, onToggleForYou: vi.fn() });
+  key('ArrowLeft');
+  key('ArrowDown'); // Pour toi → Action (catégorie déjà retenue)
+  expect(active()).toHaveTextContent('Action');
+  key('ArrowRight');
+  expect(onSelectCategory).toHaveBeenCalledWith('c1');
+});

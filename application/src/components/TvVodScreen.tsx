@@ -230,7 +230,13 @@ export function TvVodScreen({
   }, [items, hasMore]);
 
   const [column, setColumn] = useState<Column>('grid');
-  const [catIndex, setCatIndex] = useState(() => Math.max(0, catItems.findIndex(i => i.kind === 'category' && i.id === category)));
+  // Ma Liste / Pour toi affichés : la colonne de gauche pointe sur leur entrée, et choisir
+  // n'importe quelle catégorie — même celle déjà retenue — revient au catalogue.
+  const virtualList = showForYou ? 'foryou' : showWatchlistOnly ? 'watchlist' : null;
+  const activeEntryIndex = (list: CatItem[]) => (virtualList
+    ? list.findIndex(i => i.kind === 'action' && i.id === virtualList)
+    : list.findIndex(i => i.kind === 'category' && i.id === category));
+  const [catIndex, setCatIndex] = useState(() => Math.max(0, activeEntryIndex(catItems)));
   const [row, setRow] = useState(0);
   const [infoIndex, setInfoIndex] = useState(0);
 
@@ -241,9 +247,10 @@ export function TvVodScreen({
   // Catégorie changée ailleurs (chargement, reprise du stockage) : la colonne de gauche suit.
   useEffect(() => {
     if (column === 'cat') return;
-    const index = catItems.findIndex(i => i.kind === 'category' && i.id === category);
+    const index = activeEntryIndex(catItems);
     if (index >= 0) setCatIndex(index);
-  }, [catItems, category, column]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catItems, category, column, virtualList]);
   useEffect(() => { setCatIndex(i => Math.min(i, Math.max(0, catItems.length - 1))); }, [catItems.length]);
   useEffect(() => { setRow(r => Math.min(r, Math.max(0, cells.length - 1))); }, [cells.length]);
 
@@ -333,10 +340,10 @@ export function TvVodScreen({
   useEffect(() => {
     if (column !== 'cat') return;
     const item = catItems[catIndex];
-    if (item?.kind !== 'category' || item.id === category) return;
+    if (item?.kind !== 'category' || (item.id === category && !virtualList)) return;
     const t = window.setTimeout(() => { movedRef.current = true; onSelectCategory(item.id); setRow(0); }, 250);
     return () => window.clearTimeout(t);
-  }, [column, catIndex, catItems, category, onSelectCategory]);
+  }, [column, catIndex, catItems, category, virtualList, onSelectCategory]);
 
   // Déplacer le vrai focus après le rendu de la cible.
   useLayoutEffect(() => {
@@ -370,7 +377,7 @@ export function TvVodScreen({
   /** Appliquer tout de suite la catégorie sous le focus (droite ou OK). */
   const commitCategory = () => {
     const item = catItems[catIndex];
-    if (item?.kind !== 'category' || item.id === category) return false;
+    if (item?.kind !== 'category' || (item.id === category && !virtualList)) return false;
     movedRef.current = true;
     onSelectCategory(item.id);
     setRow(0);
@@ -509,9 +516,9 @@ export function TvVodScreen({
       return;
     }
     setCatIndex(index);
-    if (item.id !== category) { movedRef.current = true; onSelectCategory(item.id); setRow(0); }
+    if (item.id !== category || virtualList) { movedRef.current = true; onSelectCategory(item.id); setRow(0); }
     requestFocus(); setColumn('grid');
-  }, [catItems, category, onSearch, onToggleWatchlistOnly, onToggleForYou, onRefresh, onShowLocal, onSelectCategory, requestFocus]);
+  }, [virtualList, catItems, category, onSearch, onToggleWatchlistOnly, onToggleForYou, onRefresh, onShowLocal, onSelectCategory, requestFocus]);
 
   return (
     <div
