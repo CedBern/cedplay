@@ -1,5 +1,16 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## Livraison 1.12.14/code 62 — « Pour toi » sur TV, filtres mobiles sur une ligne — 8 novembre 2026
+
+- **Demande** : « Pour toi » absent de la version TV ; sur mobile, les deux lignes Films/Séries puis Catalogue/USB prennent la place du contenu.
+- **TV** (`TvVodScreen.tsx`, `VodLibrary.tsx`) : entrée « Pour toi » dans la colonne de gauche des Films, après Ma Liste ; jusqu'à 20 suggestions (4 rangées de 5), première justification dans la fiche éclair, message si rien à proposer (aucun film vu / préparation / aucune correspondance). Classement et requêtes TMDB lancés seulement quand l'entrée est ouverte. Import « Vu ailleurs » non proposé sur TV.
+- **Mobile** (`IPTVPlayer.tsx`, `MoviesPanel.tsx`, `VodLibrary.tsx`) : un seul sélecteur Films · Séries · USB/SD (225 px à 375 px de large) ; catégorie + Ma Liste (icône et nombre) + Actualiser (icône) sur une ligne ; titre « Films »/« Séries » en double retiré. Une reprise de film rouvre le catalogue même si USB/SD était affiché.
+- **Défaut relevé par la contre-revue puis corrigé** (`e80a2e2`) : avec « Pour toi » ou Ma Liste affiché, choisir la catégorie déjà retenue (OK, Droite, pause de navigation) était ignoré. Toute catégorie choisie revient au catalogue ; Gauche depuis la grille ramène sur l'entrée de la liste affichée. 4 tests rouges sur le code d'avant, verts après.
+- **Vérifié** : tsc app/node 0 erreur ; ESLint complet 0 erreur / 18 avertissements (tous antérieurs) ; **897/897 Web** (129 fichiers) ; vite build 71 fichiers sans média de test ; `cap sync` (chemins réécrits par la jonction `node_modules` remis à l'identique) ; **35/35 Java** ; `assembleRelease`. Navigateur 375 px : une ligne, pas de défilement horizontal, USB/SD ouvre la bibliothèque locale.
+- **APK** : `CedPlay-1.12.14.apk` = `CedPlay.apk`, 4 412 270 octets, SHA-256 `dcc4dba885e408dff2e33bc0e96e7cdf6c4ad21a8995f15f9a76bf14feb5328c`, certificat `f3f2371b…` identique à la 1.12.13, 71/71 fichiers web identiques au build. 1.12.13 archivée dans `sauvegardes/apk-1.12.13/`.
+- **Non fait** : aucune installation (téléphone, box) ; écran TV jamais vu avec un vrai catalogue Xtream (tests seulement). Branche `claude/recommendations-tv-mobile-layout-27bcd4` (`d9cf270`, `e80a2e2`), **pas encore intégrée** dans `consolidate/v1.11.4` (toujours `fc997a0`, 1.12.13), pas de push.
+- Prochaine version libre : **1.12.15/code 63**.
+
 ## Livraison 1.12.12/code 60 — panneaux natifs — 8 novembre 2026
 
 - **Intégration** : `consolidate/v1.11.4` avancée en `55b3f6d` (avance rapide sans stash ni checkout global, par `update-ref` + mise à jour des seuls fichiers du commit). `CURRENT_MISSION.md` du dossier principal fusionné à trois voies : section panneaux ajoutée, WIP F1/F2/F3 intact (diff WIP identique à la sauvegarde, en-têtes de blocs exceptés). Constats antérieurs : `INTEGRATION_PANNEAUX_2026-11-08.md`.
