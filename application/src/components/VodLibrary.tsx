@@ -13,6 +13,7 @@ import { onPlaybackDelegated } from '@/utils/playbackOwnership';
 import { catalogRequest, getXtreamAccount, parseCatalog, parseCategories, parseDetails, readVodProgress, saveVodProgress, vodUrl, type CatalogCategory, type CatalogDetails, type CatalogItem } from '@/utils/xtreamCatalog';
 import { getPlayHistory, getExternalWatches, pushPlayHistory, updateVodHistoryProgress, historyScope, getVodWatchlistFromDB, toggleVodWatchlist, type PlayHistoryEntry, type VodWatchlistItem } from '@/utils/idb';
 import { recommendForHistory } from '@/utils/recommendations';
+import { attachUsageMeter } from '@/utils/usageJournal';
 import { enrichRecommendations, type TasteEnrichment } from '@/utils/tasteEnrichment';
 import { externalSeeds, externalSummary } from '@/utils/externalWatch';
 import { ExternalWatchDialog } from '@/components/ExternalWatchDialog';
@@ -81,6 +82,7 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { 
     video.addEventListener('pause', save);
     video.addEventListener('ended', ended);
     const timer = window.setInterval(save, 15_000);
+    const detachUsage = attachUsageMeter(video, 'vod');
     const start = async () => {
       const playbackUrl = getPlaybackUrl(url);
       if (new URL(url).pathname.toLowerCase().endsWith('.m3u8') && !video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -92,7 +94,7 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { 
       void video.play().catch(() => {});
     };
     void start().catch(() => toast.error('Lecture indisponible dans ce navigateur.'));
-    return () => { clearInterval(timer); unsubscribe(); video.removeEventListener('loadedmetadata', metadata); video.removeEventListener('durationchange', applyPosition); video.removeEventListener('pause', save); video.removeEventListener('ended', ended); stop(); };
+    return () => { clearInterval(timer); detachUsage(); unsubscribe(); video.removeEventListener('loadedmetadata', metadata); video.removeEventListener('durationchange', applyPosition); video.removeEventListener('pause', save); video.removeEventListener('ended', ended); stop(); };
   }, [url, mediaId, restart]);
   return <div className="space-y-2"><p>{title}</p><video ref={ref} controls playsInline className="w-full max-h-[65vh] bg-black" onError={() => toast.error('Ce format ne peut pas être lu ici. Essaie le lecteur Android.')} /></div>;
 }

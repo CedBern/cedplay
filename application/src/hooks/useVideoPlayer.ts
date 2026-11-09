@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { attachUsageMeter } from '@/utils/usageJournal';
 import type HlsType from 'hls.js';
 import { Capacitor } from '@capacitor/core';
 import { isPlaybackDelegated, onPlaybackDelegated } from '@/utils/playbackOwnership';
@@ -366,7 +367,10 @@ export function useVideoPlayer() {
     video.addEventListener('play', onPlay); video.addEventListener('pause', onPause); video.addEventListener('ended', onEnded);
     video.addEventListener('volumechange', onVolume); video.addEventListener('timeupdate', onTime);
     document.addEventListener('fullscreenchange', onFullscreen);
+    // Ce lecteur web ne joue que le direct (la VOD passe par le lecteur natif ou ses propres écrans).
+    const detachUsage = attachUsageMeter(video, 'live');
     return () => {
+      detachUsage();
       generationRef.current += 1;
       lastUrlRef.current = null;
       clearSource(); video.pause(); video.removeAttribute('src'); video.load();

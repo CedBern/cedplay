@@ -13,6 +13,7 @@ import {
   saveEpisodeProgress,
 } from './podcastStorage';
 import { getActiveUserAgent } from './userAgent';
+import { attachUsageMeter, type NativeUsageAccess } from './usageJournal';
 
 interface NativeStream { url: string; title: string }
 /** Bilan d'une session du lecteur natif : interruptions, images perdues, erreurs (aucune URL). */
@@ -91,6 +92,8 @@ interface NativePlayerPluginType {
   setAudioSpeed(options: { speed: number }): Promise<void>;
   getAudioState(): Promise<AudioPlaybackState>;
   getAudioProgressAll(): Promise<{ entries: PodcastProgress[] }>;
+  getUsageJournal(): Promise<{ days: string }>;
+  clearUsageJournal(): Promise<void>;
   addListener(event: 'previewState', listener: (data: { state: PreviewState }) => void): Promise<PluginListenerHandle>;
   addListener(event: 'audioState', listener: (data: AudioPlaybackState) => void): Promise<PluginListenerHandle>;
 }
@@ -108,6 +111,14 @@ export interface PreviewRequest { url: string; x: number; y: number; width: numb
 export type PreviewState = 'loading' | 'playing' | 'error';
 
 const NativePlayer = registerPlugin<NativePlayerPluginType>('NativePlayer');
+
+/** Journal d'usage tenu par le lecteur Android ; null hors Android. */
+export const nativeUsageJournal: NativeUsageAccess | null = Capacitor.isNativePlatform()
+  ? {
+    read: async () => (await NativePlayer.getUsageJournal()).days ?? null,
+    clear: () => NativePlayer.clearUsageJournal(),
+  }
+  : null;
 
 function isAvailable(): boolean {
   return Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('NativePlayer');
@@ -653,6 +664,7 @@ function getOrCreateWebAudio(): HTMLAudioElement | null {
   if (webAudioEl) return webAudioEl;
   const el = document.createElement('audio');
   el.preload = 'metadata';
+  attachUsageMeter(el, 'audio');
   el.addEventListener('timeupdate', () => {
     if (!currentAudioState.active || !currentAudioState.episodeId) return;
     const pos = Math.max(0, Math.round((el.currentTime || 0) * 1000));
