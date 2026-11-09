@@ -46,6 +46,9 @@ public class AudioPlaybackService extends MediaSessionService {
     public static final long SEEK_FORWARD_MS = 30_000L;
     private static final long CHECKPOINT_INTERVAL_MS = 5_000L;
 
+    /** Temps d'écoute effective, versé au journal d'usage de Découvrir. */
+    private final PlayTimeMeter playMeter = new PlayTimeMeter(android.os.SystemClock::elapsedRealtime);
+
     public static class StateSnapshot {
         public final boolean active;
         public final String state; // "idle" | "loading" | "playing" | "paused" | "ended" | "error"
@@ -207,6 +210,7 @@ public class AudioPlaybackService extends MediaSessionService {
         @Override
         public void run() {
             saveCurrentProgress(false);
+            UsageJournalStore.record(getApplicationContext(), UsageJournal.AUDIO, playMeter.flush());
             emitState();
             if (player != null && player.isPlaying()) {
                 mainHandler.postDelayed(this, CHECKPOINT_INTERVAL_MS);
@@ -275,6 +279,8 @@ public class AudioPlaybackService extends MediaSessionService {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 mainHandler.removeCallbacks(checkpointRunnable);
+                if (isPlaying) playMeter.start();
+                else UsageJournalStore.record(getApplicationContext(), UsageJournal.AUDIO, playMeter.stop());
                 if (isPlaying) {
                     mainHandler.postDelayed(checkpointRunnable, CHECKPOINT_INTERVAL_MS);
                 } else {
@@ -712,6 +718,7 @@ public class AudioPlaybackService extends MediaSessionService {
     public void onDestroy() {
         mainHandler.removeCallbacksAndMessages(null);
         saveCurrentProgress(false);
+        UsageJournalStore.record(getApplicationContext(), UsageJournal.AUDIO, playMeter.stop());
         if (mediaSession != null) {
             mediaSession.release();
             mediaSession = null;

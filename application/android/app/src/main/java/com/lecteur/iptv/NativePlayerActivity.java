@@ -346,6 +346,8 @@ public class NativePlayerActivity extends AppCompatActivity {
      *  changement de média, libération du lecteur, fin de session) — jamais par un export
      *  intermédiaire, qui lit les compteurs sans arrêter la mesure. */
     private final RebufferTracker rebuffer = new RebufferTracker(SystemClock::elapsedRealtime);
+    /** Temps de lecture effective, versé au journal d'usage de Découvrir (pauses et chargements exclus). */
+    private final PlayTimeMeter playMeter = new PlayTimeMeter(SystemClock::elapsedRealtime);
     private long droppedFrames;
     private int errorCount;
     private String lastErrorCode;
@@ -2216,6 +2218,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying) playMeter.start();
+                else recordPlayTime(playMeter.stop());
                 if (isPlaying && !vod && liveReconnect.isRecovering()) {
                     android.util.Log.i("IPTV-Playback", "live_reconnect_success elapsed_ms="
                         + (SystemClock.elapsedRealtime() - reconnectStartedAtMs));
@@ -2453,6 +2457,10 @@ public class NativePlayerActivity extends AppCompatActivity {
         } catch (Exception ignored) {}
     }
 
+    private void recordPlayTime(long playedMs) {
+        UsageJournalStore.record(getApplicationContext(), vod ? UsageJournal.VOD : UsageJournal.LIVE, playedMs);
+    }
+
     private void logSessionSummary() {
         // Garde finale : une coupure encore ouverte à la destruction doit figurer au résumé.
         rebuffer.close();
@@ -2563,6 +2571,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         cancelPendingZap();
         hideZapOverlay();
         resumed = false;
+        recordPlayTime(playMeter.flush());
         // En petite fenêtre, l'activity est en pause mais la vidéo doit continuer.
         if (isInPipMode()) return;
         stopConnectivityMonitoring();
@@ -3162,6 +3171,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         // Lecteur libéré (arrière-plan, erreur, destruction) : une interruption ouverte ne peut
         // plus se terminer normalement ; la clôturer pour ne pas gonfler une session ultérieure.
         rebuffer.close();
+        recordPlayTime(playMeter.stop());
         cancelNextEpisode();
         progressHandler.removeCallbacksAndMessages(null);
         if (player != null) {

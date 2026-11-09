@@ -1145,6 +1145,20 @@ public class NativePlayerPlugin extends Plugin {
         });
     }
 
+    /** Journal d'usage local de Découvrir (14 jours, temps de lecture effective par famille). */
+    @PluginMethod
+    public void getUsageJournal(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("days", UsageJournalStore.read(getContext()));
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void clearUsageJournal(PluginCall call) {
+        UsageJournalStore.clear(getContext());
+        call.resolve();
+    }
+
     @PluginMethod
     public void getAudioProgressAll(PluginCall call) {
         JSArray entries = new JSArray();
