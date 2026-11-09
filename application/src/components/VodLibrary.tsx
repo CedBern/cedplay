@@ -14,6 +14,7 @@ import { catalogRequest, getXtreamAccount, parseCatalog, parseCategories, parseD
 import { getPlayHistory, getExternalWatches, pushPlayHistory, updateVodHistoryProgress, historyScope, getVodWatchlistFromDB, toggleVodWatchlist, type PlayHistoryEntry, type VodWatchlistItem } from '@/utils/idb';
 import { recommendForHistory } from '@/utils/recommendations';
 import { attachUsageMeter } from '@/utils/usageJournal';
+import { saveForYouSnapshot } from '@/utils/discover';
 import { enrichRecommendations, type TasteEnrichment } from '@/utils/tasteEnrichment';
 import { externalSeeds, externalSummary } from '@/utils/externalWatch';
 import { ExternalWatchDialog } from '@/components/ExternalWatchDialog';
@@ -365,6 +366,17 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       ...(usable ? { profile: usable.profile, detailsByItemId: usable.detailsByItemId } : {}),
     });
   }, [recsWanted, tvMode, rankingHistory, visibleAllMovies, playlist.id, taste]);
+  // Découvrir affiche « Pour toi » sans recharger le catalogue : on y mémorise le dernier calcul.
+  useEffect(() => {
+    if (!recsWanted || visibleAllMovies.length === 0) return;
+    saveForYouSnapshot(playlist.id, recommendations.map(({ item, reasons }) => ({
+      id: item.id,
+      name: item.name,
+      ...(item.poster ? { poster: item.poster } : {}),
+      ...(item.categoryId ? { categoryId: item.categoryId } : {}),
+      ...(reasons[0] ? { reason: reasons[0] } : {}),
+    })));
+  }, [recsWanted, visibleAllMovies.length, recommendations, playlist.id]);
   // TV : première justification affichée dans la fiche éclair de l'affiche surlignée.
   const forYouReasons = useMemo(
     () => new Map(recommendations.flatMap(({ item, reasons }) => (reasons[0] ? [[item.id, reasons[0]] as const] : []))),

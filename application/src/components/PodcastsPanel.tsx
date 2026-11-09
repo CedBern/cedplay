@@ -74,6 +74,8 @@ function PlayDisc({ playing, current, percent, label }: { playing: boolean; curr
 
 export interface PodcastsPanelProps {
   tvMode?: boolean;
+  /** Émission à sélectionner (carte « Émission » de Découvrir) ; nonce pour redemander la même. */
+  focusFeed?: { feedUrl: string; nonce: number } | null | undefined;
 }
 
 /**
@@ -86,7 +88,7 @@ export interface PodcastsPanelProps {
  * Ajouter = chercher un nom → reconnaître la pochette → s'abonner. Sans saisie, des
  * suggestions (utile à la télécommande). Lien Apple / Spotify / site ou RSS en recours.
  */
-export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
+export function PodcastsPanel({ tvMode = false, focusFeed }: PodcastsPanelProps) {
   const [feeds, setFeeds] = useState<PodcastFeed[]>(() => readPodcastFeeds());
   const [selectedFeedUrl, setSelectedFeedUrl] = useState<string | null>(() => readPodcastFeeds()[0]?.url ?? null);
   const [progressMap, setProgressMap] = useState<Record<string, PodcastProgress>>(() => readAllEpisodeProgress());
@@ -112,6 +114,10 @@ export function PodcastsPanel({ tvMode = false }: PodcastsPanelProps) {
   // connue : la télécommande ne doit pas se retrouver dans le vide.
   const pendingFocusRef = useRef<{ feedUrl: string } | 'input' | null>(null);
   const listId = useId();
+
+  useEffect(() => {
+    if (focusFeed && readPodcastFeeds().some(f => f.url === focusFeed.feedUrl)) setSelectedFeedUrl(focusFeed.feedUrl);
+  }, [focusFeed]);
 
   useEffect(() => {
     void AudioBridge.syncFromNative();

@@ -112,13 +112,11 @@ export type PreviewState = 'loading' | 'playing' | 'error';
 
 const NativePlayer = registerPlugin<NativePlayerPluginType>('NativePlayer');
 
-/** Journal d'usage tenu par le lecteur Android ; null hors Android. */
-export const nativeUsageJournal: NativeUsageAccess | null = Capacitor.isNativePlatform()
-  ? {
-    read: async () => (await NativePlayer.getUsageJournal()).days ?? null,
-    clear: () => NativePlayer.clearUsageJournal(),
-  }
-  : null;
+/** Journal d'usage tenu par le lecteur Android (vide hors Android). */
+export const nativeUsageJournal: NativeUsageAccess = {
+  read: async () => (Capacitor.isNativePlatform() ? (await NativePlayer.getUsageJournal()).days ?? null : null),
+  clear: async () => { if (Capacitor.isNativePlatform()) await NativePlayer.clearUsageJournal(); },
+};
 
 function isAvailable(): boolean {
   return Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('NativePlayer');

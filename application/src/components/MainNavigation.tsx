@@ -1,4 +1,4 @@
-import { Clapperboard, Film, Headphones, House, Ellipsis, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
+import { Clapperboard, Compass, Film, Headphones, House, Ellipsis, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' | 'podcasts' | 'more';
@@ -6,7 +6,7 @@ export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' |
 type Section = { value: NavSection; label: string; Icon: typeof House };
 
 const sections: Section[] = [
-  { value: 'continue', label: 'Accueil', Icon: House },
+  { value: 'continue', label: 'Découvrir', Icon: Compass },
   { value: 'channels', label: 'Direct', Icon: Tv2 },
   { value: 'vod', label: 'Films & séries', Icon: Clapperboard },
   { value: 'podcasts', label: 'Écouter', Icon: Headphones },
@@ -15,7 +15,7 @@ const sections: Section[] = [
 
 /** TV : Films et Séries sont deux rubriques directes dans le rail, accompagnées de l'entrée Écouter. */
 const tvSections: Section[] = [
-  { value: 'continue', label: 'Accueil', Icon: House },
+  { value: 'continue', label: 'Découvrir', Icon: Compass },
   { value: 'channels', label: 'Direct', Icon: Tv2 },
   { value: 'movies', label: 'Films', Icon: Film },
   { value: 'series', label: 'Séries', Icon: MonitorPlay },

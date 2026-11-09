@@ -64,6 +64,8 @@ export function IPTVPlayer() {
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   // L'application s'ouvre sur l'Accueil : reprise, favoris en direct, Ma liste.
   const [activeTab, setActiveTab] = useState('continue');
+  /** Émission à ouvrir dans Podcasts, demandée depuis une carte de Découvrir. */
+  const [podcastFocus, setPodcastFocus] = useState<{ feedUrl: string; nonce: number } | null>(null);
   // Mobile : Films · Séries · USB/SD sur une seule ligne (USB/SD = bibliothèque locale des films).
   const [movieSource, setMovieSource] = useState<'catalog' | 'local'>('catalog');
   const [channelView, setChannelView] = useState<'list' | 'grid'>('list');
@@ -972,8 +974,8 @@ export function IPTVPlayer() {
         <Tabs activationMode="manual" value={navSectionFor(activeTab, tvMode)} onValueChange={value => navigate(value as NavSection)} className="space-y-4">
           {tvMode ? appHeader : <MainNavigation onNavigate={navigate} />}
 
-          <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} parentalEnabled={appSettings.parentalControlEnabled === true} /></Suspense></TabsContent>
-          <TabsContent value="podcasts" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyPodcastsPanel tvMode={tvMode} /></Suspense></TabsContent>
+          <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} tvMode={tvMode} onOpenPodcasts={feedUrl => { setPodcastFocus(feedUrl ? { feedUrl, nonce: Date.now() } : null); setActiveTab('podcasts'); }} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} parentalEnabled={appSettings.parentalControlEnabled === true} /></Suspense></TabsContent>
+          <TabsContent value="podcasts" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyPodcastsPanel tvMode={tvMode} focusFeed={podcastFocus} /></Suspense></TabsContent>
           <TabsContent value={tvMode ? (activeTab === 'series' ? 'series' : 'movies') : 'vod'} className="screen-enter space-y-4">
             {!tvMode && <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
               {([['movies', 'catalog', 'Films'], ['series', 'catalog', 'Séries'], ['movies', 'local', 'USB/SD']] as const).map(([tab, source, label]) => {

@@ -230,10 +230,10 @@ it('le parcours horizontal des rubriques ne mesure pas les cartes du catalogue',
   const { container } = render(<Page />);
   const measured = vi.fn();
   container.querySelectorAll<HTMLElement>('[data-card]').forEach(el => { el.getBoundingClientRect = measured; });
-  screen.getByRole('tab', { name: 'Accueil' }).focus();
+  screen.getByRole('tab', { name: 'Découvrir' }).focus();
   for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
   expect(screen.getByRole('tab', { name: 'Plus' })).toHaveFocus();
   for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
-  expect(screen.getByRole('tab', { name: 'Accueil' })).toHaveFocus();
+  expect(screen.getByRole('tab', { name: 'Découvrir' })).toHaveFocus();
   expect(measured).not.toHaveBeenCalled();
 });

@@ -56,7 +56,7 @@ it('Films : la grille replie l’en-tête, Haut le rouvre sur la rubrique, Direc
 
   // Une seule ligne : les rubriques sont dans l'en-tête, Films et Séries séparés.
   const navigation = within(header()).getByRole('tablist', { name: 'Rubriques' });
-  expect(within(navigation).getAllByRole('tab').map(t => t.textContent)).toEqual(['Accueil', 'Direct', 'Films', 'Séries', 'Écouter', 'Plus']);
+  expect(within(navigation).getAllByRole('tab').map(t => t.textContent)).toEqual(['Découvrir', 'Direct', 'Films', 'Séries', 'Écouter', 'Plus']);
   expect(screen.queryByRole('group', { name: 'Type de contenu' })).toBeNull();
 
   await user.click(within(navigation).getByRole('tab', { name: 'Films' }));
