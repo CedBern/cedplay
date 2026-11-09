@@ -41,6 +41,10 @@ interface ContinuePanelProps {
   tvMode?: boolean | undefined;
 }
 
+/** Le greffon @tailwindcss/aspect-ratio neutralise les classes aspect-* : ratios posés en style. */
+const SQUARE = { aspectRatio: '1 / 1' } as const;
+const POSTER = { aspectRatio: '2 / 3' } as const;
+
 const hhmm = (d: Date) => new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 /** Favoris affichés sur l'accueil ; la liste complète reste dans Direct › Favoris. */
 const MAX_FAVORITES = 12;
@@ -388,7 +392,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     return <article key={item.key} className={`poster ${posterW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card`}>
       <button type="button" data-discover-card onClick={() => resumeVod(entry)} {...peekProps({ eyebrow: `${kindLabel} · Reprendre`, title: entry.name || 'Sans titre', meta: [entry.episodeName, percent !== null ? `${remaining} min restantes` : null].filter(Boolean).join(' · ') || undefined, hints: 'OK Reprendre · ▼ Fiche, Vu, Retirer' })}
         className={`press w-full text-left ${cardFocus}`}>
-        <div className="relative flex aspect-[2/3] items-center justify-center overflow-hidden bg-neutral-900">
+        <div style={POSTER} className="relative flex items-center justify-center overflow-hidden bg-neutral-900">
           {entry.mediaKind === 'series' ? <MonitorPlay className="h-8 w-8 text-primary" aria-hidden="true" /> : <Film className="h-8 w-8 text-primary" aria-hidden="true" />}
           {poster && <img src={poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />}
           <span className="absolute bottom-2 right-2 rounded-full bg-black/75 p-2"><Play className="h-4 w-4" aria-hidden="true" /></span>
@@ -442,7 +446,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     return <article key={s.episode.id} className={`${squareW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card`}>
       <button type="button" data-discover-card onClick={() => playEpisode(s)} aria-label={`Écouter ${s.episode.title}, ${s.feed.title}`} {...peekProps({ eyebrow: `Podcast · ${kindLabel}`, title: s.episode.title, meta: [s.feed.title, meta].filter(Boolean).join(' · '), hints: 'OK Écouter · ▼ Émission' })}
         className={`press w-full text-left ${cardFocus}`}>
-        <div className="relative flex aspect-square items-center justify-center overflow-hidden bg-secondary text-[#5CC8B5]">
+        <div style={SQUARE} className="relative flex items-center justify-center overflow-hidden bg-secondary text-[#5CC8B5]">
           <Headphones className="h-8 w-8" aria-hidden="true" />
           {art && <img src={art} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />}
         </div>
@@ -475,7 +479,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
           <button key={item.id} type="button" data-discover-card onClick={() => onOpenVod('movie', { id: item.id, name: item.name, kind: 'movie', playlistId: playlist.id, addedAt: 0, ...(item.poster ? { poster: item.poster } : {}), ...(item.categoryId ? { categoryId: item.categoryId } : {}) })}
             {...peekProps({ eyebrow: 'Film · Pour toi', title: item.name, meta: item.reason, hints: 'OK Fiche du film' })}
             className={`poster press ${posterW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card text-left ${cardFocus}`}>
-            <div className="relative flex aspect-[2/3] items-center justify-center overflow-hidden bg-neutral-900">
+            <div style={POSTER} className="relative flex items-center justify-center overflow-hidden bg-neutral-900">
               <Film className="h-8 w-8 text-primary" aria-hidden="true" />
               {safeImage(item.poster) && <img src={safeImage(item.poster)} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />}
             </div>
@@ -490,7 +494,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
           <button key={`${item.kind}:${item.id}`} type="button" data-discover-card onClick={() => onOpenVod(item.kind, item)}
             {...peekProps({ eyebrow: `${item.kind === 'series' ? 'Série' : 'Film'} · Ma liste`, title: item.name, meta: item.rating ? `★ ${item.rating}` : undefined, hints: 'OK Fiche, saisons, Retirer de Ma liste' })}
             className={`poster press ${posterW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card text-left ${cardFocus}`}>
-            <div className="flex aspect-[2/3] items-center justify-center overflow-hidden bg-neutral-900">
+            <div style={POSTER} className="flex items-center justify-center overflow-hidden bg-neutral-900">
               {item.poster ? <img src={item.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
                 : item.kind === 'series' ? <MonitorPlay className="h-8 w-8 text-primary" aria-hidden="true" /> : <Film className="h-8 w-8 text-primary" aria-hidden="true" />}
             </div>
@@ -511,7 +515,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
           return <DiscoverRow key={id} id={id} title={selectionTitle(id)} tvMode={tvMode} caption="Émissions à écouter · pas encore personnalisée, la même pour tout le monde">{DEFAULT_PODCAST_SUGGESTIONS.slice(0, 10).map(s => (
             <button key={s.id} type="button" data-discover-card onClick={() => onOpenPodcasts?.()} {...peekProps({ eyebrow: 'Sélection CedPlay', title: s.title, meta: [s.author, s.genre].filter(Boolean).join(' · '), hints: 'OK Voir dans Podcasts' })}
               className={`press ${squareW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card text-left ${cardFocus}`}>
-              <div className="relative flex aspect-square items-center justify-center overflow-hidden bg-secondary text-[#5CC8B5]">
+              <div style={SQUARE} className="relative flex items-center justify-center overflow-hidden bg-secondary text-[#5CC8B5]">
                 <Headphones className="h-8 w-8" aria-hidden="true" />
                 <img src={s.artworkUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />
               </div>
@@ -540,11 +544,14 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
         </div>
       </div>
 
-      {tvMode && peek && <section aria-label="Contenu sélectionné" aria-live="polite" className="min-h-[132px] max-w-3xl space-y-1.5">
-        <p className="text-[14px] font-semibold uppercase tracking-wide text-[#FF8A6E]">{peek.eyebrow}</p>
-        <p className="text-[34px] font-semibold leading-tight tracking-tight text-foreground">{peek.title}</p>
-        {peek.meta && <p className="text-[17px] text-muted-foreground">{peek.meta}</p>}
-        <p className="text-[16px] text-muted-foreground">{peek.hints}</p>
+      {/* Place réservée même sans focus : les rangées ne sautent pas quand la fiche apparaît. */}
+      {tvMode && <section aria-label="Contenu sélectionné" aria-live="polite" className="h-[150px] max-w-3xl space-y-1.5 overflow-hidden">
+        {peek ? <>
+          <p className="text-[14px] font-semibold uppercase tracking-wide text-[#FF8A6E]">{peek.eyebrow}</p>
+          <p className="truncate text-[34px] font-semibold leading-tight tracking-tight text-foreground">{peek.title}</p>
+          {peek.meta && <p className="truncate text-[17px] text-muted-foreground">{peek.meta}</p>}
+          <p className="text-[16px] text-muted-foreground">{peek.hints}</p>
+        </> : <p className="pt-2 text-[17px] text-muted-foreground">Flèches pour parcourir · OK pour lancer · Retour pour remonter</p>}
       </section>}
 
       {onlyEmptySelection && <div className="py-6 text-center">
