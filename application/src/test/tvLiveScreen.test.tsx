@@ -69,7 +69,7 @@ it('gauche passe aux catégories ; la liste suit après une pause, droite l’ap
   expect(active()).toHaveTextContent('Toutes');
   key('ArrowDown');
   expect(active()).toHaveTextContent('Favoris');
-  for (let i = 0; i < 2; i++) key('ArrowDown');
+  for (let i = 0; i < 3; i++) key('ArrowDown');
   expect(active()).toHaveTextContent('France');
   key('ArrowDown');
   expect(active()).toHaveTextContent('Belgique');
@@ -132,7 +132,7 @@ it('groupe protégé : liste vide, OK demande le code', () => {
   // La chaîne adulte n'apparaît pas dans Toutes : la dernière ligne est Bruxelles.
   expect(active()).toHaveAccessibleName('4. Bruxelles');
   key('ArrowLeft');
-  for (let i = 0; i < 5; i++) key('ArrowDown');
+  for (let i = 0; i < 6; i++) key('ArrowDown');
   expect(active()).toHaveTextContent('Adulte');
   key('ArrowRight');
   expect(screen.getByText(/Groupe protégé/)).toBeVisible();
@@ -192,7 +192,7 @@ it('un numéro d’une autre catégorie rejoint la chaîne et sa catégorie', ()
     setup({ zapList: [...fr, ...be] });
     // Partir d'une catégorie sans Bruxelles : la liste France, dans l'ordre de la source.
     key('ArrowLeft');
-    for (let i = 0; i < 3; i++) key('ArrowDown');
+    for (let i = 0; i < 4; i++) key('ArrowDown');
     key('ArrowRight');
     act(() => { vi.advanceTimersByTime(600); }); // laisse la sélection de catégorie s'appliquer
     expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
@@ -206,7 +206,7 @@ it('un numéro d’une autre catégorie rejoint la chaîne et sa catégorie', ()
 it('entrer dans une catégorie qui contient la chaîne en cours : le focus va sur elle', () => {
   const { onPlay } = setup({ currentChannel: fr[2] });
   key('ArrowLeft');
-  for (let i = 0; i < 3; i++) key('ArrowDown'); // France, catégorie de la chaîne en cours
+  for (let i = 0; i < 4; i++) key('ArrowDown'); // France, catégorie de la chaîne en cours
   key('ArrowRight');
   expect(screen.getByRole('heading', { name: 'France' })).toBeVisible();
   expect(active()).toHaveAccessibleName('3. Sport');
@@ -220,4 +220,17 @@ it('mode d’interface : réglage manuel prioritaire sur la détection', () => {
   expect(resolveTvMode(undefined, true)).toBe(true);
   expect(resolveTvMode('tv', false)).toBe(true);
   expect(resolveTvMode('mobile', true)).toBe(false);
+});
+
+it('le guide reste accessible en deux appuis Bas même avec cent groupes', () => {
+  const onGuide = vi.fn();
+  const manyGroups = Array.from({ length: 100 }, (_, i) => ({ name: `Groupe ${i}`, channels: [{ ...fr[0], id: `g-${i}` }] }));
+  render(<TvLiveScreen playlistId="guide-access" groups={manyGroups} favoriteIds={[]} onPlay={() => {}} onGuide={onGuide} />);
+  key('ArrowLeft');
+  key('ArrowDown');
+  key('ArrowDown');
+  expect(active()).toHaveTextContent('Guide TV');
+  fireEvent.click(active());
+  expect(onGuide).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('heading', { name: 'Toutes' })).toBeVisible();
 });

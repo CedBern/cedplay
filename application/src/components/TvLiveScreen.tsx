@@ -194,6 +194,8 @@ export function TvLiveScreen({
       { kind: 'category', id: 'all', label: 'Toutes', count: allChannels.filter(allowed).length, locked: false },
       { kind: 'category', id: 'favorites', label: 'Favoris', count: favorites.length, locked: false },
     ];
+    // Keep the guide visible before the provider's potentially hundreds of groups.
+    if (onGuide) list.push({ kind: 'action', id: 'guide', label: 'Guide TV' });
     for (const l of favoriteLists ?? []) {
       list.push({ kind: 'category', id: `favlist:${l.id}`, label: l.name, count: l.channelIds.filter(id => { const c = byId.get(id); return !!c && allowed(c); }).length, locked: false });
     }
@@ -203,7 +205,6 @@ export function TvLiveScreen({
       list.push({ kind: 'category', id: `group:${g.name}`, label: g.name, count: g.channels.length, locked });
     }
     if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
-    if (onGuide) list.push({ kind: 'action', id: 'guide', label: 'Guide TV' });
     if (onOrganize) list.push({ kind: 'action', id: 'organize', label: 'Organiser' });
     if (onToggleSort) list.push({ kind: 'action', id: 'sort', label: alphabetical ? 'Tri : A–Z' : 'Tri : liste' });
     return list;

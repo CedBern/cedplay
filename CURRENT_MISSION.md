@@ -1201,3 +1201,20 @@ Sur le téléphone : Prime/Max/Arte semblent **non installées** (le navigateur 
 ## Acces facile au fichier APK - 8 novembre 2026
 
 Copie identique du candidat corrige (SHA-256 38177df9...) dans le dossier principal : A-installer/CedPlay-1.12.16.apk, pour permettre a Ced de retrouver le fichier. Aucun APK de reference remplace et aucune installation effectuee.
+
+## 2026-11-09 - Accès au guide TV depuis Direct
+
+- Signalement : grille des programmes introuvable sur TV. Le bouton Guide TV était placé après tous les groupes fournisseur dans TvLiveScreen.
+- Correction : Guide TV en troisième position, après Toutes et Favoris, avant les listes personnelles et groupes. Branchement existant vers EPGGrid conservé.
+- Validation : TypeScript app/node OK, ESLint intégral 0 erreur / 18 avertissements via npm run verify (pnpm absent du PATH). Lanceur standard Vitest et build Vite bloqués par spawn EPERM esbuild. Lanceur alternatif du projet : 40/40 tests ciblés verts (Direct TV, ordre des catégories, navigation télécommande, interactions EPG), preuve preuves/tv-guide-tests.log. Test ajouté avec 100 groupes.
+- Aucun APK produit ou remplacé, aucune version montée, aucun essai physique ni flux réel. Validation globale et livraison restent à faire ; la TV conserve son ancienne version.
+- Second Cerveau et commandes entretien non exécutés : destination hors des racines autorisées en écriture.
+
+## 2026-11-09 - Livraison 1.12.36 (code 84) : Guide TV accessible depuis Direct
+
+- Reprise de la section précédente : la correction était dans l'arbre mais rien n'était compilé (EPERM d'esbuild annoncé). L'EPERM ne se reproduit pas : `vite build` passe en 8,79 s, `vitest run` passe en entier. `pnpm` reste absent du PATH, binaires locaux utilisés.
+- Validation complète : `tsc` app et node 0 erreur ; ESLint intégral (`eslint ./src`, sans `--quiet`) 0 erreur / 18 avertissements ; `vitest run` **1009/1009** (140 fichiers) ; `vite build` OK (dist 2,8 Mo, aucun .map) ; `cap sync android` puis `assembleRelease` **BUILD SUCCESSFUL**.
+- Version : **1.12.36 / code 84** dans les trois emplacements (`package.json`, `build.gradle`, `SettingsPanel.tsx`). APK 4 431 397 octets, SHA-256 `69a5a19adf8cd8e285a61f36a3334f760013773c2db501cbbee6dc623064c759`, même certificat `f3f2371b…`. Référence à la racine : `CedPlay-1.12.36.apk` + `CedPlay.apk` ; 1.12.35 archivée dans `sauvegardes/apk-1.12.35/`.
+- Recette box `192.168.100.2:5555` (Hisense, adb) : `install -r` OK, `dumpsys package` → versionCode 84 / 1.12.36. Direct → colonne de gauche : Toutes, Favoris, **Guide TV** en troisième position (capture `preuves/livraison-1.12.36-box-guide-tv.png`), deux `keyevent 20` depuis Toutes, OK → grille ouverte et chargée en ~10 s (« Guide actualisé · 9 nov., 16:17 », détail du programme TMC, capture `preuves/livraison-1.12.36-box-guide-ouvert.png`). Flèches Bas/Droite déplacent le focus dans le guide (anneau sur « Grille »), Retour ramène au Direct avec la sélection conservée (`preuves/livraison-1.12.36-box-retour-direct.png`) : télécommande vivante.
+- Limites : recette aux `input keyevent` adb, pas à la vraie télécommande ; Motorola non connecté lors de cette session, donc non mis à jour (resté en 1.12.35/code 83).
+

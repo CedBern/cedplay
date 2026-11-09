@@ -21,7 +21,8 @@ it('TV : Toutes et Favoris précèdent les outils ; les catégories gardent leur
   render(<TvLiveScreen playlistId="category-order-tv" groups={groups} favoriteIds={['ordered-2']} onPlay={play} onSearch={() => {}} onGuide={() => {}} />);
   const categories = [...document.querySelectorAll<HTMLButtonElement>('[data-tv-cat]')];
   expect(categories.slice(0, 2).map(button => button.textContent)).toEqual(['Toutes4', 'Favoris1']);
-  expect(categories.slice(-2).map(button => button.textContent)).toEqual(['Rechercher', 'Guide TV']);
+  expect(categories[2]).toHaveTextContent('Guide TV');
+  expect(categories.at(-1)).toHaveTextContent('Rechercher');
   expect(categories.filter(button => groups.some(group => button.textContent === `${group.name}1`)).map(button => button.textContent))
     .toEqual(['Sport1', '01 Films1', 'France1', '✪ Divers1']);
 

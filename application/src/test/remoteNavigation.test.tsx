@@ -151,6 +151,10 @@ it('Bas depuis Direct traverse Toutes, Favoris et les catégories avant les outi
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('button', { name: /^Favoris/ })).toHaveFocus();
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('button', { name: 'Guide TV' })).toHaveFocus();
+  fireEvent.click(document.activeElement!);
+  expect(onGuide).toHaveBeenCalledOnce();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('button', { name: /^Récentes/ })).toHaveFocus();
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('button', { name: /^Test/ })).toHaveFocus();
@@ -158,10 +162,6 @@ it('Bas depuis Direct traverse Toutes, Favoris et les catégories avant les outi
   expect(screen.getByRole('button', { name: 'Rechercher' })).toHaveFocus();
   fireEvent.click(document.activeElement!);
   expect(onSearch).toHaveBeenCalledOnce();
-  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
-  expect(screen.getByRole('button', { name: 'Guide TV' })).toHaveFocus();
-  fireEvent.click(document.activeElement!);
-  expect(onGuide).toHaveBeenCalledOnce();
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('button', { name: 'Organiser' })).toHaveFocus();
   fireEvent.click(document.activeElement!);
