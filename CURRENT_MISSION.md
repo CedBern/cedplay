@@ -1,5 +1,13 @@
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
 
+## APK 1.12.15/code 63 pour l'essai de Découvrir — 8 novembre 2026 (branche `claude/decouvrir-v1`)
+
+- **Demande** : « Oui, construis l'APK » pour l'essai de Découvrir sur téléphone et box.
+- **Version** : 1.12.15/code 63 dans `package.json`, `build.gradle` et `SettingsPanel.tsx` (commit `6321619`). Les chemins Capacitor réécrits par `cap sync` dans le worktree (`capacitor.settings.gradle`, `../../../../../application/node_modules`) n'ont pas été committés.
+- **Vérifié** : tsc app+node 0 erreur ; ESLint complet 0 erreur / 18 avertissements ; **945/945 Web** (135 fichiers) ; `vite build` OK (seuls les trois `.m3u` dans `dist/`) ; `cap sync android` OK ; `assembleRelease` OK ; **41/41 Java**. `output-metadata.json` : versionCode 63, versionName 1.12.15.
+- **APK** : `CedPlay-1.12.15.apk` à la racine du **worktree** (4 422 307 octets, SHA-256 `72003d25fc144bb9595f6bc1768d3f9f6fd1ccf7b6da24ea9fe19c9bbce54a93`), ignorée par git. Certificat SHA-256 `f3f2371b…dfa628`, identique à `CedPlay.apk` (1.12.14) du dossier principal : mise à jour sans désinstallation. L'APK de référence du dossier principal (1.12.14) n'a pas été remplacée tant que la branche n'est pas fusionnée.
+- **Non fait** : installation et essai sur téléphone et box ; push ; fusion.
+
 ## Découvrir, première implémentation — 8 novembre 2026 (branche `claude/decouvrir-v1`)
 
 - **Demande** : implémenter la maquette Découvrir validée (organisation fonctionnelle) ; « ▲ » reste une flèche, retrait par bouton explicite ; fiche complète accessible sans appui long ; journal d'usage mesuré sur la lecture effective ; vérifier ce que les lecteurs remontent, notamment sur Android ; puis contrôle téléphone et TV. Pas d'APK, rien publié.
