@@ -29,7 +29,16 @@ const program = () => {
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   Object.values(bridge).forEach(fn => fn.mockClear());
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 10, top: 10, width: 320, height: 180, right: 330, bottom: 190, x: 10, y: 10, toJSON: () => ({}) } as DOMRect);
+  // Rectangles réalistes : le cadre d'aperçu est à droite, la case à gauche ; sinon
+  // le test de recouvrement croirait que l'aperçu masque l'émission ciblée.
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const rect = this.hasAttribute('data-guide-preview')
+      ? { left: 700, top: 60, width: 256, height: 144 }
+      : this.hasAttribute('data-program-start')
+        ? { left: 220, top: 100, width: 380, height: 56 }
+        : { left: 0, top: 0, width: 960, height: 300 };
+    return { ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON: () => ({}) } as DOMRect;
+  });
 });
 afterEach(() => {
   cleanup();
@@ -41,9 +50,12 @@ it('relance l’aperçu une seule fois par image, quel que soit le nombre d’é
   await act(async () => {
     render(<EPGGrid channels={[channel]} epgData={{ a: [program()] }} onSelectChannel={() => {}} tvMode preview />);
   });
-  // Survol d'une émission : l'aperçu part après le délai d'arrêt.
+  // Survol d'une émission : le cadre n'apparaît qu'avec une case ciblée, et le
+  // 16:9 est porté par le style (l'utilitaire `aspect-video` n'existe pas dans
+  // le CSS produit : le cadre s'effondrait sur la hauteur de son texte).
   const cell = screen.getByRole('button', { name: /^Le journal,/ });
   await act(async () => { cell.focus(); });
+  expect(document.querySelector<HTMLElement>('[data-guide-preview]')?.style.aspectRatio).toBe('16 / 9');
   await act(async () => { vi.advanceTimersByTime(800); });
   expect(bridge.showPreview).toHaveBeenCalledTimes(1);
 

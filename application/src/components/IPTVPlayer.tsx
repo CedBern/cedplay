@@ -1050,7 +1050,20 @@ export function IPTVPlayer() {
               </Suspense>
             </ErrorBoundary>}
             {activeTab === 'channels' && !(tvMode && channelView === 'list') &&
-            <Card className={`live-channel-panel ${channelView === 'list' ? 'live-channel-list-panel' : ''} bg-neutral-950 border-neutral-900 rounded-[20px] flex flex-col min-h-0`}>
+            <Card
+              className={`live-channel-panel ${channelView === 'list' ? 'live-channel-list-panel' : ''} bg-neutral-950 border-neutral-900 rounded-[20px] flex flex-col min-h-0`}
+              data-remote-self
+              onKeyDown={(event) => {
+                // En vue Grille, Bas depuis Liste/Grille/Lecteur entre par l'émission
+                // en cours ; sans cela la géométrie visait la case sous le bouton.
+                if (channelView !== 'grid' || event.key !== 'ArrowDown') return;
+                if (!(event.target as HTMLElement).closest('.live-view-toolbar')) return;
+                if (!document.querySelector('[data-guide-entry]')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                window.dispatchEvent(new Event('guide-focus-entry'));
+              }}
+            >
               <CardHeader className="live-view-toolbar shrink-0 flex-row flex-wrap items-center justify-end gap-3 px-4 py-3 space-y-0">
                 <div className="flex w-full sm:w-auto items-center gap-1.5 shrink-0">
                   <Button variant={channelView === 'list' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'list' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'list'} title="Vue liste" onClick={() => setChannelView('list')}><List aria-hidden="true" className="h-4 w-4 mr-1.5" />Liste</Button>

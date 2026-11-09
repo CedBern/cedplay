@@ -60,6 +60,49 @@ it('après OK maintenu relâché dans la fiche puis fermeture, OK relance la cha
   expect(onSelect).toHaveBeenCalledWith(channel);
 });
 
+it('la flèche gauche ouvre l’émission précédente au lieu du nom de la chaîne', async () => {
+  const now = Date.now();
+  await act(async () => {
+    render(<EPGGrid channels={[channel]} onSelectChannel={() => {}} epgData={{ a: [
+      { id: 'avant', channelId: 'a', title: 'Émission précédente', startTime: new Date(now - 3_600_000), endTime: new Date(now - 1_800_000) },
+      { id: 'encours', channelId: 'a', title: 'Émission en cours', startTime: new Date(now - 1_800_000), endTime: new Date(now + 1_800_000) },
+    ] }} />);
+  });
+  const current = screen.getByRole('button', { name: /^Émission en cours,/ });
+  act(() => { current.focus(); });
+  fireEvent.keyDown(current, { key: 'ArrowLeft' });
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /^Émission précédente,/ }));
+  // La colonne des chaînes reste visible mais ne capte plus le focus télécommande.
+  expect(screen.getByTitle('Chaîne test')).toHaveAttribute('tabindex', '-1');
+});
+
+it('la flèche gauche sur la première émission reste sur place', async () => {
+  const now = Date.now();
+  await act(async () => {
+    render(<EPGGrid channels={[channel]} onSelectChannel={() => {}} epgData={{ a: [
+      { id: 'seule', channelId: 'a', title: 'Première émission', startTime: new Date(now - 3_600_000), endTime: new Date(now + 1_800_000) },
+    ] }} />);
+  });
+  const first = screen.getByRole('button', { name: /^Première émission,/ });
+  act(() => { first.focus(); });
+  fireEvent.keyDown(first, { key: 'ArrowLeft' });
+  expect(document.activeElement).toBe(first);
+});
+
+it('la flèche bas depuis la barre d’outils entre par l’émission en cours', async () => {
+  const now = Date.now();
+  await act(async () => {
+    render(<EPGGrid channels={[channel]} onSelectChannel={() => {}} epgData={{ a: [
+      { id: 'avant', channelId: 'a', title: 'Émission précédente', startTime: new Date(now - 3_600_000), endTime: new Date(now - 1_800_000) },
+      { id: 'encours', channelId: 'a', title: 'Émission en cours', startTime: new Date(now - 1_800_000), endTime: new Date(now + 1_800_000) },
+    ] }} />);
+  });
+  const toolbar = screen.getByRole('button', { name: 'Rechercher une émission' });
+  act(() => { toolbar.focus(); });
+  fireEvent.keyDown(toolbar, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /^Émission en cours,/ }));
+});
+
 it('cherche une émission dans le guide et ouvre sa fiche', async () => {
   const now = Date.now();
   const other = { id: 'b', name: 'Autre', url: 'https://example.test/b' };

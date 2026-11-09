@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type SetStateAction } from 'react';
 import { ChevronLeft, ChevronRight, Bell, CircleDot, Eye, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
 import { isInArchive } from '@/utils/catchup';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -50,6 +50,11 @@ const isActivationKey = (key: string) => key === 'Enter' || key === ' ';
 
 const TIME_AXIS_HEIGHT = 44;
 const ROW_HEIGHT = 56;
+/** Aperçu TV : 16:9, 256 × 144, à 12 px du bord droit et sous l'axe des heures. */
+const PREVIEW_WIDTH = 256;
+const PREVIEW_HEIGHT = (PREVIEW_WIDTH * 9) / 16;
+const PREVIEW_RIGHT = 12;
+const PREVIEW_TOP = 48;
 /** Colonne des chaînes plus étroite sur téléphone : plus d'heures visibles. */
 const NARROW_COL_WIDTH = 112;
 /** Marge (px) de programmes rendus de part et d'autre de la zone visible. */
@@ -76,6 +81,8 @@ interface ProgramCellProps {
   reminded: boolean;
   recording: boolean;
   replayable: boolean;
+  /** Émission d'entrée du guide (celle en cours sur la première ligne visible). */
+  entry: boolean;
   onSelectChannel: (channel: Channel) => void;
   onCatchup: ((channel: Channel, program: EPGProgram) => void) | undefined;
   setSheet: Dispatch<SetStateAction<ProgramSheetTarget | null>>;
@@ -89,7 +96,7 @@ interface ProgramCellProps {
  * cellules qui entrent dans la fenêtre — l'état (en cours, passé, rappel, enregistrement)
  * passe en props primitives pour que la comparaison superficielle suffise. */
 const ProgramCell = memo(function ProgramCell({
-  channel, program: p, left, width, isCurrent, isPast, reminded, recording, replayable,
+  channel, program: p, left, width, isCurrent, isPast, reminded, recording, replayable, entry,
   onSelectChannel, onCatchup, setSheet, setFocused, toggleReminder, pressRef,
 }: ProgramCellProps) {
   const openSheet = () => setSheet({ channel, program: p });
@@ -104,6 +111,8 @@ const ProgramCell = memo(function ProgramCell({
     <div
       role="button"
       tabIndex={0}
+      data-program-start={p.startTime.getTime()}
+      {...(entry ? { 'data-guide-entry': '' } : {})}
       onClick={activate}
       onContextMenu={(e) => { e.preventDefault(); openSheet(); }}
       onFocus={(e) => { if (e.target === e.currentTarget) setFocused({ channel, program: p }); }}
@@ -249,10 +258,12 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   const [focusInside, setFocusInside] = useState(false);
   const [manualPreview, setManualPreview] = useState(false);
   const [previewState, setPreviewState] = useState<'idle' | 'waiting' | PreviewState>('idle');
+  // L'aperçu s'efface quand il recouvrirait l'émission ciblée : le guide reste lisible.
+  const [previewCovered, setPreviewCovered] = useState(false);
   const previewActive = tvMode && preview && previewMode !== 'off';
   const focusedUrl = focused?.channel.url ?? null;
   useEffect(() => { setManualPreview(false); }, [focusedUrl]);
-  const previewUrl = previewActive && focusInside && !sheet && !searchOpen && focusedUrl && (previewMode !== 'manual' || manualPreview) ? focusedUrl : null;
+  const previewUrl = previewActive && focusInside && !sheet && !searchOpen && !previewCovered && focusedUrl && (previewMode !== 'manual' || manualPreview) ? focusedUrl : null;
   const requested = useRef<string | null>(null);
   const sendPreview = useCallback((url: string) => {
     const box = previewRef.current?.getBoundingClientRect();
@@ -293,7 +304,22 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     const t = window.setTimeout(() => sendPreview(previewUrl), PREVIEW_DELAY);
     return () => window.clearTimeout(t);
   }, [previewActive, previewUrl, sendPreview]);
-  const onFocusIn = () => setFocusInside(true);
+  const updatePreviewCoverage = useCallback((el: HTMLElement) => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const frame = scroller.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+    const previewLeft = frame.right - PREVIEW_RIGHT - PREVIEW_WIDTH;
+    const previewTop = frame.top + PREVIEW_TOP;
+    setPreviewCovered(box.right > previewLeft && box.left < frame.right - PREVIEW_RIGHT
+      && box.bottom > previewTop && box.top < previewTop + PREVIEW_HEIGHT);
+  }, []);
+  const onFocusIn = (event: ReactFocusEvent<HTMLDivElement>) => {
+    setFocusInside(true);
+    const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-program-start]');
+    // Mesure après l'éventuel défilement déclenché par la prise de focus.
+    if (cell) requestAnimationFrame(() => updatePreviewCoverage(cell));
+  };
   const onFocusOut = () => { window.setTimeout(() => setFocusInside(!!rootRef.current?.contains(document.activeElement)), 0); };
 
   const todayKey = midnightOf(now).getTime();
@@ -374,21 +400,109 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     positionedFor.current = range.start.getTime();
     el.scrollLeft = nowOffset !== null ? Math.max(0, nowOffset - 60 * PX_PER_MINUTE * 0.5) : 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows.length > 0, range.start.getTime()]);
+  }, [rows.length > 0, range.start.getTime(), colWidth]);
 
   const scrollToOffset = (left: number) => {
     const el = scrollerRef.current;
     if (el) el.scrollTo({ left: Math.max(0, Math.min(left, timelineWidth)), behavior: 'smooth' });
   };
+  // « Maintenant » ramène 30 min de contexte avant l'instant présent.
   const scrollToNow = () => { if (nowOffset !== null) scrollToOffset(nowOffset - 30 * PX_PER_MINUTE); };
 
-  // Jour affiché : celui de l'heure au bord gauche de la grille.
+  // Jour affiché : celui de l'heure au bord gauche de la frise. L'origine de la
+  // frise est déjà décalée de la colonne des chaînes dans le DOM.
   const viewedDay = midnightOf(new Date(range.start.getTime() + (view.left / PX_PER_MINUTE) * 60000 + 60000));
   const prevDay = new Date(viewedDay.getTime() - DAY_MS / 2); const prevStart = midnightOf(prevDay);
   const nextStart = midnightOf(new Date(viewedDay.getTime() + DAY_MS * 1.5));
   const canPrev = viewedDay.getTime() > range.start.getTime();
   const canNext = nextStart.getTime() < range.end.getTime();
   const isToday = viewedDay.getTime() === todayKey;
+
+  // ── Navigation dans la grille ─────────────────────────────────────────
+  // La colonne des chaînes reste collée à gauche. Le focus ne doit plus s'y
+  // perdre : gauche/droite parcourent les émissions de la ligne et le
+  // défilement amène toujours la case à droite de la colonne, jamais dessous.
+  const [pendingFocus, setPendingFocus] = useState<{ channelId: string; start: number } | null>(null);
+  const findCell = useCallback((channelId: string, start: number) => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return null;
+    for (const row of Array.from(scroller.querySelectorAll<HTMLElement>('[data-guide-row]'))) {
+      if (row.getAttribute('data-guide-row') !== channelId) continue;
+      return row.querySelector<HTMLElement>(`[data-program-start="${start}"]`);
+    }
+    return null;
+  }, []);
+  const focusCell = useCallback((el: HTMLElement) => {
+    el.focus({ preventScroll: true });
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const box = el.getBoundingClientRect();
+    const frame = scroller.getBoundingClientRect();
+    const leftEdge = frame.left + colWidth + 6;
+    const rightEdge = frame.right - 6;
+    if (box.left < leftEdge) scroller.scrollLeft += box.left - leftEdge;
+    else if (box.right > rightEdge && box.width <= rightEdge - leftEdge) scroller.scrollLeft += box.right - rightEdge;
+  }, [colWidth]);
+  // Une case hors de la fenêtre rendue n'existe pas encore : après le
+  // défilement, le rendu suivant la monte et l'effet la focalise.
+  useEffect(() => {
+    if (!pendingFocus) return;
+    const el = findCell(pendingFocus.channelId, pendingFocus.start);
+    if (!el) return;
+    setPendingFocus(null);
+    focusCell(el);
+  }, [pendingFocus, view.left, view.width, findCell, focusCell]);
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  // Première ligne réellement visible (la virtualisation garde aussi des lignes
+  // d'avance hors écran) : son émission en cours sert de porte d'entrée.
+  const scrollTopNow = scrollerRef.current?.scrollTop ?? 0;
+  const firstVisibleRow = virtualRows.find((v) => v.start + ROW_HEIGHT > scrollTopNow)?.index ?? 0;
+
+  // Les boutons Liste/Grille/Lecteur vivent hors de la grille : ils demandent
+  // l'entrée par un événement au lieu de laisser la géométrie viser 19 h.
+  useEffect(() => {
+    const focusEntry = () => {
+      const entry = scrollerRef.current?.querySelector<HTMLElement>('[data-guide-entry]');
+      if (entry) focusCell(entry);
+    };
+    window.addEventListener('guide-focus-entry', focusEntry);
+    return () => window.removeEventListener('guide-focus-entry', focusEntry);
+  }, [focusCell]);
+
+  const onGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (sheet || searchOpen) return;
+    const target = event.target as HTMLElement;
+    // Depuis la barre d'outils du guide, Bas entre par l'émission en cours :
+    // sans cela la géométrie visait la case située sous le bouton (19 h).
+    if (event.key === 'ArrowDown' && !target.closest('[data-guide-scroller]')) {
+      const entry = scrollerRef.current?.querySelector<HTMLElement>('[data-guide-entry]');
+      if (entry) { event.preventDefault(); event.stopPropagation(); focusCell(entry); }
+      return;
+    }
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const cell = target.closest<HTMLElement>('[data-program-start]');
+    if (!cell) return;
+    const rowEl = cell.closest<HTMLElement>('[data-guide-row]');
+    const channelId = rowEl?.getAttribute('data-guide-row');
+    const row = channelId ? rows.find((r) => r.channel.id === channelId) : undefined;
+    if (!row) return;
+    const start = Number(cell.getAttribute('data-program-start'));
+    const index = row.programs.findIndex((p) => p.startTime.getTime() === start);
+    if (index < 0) return;
+    const next = row.programs[index + (event.key === 'ArrowLeft' ? -1 : 1)];
+    event.preventDefault();
+    event.stopPropagation();
+    // Bord de la frise : on reste sur l'émission au lieu de sauter au nom.
+    if (!next) return;
+    const layout = layoutProgram(next, range);
+    if (!layout) return;
+    const mounted = findCell(row.channel.id, next.startTime.getTime());
+    if (mounted) { focusCell(mounted); return; }
+    const scroller = scrollerRef.current;
+    if (scroller) scroller.scrollLeft = Math.max(0, layout.left - colWidth - 6);
+    setPendingFocus({ channelId: row.channel.id, start: next.startTime.getTime() });
+  };
 
   if (!epgData) {
     return (
@@ -406,15 +520,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   }
 
   return (
-    <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} className="relative h-full flex flex-col min-h-0 text-white">
-      {/* Aperçu en superposition : sur un écran TV de 540 px de haut, une bande de
-         168 px ne laissait qu'une ligne de guide visible. */}
-      {tvMode && previewActive && <div ref={previewRef} data-guide-preview={previewState} className="absolute right-3 top-3 z-40 flex aspect-video w-40 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-xs text-neutral-400 shadow-lg">
-        {previewState === 'error' ? 'Aperçu indisponible'
-          : previewState === 'playing' ? ''
-          : previewMode === 'manual' && !manualPreview ? (focused ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button> : 'Aperçu')
-          : previewState === 'idle' ? '' : 'Aperçu…'}
-      </div>}
+    <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={onGridKeyDown} data-remote-self className="relative h-full flex flex-col min-h-0 text-white">
       {guideState?.fetchedAt && <div className={`flex items-center justify-between gap-2 text-xs text-neutral-400 ${tvMode ? 'mb-1 flex-nowrap' : 'mb-2 flex-wrap'}`}>
         <span className="truncate">{guideState.status === 'stale' ? 'Guide enregistré — actualisation impossible' : 'Guide actualisé'} · {new Date(guideState.fetchedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
         <Button size="sm" variant="ghost" onClick={onRetry}>Actualiser</Button>
@@ -460,9 +566,18 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
       </div>
 
       {rows.length === 0 && <p role="status" className="py-6 text-sm text-neutral-300 text-center">Pas de programmes à afficher. Actualise le guide ou vérifie la source EPG.</p>}
-      {/* Grille défilante */}
-      <div ref={scrollerRef} className="flex-1 min-h-0 overflow-auto overscroll-x-contain rounded-xl border border-neutral-900 bg-neutral-950">
-        <div className="relative" style={{ width: colWidth + timelineWidth, height: Math.max(rowVirtualizer.getTotalSize(), TIME_AXIS_HEIGHT) }}>
+      {/* Grille défilante. L'aperçu est ancré à la zone de grille (sous l'axe des
+          heures et les commandes) : en haut à droite il recouvrait « Actualiser »
+          et n'avait aucune hauteur, faute d'utilitaire `aspect-video` généré. */}
+      <div className="relative flex-1 min-h-0">
+        {tvMode && previewActive && focusInside && focused && !previewCovered && <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9', right: PREVIEW_RIGHT, top: PREVIEW_TOP }} className="absolute z-40 flex flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-xs text-neutral-400 shadow-lg">
+          {previewState === 'error' ? 'Aperçu indisponible'
+            : previewState === 'playing' ? ''
+            : previewMode === 'manual' && !manualPreview ? (focused ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button> : 'Aperçu')
+            : previewState === 'idle' ? '' : 'Aperçu…'}
+        </div>}
+        <div ref={scrollerRef} data-guide-scroller className="h-full overflow-auto overscroll-x-contain rounded-xl border border-neutral-900 bg-neutral-950">
+          <div className="relative" style={{ width: colWidth + timelineWidth, height: Math.max(rowVirtualizer.getTotalSize(), TIME_AXIS_HEIGHT) }}>
           {/* Axe des heures (en-tête collant) */}
           <div className="dark-surface sticky top-0 z-30 flex bg-black" style={{ height: TIME_AXIS_HEIGHT, width: colWidth + timelineWidth }}>
             <div
@@ -489,19 +604,27 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
           </div>
 
           {/* Lignes des chaînes (virtualisées) */}
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          {virtualRows.map((virtualRow) => {
             const { channel, programs } = rows[virtualRow.index];
             const playing = currentChannel?.id === channel.id;
             // Jours d'archive propres à la chaîne : une lecture par ligne, plus par programme.
             const rowArchiveDays = onCatchup && catchupDays ? catchupDays(channel) : 0;
+            const entryProgram = virtualRow.index === firstVisibleRow
+              ? programs.find((p) => p.startTime <= now && now < p.endTime)
+                ?? programs.find((p) => p.endTime.getTime() > windowStartMs && p.startTime.getTime() < windowEndMs)
+              : undefined;
             return (
               <div
                 key={channel.id}
+                data-guide-row={channel.id}
                 className="absolute left-0 top-0 flex border-b border-white/5"
                 style={{ height: ROW_HEIGHT, width: colWidth + timelineWidth, transform: `translateY(${virtualRow.start}px)` }}
               >
                 <button
                   type="button"
+                  // Les noms restent visibles et cliquables, mais ne captent plus le
+                  // focus de la télécommande : gauche ouvre le programme précédent.
+                  tabIndex={-1}
                   onClick={() => onSelectChannel(channel)}
                   onFocus={() => setFocused({ channel, program: getCurrentProgram(channel.id, epgData) })}
                   onContextMenu={onGuideSettings ? (e) => { e.preventDefault(); onGuideSettings(channel); } : undefined}
@@ -538,6 +661,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
                         reminded={reminded}
                         recording={recording}
                         replayable={replayable}
+                        entry={p === entryProgram}
                         onSelectChannel={onSelectChannel}
                         onCatchup={onCatchup}
                         setSheet={setSheet}
@@ -553,6 +677,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
             );
           })}
 
+          </div>
         </div>
       </div>
       <ProgramSheet
