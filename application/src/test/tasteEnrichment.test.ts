@@ -109,6 +109,36 @@ describe('enrichRecommendations', () => {
     expect(result.detailsByItemId.has('7')).toBe(true);
   });
 
+  it('résout les séries vues en fiches TV et ignore le film homonyme', async () => {
+    const seriesEntry: PlayHistoryEntry = {
+      channelId: 'vod:1:series:900', ts: now, kind: 'vod', playlistId: '1', mediaKind: 'series',
+      seriesId: '42', name: 'Breaking Bad', status: 'started', positionMs: 120_000,
+    };
+    const result = await enrichRecommendations({
+      history: [seriesEntry, entry('43', 'Breaking Bad')],
+      movies: [item('42', 'Breaking Bad', 1396), item('43', 'Breaking Bad', 999)],
+      candidates: [item('7', 'Better Call Saul', 60059)],
+      playlistId: '1', apiKey: 'clé', kind: 'series',
+    });
+    expect(detailsMock).toHaveBeenCalledWith(1396, 'tv', 'clé');
+    expect(detailsMock).not.toHaveBeenCalledWith(999, 'movie', 'clé');
+    expect(detailsMock).toHaveBeenCalledWith(60059, 'tv', 'clé');
+    expect(result.sampleSize).toBe(1);
+  });
+
+  it('compte une série une seule fois quand plusieurs épisodes ont été vus', async () => {
+    const episodes: PlayHistoryEntry[] = [1, 2, 3].map(index => ({
+      channelId: `vod:1:series:ep${index}`, ts: now - index * 1000, kind: 'vod', playlistId: '1',
+      mediaKind: 'series', seriesId: '42', name: 'Breaking Bad', status: 'started', positionMs: 120_000,
+    }));
+    const result = await enrichRecommendations({
+      history: episodes, movies: [item('42', 'Breaking Bad', 1396)],
+      candidates: [item('7', 'Better Call Saul', 60059)], playlistId: '1', apiKey: 'clé', kind: 'series',
+    });
+    expect(detailsMock.mock.calls.filter(([id]) => id === 1396)).toHaveLength(1);
+    expect(result.sampleSize).toBe(1);
+  });
+
   it('abandonne proprement quand aucun titre vu n’est reconnu', async () => {
     searchMock.mockResolvedValue([]);
     const result = await enrichRecommendations({
@@ -236,5 +266,45 @@ describe('visionnages « Vu ailleurs »', () => {
     const match = matchTaste(result.profile, result.detailsByItemId.get('c')!);
     expect(match.score).toBe(0);
     expect(match.reasons).toEqual([]);
+  });
+});
+
+describe('bibliothèque locale USB/SD', () => {
+  it('résout films et séries puis les ajoute au profil', async () => {
+    searchMock.mockImplementation(async (query, year, kind) => [{
+      id: query === 'Film USB' ? 10 : 20,
+      title: query,
+      releaseDate: year ? `${year}-01-01` : kind === 'tv' ? '2014-01-01' : '2010-01-01',
+      posterPath: null,
+      voteAverage: 7,
+      voteCount: 10,
+    }]);
+    const result = await enrichRecommendations({
+      history: [], movies: [], candidates: [], playlistId: '1', apiKey: 'clé',
+      local: [
+        { title: 'Film USB', year: '2010', kind: 'movie', lastModified: 0 },
+        { title: 'Série USB', year: '', kind: 'series', lastModified: 0 },
+      ],
+    });
+    expect(searchMock).toHaveBeenCalledWith('Film USB', '2010', 'movie', 'clé');
+    expect(searchMock).toHaveBeenCalledWith('Série USB', '', 'tv', 'clé');
+    expect(detailsMock).toHaveBeenCalledWith(10, 'movie', 'clé');
+    expect(detailsMock).toHaveBeenCalledWith(20, 'tv', 'clé');
+    expect(result.localSampleSize).toBe(2);
+    expect(result.sampleSize).toBe(2);
+  });
+
+  it('ne compte pas deux fois un film possédé et déjà vu', async () => {
+    searchMock.mockResolvedValue([{
+      id: 999, title: 'Inception', releaseDate: '2010-07-16', posterPath: null, voteAverage: 8, voteCount: 100,
+    }]);
+    detailsMock.mockImplementation(async (id: number) => details(id, { title: 'Inception' }));
+    const result = await enrichRecommendations({
+      history: [entry('42', 'Inception')], movies: [item('42', 'Inception', 27205)],
+      candidates: [], playlistId: '1', apiKey: 'clé',
+      local: [{ title: 'Inception', year: '2010', kind: 'movie', lastModified: 0 }],
+    });
+    expect(result.sampleSize).toBe(1);
+    expect(result.localSampleSize).toBe(0);
   });
 });

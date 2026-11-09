@@ -53,6 +53,15 @@ it('arrive sur la liste, descend ligne par ligne et OK lance la chaîne', () => 
   expect(onPlay).toHaveBeenCalledWith(fr[1]);
 });
 
+it('borne la hauteur dès le premier rendu : la liste garde une fenêtre défilante', () => {
+  setup();
+  const root = document.querySelector<HTMLElement>('[data-tv-live]');
+  // Sans hauteur au premier rendu, la rangée de grille prend la hauteur du contenu et le
+  // virtualiseur rend les 18 900 chaînes d'un coup (WebView figée, plus aucune flèche).
+  expect(root?.style.height).toMatch(/^\d+px$/);
+  expect(parseInt(root!.style.height, 10)).toBeLessThanOrEqual(window.innerHeight);
+});
+
 it('gauche passe aux catégories ; la liste suit après une pause, droite l’applique tout de suite', async () => {
   setup();
   key('ArrowLeft');

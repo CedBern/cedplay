@@ -34,23 +34,29 @@ function setup(overrides: Partial<TvVodScreenProps> = {}) {
     onToggleWatchlistOnly: vi.fn(),
     watchlistCount: 2,
     watchlistIds: new Set(['id-2']),
-    onToggleWatchlistItem: vi.fn(),
     onOpen: vi.fn(),
-    onPlay: vi.fn(),
     onRefresh: vi.fn(),
     onSearch: vi.fn(),
-    progressLabel: (id: string) => (id === 'id-1' ? 'Reprendre à 5 min' : 'Regarder'),
+    progress: (id: string) => (id === 'id-1' ? { label: 'Reprendre à 5 min', saved: true } : { label: 'Regarder', saved: false }),
     ...overrides,
   };
   render(<TvVodScreen {...props} />);
   return props;
 }
 
-it('place Toutes puis Ma Liste avant les catégories dans leur ordre fournisseur et les outils', () => {
+it('place Ma Liste avant les catégories dans leur ordre fournisseur et les outils', () => {
   setup({ categories: [{ id: 'z', name: 'Z Séries' }, { id: 'n', name: '01 Films' }, { id: 'f', name: 'FR Films' }], onShowLocal: vi.fn() });
   expect(within(screen.getByRole('navigation', { name: 'Catégories' })).getAllByRole('button').map(button => button.textContent)).toEqual([
-    'Toutes les catégories', 'Ma Liste2', 'Z Séries', '01 Films', 'FR Films', 'Rechercher', 'Actualiser', 'USB / SD',
+    'Ma Liste2', 'Z Séries', '01 Films', 'FR Films', 'Rechercher', 'Actualiser', 'USB / SD',
   ]);
+});
+
+it('borne la hauteur dès le premier rendu : la grille garde une fenêtre défilante', () => {
+  setup();
+  const root = document.querySelector<HTMLElement>('[data-tv-vod]');
+  // Sans hauteur au premier rendu, la rangée de grille prend la hauteur du contenu et la
+  // zone défilante n'a plus rien à faire défiler : les flèches changent la sélection hors écran.
+  expect(root?.style.height).toMatch(/^calc\(\d+px/);
 });
 
 it('arrive sur la grille, se déplace et OK ouvre la fiche', () => {
@@ -59,9 +65,9 @@ it('arrive sur la grille, se déplace et OK ouvre la fiche', () => {
   key('ArrowRight');
   expect(active().dataset.tvRow).toBe('1');
   key('ArrowDown');
-  expect(active().dataset.tvRow).toBe('6');
+  expect(active().dataset.tvRow).toBe('7');
   fireEvent.click(active());
-  expect(onOpen).toHaveBeenCalledWith(items[6]);
+  expect(onOpen).toHaveBeenCalledWith(items[7]);
 });
 
 it('gauche en début de ligne passe aux catégories, droite rend la grille', () => {
@@ -123,7 +129,7 @@ it('films : la ligne « USB / SD » de la colonne de gauche ouvre la bibliothèq
 });
 
 it('séries : pas de ligne « USB / SD »', () => {
-  setup({ kind: 'series', onPlay: undefined });
+  setup({ kind: 'series' });
   expect(screen.queryByRole('button', { name: 'USB / SD' })).toBeNull();
 });
 
@@ -136,42 +142,37 @@ it('saut de page atteint la cellule « Afficher davantage » qui charge la suite
   expect(onLoadMore).toHaveBeenCalledTimes(1);
 });
 
-it('colonne de droite : lecture directe du film, fiche, Ma Liste', () => {
-  const { onOpen, onPlay, onToggleWatchlistItem } = setup();
-  for (let i = 0; i < 4; i++) key('ArrowRight');
-  key('ArrowRight'); // bord droit de la ligne (4 % 5) : entre dans la colonne de droite
-  expect(col()).toBe('info');
-  expect(active()).toHaveTextContent('Regarder');
-  fireEvent.click(active());
-  expect(onPlay).toHaveBeenCalledWith(items[4]);
-  key('ArrowDown');
-  expect(active()).toHaveTextContent('Ouvrir la fiche');
-  fireEvent.click(active());
-  expect(onOpen).toHaveBeenCalledWith(items[4]);
-  key('ArrowDown');
-  expect(active()).toHaveTextContent('Ajouter à Ma Liste');
-  fireEvent.click(active());
-  expect(onToggleWatchlistItem).toHaveBeenCalledWith(items[4]);
+it('droite au bout de la ligne ne quitte pas la grille et aucune fiche éclair ne subsiste', () => {
+  setup();
+  for (let i = 0; i < 5; i++) key('ArrowRight');
+  expect(active().dataset.tvRow).toBe('5');
+  key('ArrowRight');
+  expect(active().dataset.tvRow).toBe('5');
+  expect(col()).toBe('grid');
+  expect(document.querySelector('[data-tv-col="info"]')).toBeNull();
 });
 
-it.each([1, 2, 7])('%i titre(s) : la colonne de droite reste atteignable aux flèches seules', (n) => {
+it('l’affiche en reprise porte son libellé sous le titre', () => {
+  setup();
+  expect(within(screen.getByRole('button', { name: /^Titre 1\b/ })).getByText('Reprendre à 5 min')).toBeVisible();
+  expect(within(screen.getByRole('button', { name: /^Titre 2\b/ })).queryByText(/Reprendre/)).toBeNull();
+});
+
+it.each([1, 2, 7])('%i titre(s) : droite en fin de ligne incomplète reste sur la dernière affiche', (n) => {
   const { onOpen } = setup({ items: items.slice(0, n), hasMore: false });
-  let source = 0;
-  // n-1 pas dans la ligne incomplète, puis Droite entre dans la colonne de droite.
-  for (let guard = 0; guard < 24 && col() === 'grid'; guard++) { source = Number(active().dataset.tvRow ?? '0'); key('ArrowRight'); }
-  expect(col()).toBe('info');
-  key('ArrowDown');
-  expect(active()).toHaveTextContent('Ouvrir la fiche');
+  for (let guard = 0; guard < 12; guard++) key('ArrowRight');
+  expect(col()).toBe('grid');
+  // Une ligne fait 6 affiches : avec 7 titres, la 7e est au début de la ligne suivante.
+  expect(active().dataset.tvRow).toBe(String(Math.min(n - 1, 5)));
+  const source = Number(active().dataset.tvRow);
   fireEvent.click(active());
   expect(onOpen).toHaveBeenCalledWith(items[source]);
 });
 
-it('Retour remonte fiche éclair → grille → catégories, puis laisse la main', () => {
+it('Retour remonte grille → catégories, puis laisse la main', () => {
   setup();
-  for (let i = 0; i < 6; i++) key('ArrowRight');
+  key('ArrowRight');
   const back = () => { const e = new Event('tv-vod-back', { cancelable: true }); act(() => { window.dispatchEvent(e); }); return e.defaultPrevented; };
-  expect(back()).toBe(true);
-  expect(col()).toBe('grid');
   expect(back()).toBe(true);
   expect(col()).toBe('cat');
   expect(back()).toBe(false);
@@ -228,6 +229,13 @@ vi.mock('@/utils/idb', async () => ({
   pushPlayHistory: (...args: unknown[]) => mocks.pushPlayHistory(...args),
 }));
 vi.mock('@/utils/nativePlayer', () => ({ NativePlayerBridge: { isAvailable: () => true, openVod: mocks.openVod } }));
+// « Pour toi » : une suggestion du catalogue, avec sa justification, pour vérifier que la
+// raison autrefois lue dans la fiche éclair se retrouve désormais dans la fiche complète.
+vi.mock('@/utils/recommendations', async () => ({
+  ...await vi.importActual<typeof import('@/utils/recommendations')>('@/utils/recommendations'),
+  recommendForHistory: (_history: unknown, movies: CatalogItem[]) =>
+    movies.slice(0, 1).map(item => ({ item, reasons: ['Parce que tu as vu Dune'], score: 1 })),
+}));
 const playlist: PlaylistInfo = { id: 'test', name: 'Test', channels: [], groups: [] };
 
 beforeEach(() => {
@@ -248,19 +256,33 @@ it('en mode TV, la grille remplace la mise en page mobile et OK ouvre la fiche',
   mocks.request.mockImplementation(catalogue);
   render(<VodLibrary playlist={playlist} kind="movie" tvMode onSearch={() => {}} />);
   await screen.findByRole('button', { name: /Film Un/ });
-  expect(screen.getByText('Toutes les catégories')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Action' })).toBeVisible();
   expect(screen.queryByRole('combobox', { name: 'Catégorie VOD' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: /Film Un/ }));
   await screen.findByRole('dialog');
   expect(screen.getByRole('dialog').querySelector('[data-remote-start]')).not.toBeNull();
 });
 
-it('« Regarder » dans la colonne de droite lance la lecture native du film', async () => {
+it('la fiche ouverte par OK lance la lecture native du film', async () => {
+  mocks.request.mockImplementation(catalogue);
+  render(<VodLibrary playlist={playlist} kind="movie" tvMode onSearch={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /Film Un/ }));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Regarder' }));
+  await waitFor(() => expect(mocks.openVod).toHaveBeenCalledWith('https://provider.test/movie/u/p/10.mp4', 'Film Un', 'test:movie:10', false));
+});
+
+it('« Pour toi » : la raison de la suggestion se lit dans la fiche', async () => {
+  // Un visionnage passé déclenche le catalogue complet, donc les recommandations.
+  mocks.getPlayHistory.mockResolvedValue([{ channelId: '9', ts: Date.now(), kind: 'vod', name: 'Dune', playlistId: 'test', mediaKind: 'movie', status: 'completed', positionMs: 0 }]);
   mocks.request.mockImplementation(catalogue);
   render(<VodLibrary playlist={playlist} kind="movie" tvMode onSearch={() => {}} />);
   await screen.findByRole('button', { name: /Film Un/ });
-  fireEvent.click(screen.getByRole('button', { name: 'Regarder' }));
-  await waitFor(() => expect(mocks.openVod).toHaveBeenCalledWith('https://provider.test/movie/u/p/10.mp4', 'Film Un', 'test:movie:10', false));
+  fireEvent.click(screen.getByRole('button', { name: 'Pour toi' }));
+  await screen.findByRole('heading', { name: /Pour toi, d’après tes visionnages/ });
+  fireEvent.click(await screen.findByRole('button', { name: /Film Un/ }));
+  const dialog = await screen.findByRole('dialog');
+  await waitFor(() => expect(within(dialog).getByText('Parce que tu as vu Dune')).toBeVisible());
 });
 
 it('retrouve la catégorie et l’affiche de la dernière visite', async () => {
@@ -321,35 +343,49 @@ it('série : le focus entre sur le premier épisode quand la liste arrive', asyn
   // Le bouton principal n'existe pas encore : le conteneur de la fiche porte le focus.
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('dialog')));
   resolveInfo({ info: { plot: 'Une histoire.' }, episodes: { '1': [{ id: '501', episode_num: 1, title: 'Pilote', container_extension: 'mp4' }] } });
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Regarder' })).toHaveFocus());
+  // Entrée dans la fiche : le premier épisode de la liste, pas un bouton d'action.
+  await waitFor(() => expect(screen.getByRole('button', { name: /1\. Pilote/ })).toHaveFocus());
 });
 
-it('série : une navigation déjà commencée garde la main à l’arrivée des épisodes', async () => {
+it('série : refermer la fiche rend le focus à l’affiche ouverte', async () => {
   let resolveInfo: (value: unknown) => void = () => {};
+  seriesMocks(resolve => { resolveInfo = resolve; });
+  render(<VodLibrary playlist={playlist} kind="series" tvMode onSearch={() => {}} />);
+  const poster = await screen.findByRole('button', { name: /Série Un/ });
+  fireEvent.click(poster);
+  await screen.findByRole('dialog');
+  resolveInfo({ info: {}, episodes: { '1': [{ id: '501', episode_num: 1, title: 'Pilote', container_extension: 'mp4' }] } });
+  await screen.findByRole('button', { name: /1\. Pilote/ });
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  // Pas de retour aux rubriques : on reste sur l'affiche qu'on vient d'ouvrir.
+  await waitFor(() => expect(poster).toHaveFocus());
+});
+
+it('série : une navigation déjà commencée garde la main à l’arrivée des épisodes', async () => {  let resolveInfo: (value: unknown) => void = () => {};
   seriesMocks(resolve => { resolveInfo = resolve; });
   render(<VodLibrary playlist={playlist} kind="series" tvMode onSearch={() => {}} />);
   fireEvent.click(await screen.findByRole('button', { name: /Série Un/ }));
   await screen.findByRole('dialog');
   // L'utilisateur a déjà appuyé sur une flèche : le focus ne bouge plus tout seul.
   fireEvent.keyDown(window, { key: 'ArrowDown' });
-  screen.getByRole('button', { name: /Ajouter à ma liste/ }).focus();
+  const close = screen.getByRole('button', { name: 'Close' });
+  close.focus();
   resolveInfo({ info: {}, episodes: { '1': [{ id: '501', episode_num: 1, title: 'Pilote', container_extension: 'mp4' }] } });
-  await screen.findByRole('button', { name: 'Regarder' });
-  expect(document.activeElement).toBe(screen.getByRole('button', { name: /Ajouter à ma liste/ }));
+  await screen.findByRole('button', { name: /1\. Pilote/ });
+  expect(document.activeElement).toBe(close);
 });
 
-it('propose « Pour toi » après Ma Liste et affiche la raison de la suggestion surlignée', () => {
+it('propose « Pour toi » après Ma Liste', () => {
   const onToggleForYou = vi.fn();
   setup({ onToggleForYou });
   const nav = screen.getByRole('navigation', { name: 'Catégories' });
-  expect(within(nav).getAllByRole('button').map(button => button.textContent).slice(0, 3)).toEqual(['Toutes les catégories', 'Ma Liste2', 'Pour toi']);
+  expect(within(nav).getAllByRole('button').map(button => button.textContent).slice(0, 3)).toEqual(['Ma Liste2', 'Pour toi', 'Action']);
   fireEvent.click(within(nav).getByRole('button', { name: 'Pour toi' }));
   expect(onToggleForYou).toHaveBeenCalledTimes(1);
   cleanup();
-  setup({ onToggleForYou, showForYou: true, forYouReasons: new Map([['id-1', 'Parce que tu as vu Dune']]) });
+  setup({ onToggleForYou, showForYou: true });
   expect(screen.getByRole('button', { name: 'Pour toi' })).toHaveAttribute('aria-pressed', 'true');
   expect(screen.getByRole('heading', { name: /Pour toi/ })).toBeVisible();
-  expect(within(screen.getByRole('complementary', { name: 'Titre sélectionné' })).getByText('Parce que tu as vu Dune')).toBeVisible();
 });
 
 it('« Pour toi » vide explique pourquoi', () => {
@@ -361,13 +397,13 @@ it.each([
   ['Pour toi', { showForYou: true, onToggleForYou: vi.fn() }],
   ['Ma Liste', { showWatchlistOnly: true }],
 ] as const)('%s : revenir sur la catégorie déjà retenue quitte la liste', (_label, overrides) => {
-  const { onSelectCategory } = setup({ category: '', ...overrides });
+  const { onSelectCategory } = setup({ category: 'c1', ...overrides });
   // Gauche depuis la grille : l'entrée active est la liste affichée, pas la catégorie.
   key('ArrowLeft');
   expect(col()).toBe('cat');
   expect(active()).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(screen.getByRole('button', { name: 'Toutes les catégories' }));
-  expect(onSelectCategory).toHaveBeenCalledWith('');
+  fireEvent.click(screen.getByRole('button', { name: 'Action' }));
+  expect(onSelectCategory).toHaveBeenCalledWith('c1');
 });
 
 it('Pour toi : droite sur la catégorie déjà retenue quitte aussi les suggestions', () => {

@@ -37,8 +37,8 @@ vi.mock('@/components/VodLibrary', () => ({
     kind={kind} playlistId="p" categories={[{ id: 'c1', name: 'Action' }]} category="c1" onSelectCategory={() => {}}
     items={items} loading={false} error="" onRetry={() => {}} hasMore={false} onLoadMore={() => {}}
     showWatchlistOnly={false} onToggleWatchlistOnly={() => {}} watchlistCount={0} watchlistIds={new Set()}
-    onToggleWatchlistItem={() => {}} onOpen={() => {}} onPlay={() => {}} onRefresh={() => {}} onSearch={() => {}}
-    progressLabel={() => 'Regarder'}
+    onOpen={() => {}} onRefresh={() => {}} onSearch={() => {}}
+    progress={() => ({ label: 'Regarder', saved: false })}
   />,
 }));
 
@@ -49,7 +49,7 @@ afterEach(() => { cleanup(); root.classList.remove('remote-navigation', 'tv-chro
 const header = () => document.querySelector<HTMLElement>('[data-app-header]')!;
 const focused = () => document.activeElement as HTMLElement;
 
-it('Films : la grille replie l’en-tête, Haut le rouvre sur la rubrique, Direct ne replie pas', async () => {
+it('Films : le menu reste visible dans la grille et Haut rejoint la rubrique', async () => {
   const user = userEvent.setup();
   render(<IPTVPlayer />);
   await screen.findByText('Reprise test');
@@ -63,8 +63,8 @@ it('Films : la grille replie l’en-tête, Haut le rouvre sur la rubrique, Direc
   // L'écran place le focus sur la première affiche : l'en-tête se replie.
   const poster = await waitForPoster();
   act(() => poster.focus());
-  expect(root.classList.contains('tv-chrome-hidden')).toBe(true);
-  expect(root.style.getPropertyValue('--tv-header-shift')).toMatch(/^\d+px$/);
+  expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
+  expect(header()).toBeVisible();
 
   // Haut depuis la première ligne : la rubrique active reprend le focus et l'en-tête revient.
   fireEvent.keyDown(poster, { key: 'ArrowUp' });
@@ -72,9 +72,9 @@ it('Films : la grille replie l’en-tête, Haut le rouvre sur la rubrique, Direc
   expect(header().contains(focused())).toBe(true);
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
 
-  // Retour dans la grille : repli de nouveau.
+  // Retour dans la grille : le menu reste visible.
   act(() => poster.focus());
-  expect(root.classList.contains('tv-chrome-hidden')).toBe(true);
+  expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
 
   // Direct n'a pas de repli : changer de rubrique rend l'en-tête.
   await user.click(within(navigation).getByRole('tab', { name: 'Direct' }));
@@ -115,3 +115,44 @@ async function waitForPoster(): Promise<HTMLElement> {
   await screen.findAllByText('Titre 0');
   return document.querySelector<HTMLElement>('[data-tv-vod] [data-tv-row="0"]')!;
 }
+
+it('Direct TV repart en haut après un accueil défilé, avant de verrouiller la page', async () => {
+  const previous = Object.getOwnPropertyDescriptor(document, 'scrollingElement');
+  Object.defineProperty(document, 'scrollingElement', { configurable: true, value: document.documentElement });
+  const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+  try {
+    render(<IPTVPlayer />);
+    await screen.findByText('Reprise test');
+    document.documentElement.scrollTop = 900;
+    scroll.mockClear();
+    await userEvent.click(screen.getByRole('tab', { name: 'Direct' }));
+    expect(await screen.findByText('Direct TV test')).toBeVisible();
+    expect(document.documentElement.scrollTop).toBe(0);
+    expect(scroll).toHaveBeenCalledWith(0, 0);
+  } finally {
+    document.documentElement.scrollTop = 0;
+    scroll.mockRestore();
+    if (previous) Object.defineProperty(document, 'scrollingElement', previous);
+    else Reflect.deleteProperty(document, 'scrollingElement');
+  }
+});
+
+it('Retour des catégories Films rejoint le menu, puis Séries s’ouvre avec OK', async () => {
+  render(<IPTVPlayer />);
+  await screen.findByText('Reprise test');
+  await userEvent.click(screen.getByRole('tab', { name: 'Films' }));
+  const poster = await waitForPoster();
+  act(() => poster.focus());
+  fireEvent.keyDown(poster, { key: 'ArrowLeft' });
+  const back = new Event('iptv-back', { cancelable: true });
+  window.dispatchEvent(back);
+  expect(back.defaultPrevented).toBe(true);
+  expect(screen.getByRole('tab', { name: 'Films' })).toHaveFocus();
+  expect(header()).toBeVisible();
+  // Le gestionnaire global vit dans App, pas dans IPTVPlayer : on simule ici son
+  // déplacement vers l'onglet voisin ; l'activation par OK reste celle de Radix.
+  act(() => screen.getByRole('tab', { name: 'Séries' }).focus());
+  await userEvent.keyboard('{Enter}');
+  expect(screen.getByRole('tab', { name: 'Séries' })).toHaveAttribute('aria-selected', 'true');
+  expect(await waitForPoster()).toBeVisible();
+});

@@ -23,6 +23,9 @@ export interface TasteSource {
   details: TmdbDetails;
   /** Horodatage du visionnage (ms). */
   ts: number;
+  /** Poids fixe 0..1 pour une œuvre possédée et non visionnée : la date du fichier
+   * ne dit rien de la fraîcheur du goût. Absent = décroissance par récence. */
+  weight?: number;
 }
 
 export interface TasteProfile {
@@ -93,7 +96,7 @@ export function buildTasteProfile(sources: TasteSource[], nowMs = Date.now()): T
   for (const source of sources) {
     const { details } = source;
     if (!details || !details.id) continue;
-    const weight = recency(source.ts, nowMs);
+    const weight = source.weight ?? recency(source.ts, nowMs);
     if (weight <= 0) continue;
     sampleSize += 1;
 

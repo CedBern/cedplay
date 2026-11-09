@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { catchupUrl, formatTimeshiftStart, isInArchive, parseArchiveStreams, streamIdOf } from '@/utils/catchup';
+import { catchupUrl, formatTimeshiftStart, isInArchive, parseArchiveStreams, streamIdOf, timeshiftTemplate } from '@/utils/catchup';
 import { describeFailure } from '@/utils/streamCheck';
 
 describe('catch-up Xtream', () => {
@@ -29,6 +29,12 @@ describe('catch-up Xtream', () => {
     const account = { server: 'http://srv.test:8080', username: 'jo', password: 'p@ss' };
     const url = catchupUrl(account, '1234', new Date('2026-11-05T19:30:00Z'), new Date('2026-11-05T20:21:10Z'), 'UTC');
     expect(url).toBe('http://srv.test:8080/timeshift/jo/p%40ss/52/2026-11-05:19-30/1234.ts');
+  });
+
+  it('laisse le modèle timeshift être rempli par le lecteur Android', () => {
+    const account = { server: 'http://srv.test:8080', username: 'jo', password: 'p@ss' };
+    expect(timeshiftTemplate(account, '1234'))
+      .toBe('http://srv.test:8080/timeshift/jo/p%40ss/{minutes}/{start}/1234.ts');
   });
 
   it('limite la relecture à la fenêtre d’archive', () => {

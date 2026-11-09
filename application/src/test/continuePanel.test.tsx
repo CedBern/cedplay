@@ -56,7 +56,7 @@ it('redirige vers le catalogue et vers la chaîne au clic', async () => {
 
   render(<ContinuePanel playlist={playlist} onChannelSelect={onChannelSelect} onOpenVod={onOpenVod} />);
 
-  await user.click(await screen.findByRole('button', { name: /^Série test/ }));
+  await user.click(await screen.findByRole('button', { name: 'Reprendre Série test' }));
   expect(onOpenVod).toHaveBeenCalledWith('series');
 
   await user.click(screen.getByRole('button', { name: /Télé Québec/ }));

@@ -219,6 +219,21 @@ public class NativePlayerActivity extends AppCompatActivity {
         boolean hasProgram;
     }
 
+    /**
+     * Archive d'une chaîne, telle que la page la connaît. Xtream : un modèle d'adresse
+     * (`{minutes}`, `{start}`) et le fuseau du serveur, remplis à l'appui avec le programme
+     * qui passe à ce moment-là. M3U : une adresse déjà calculée, limitée à son programme.
+     */
+    private static final class Catchup {
+        final String template, timezone, url;
+        final long urlStart, urlEnd;
+        Catchup(String template, String timezone, String url, long urlStart, long urlEnd) {
+            this.template = template; this.timezone = timezone; this.url = url;
+            this.urlStart = urlStart; this.urlEnd = urlEnd;
+        }
+        boolean isAvailable() { return !template.isEmpty() || !url.isEmpty(); }
+    }
+
     // Palette « Salle obscure » : un seul accent, l'orange du logo, qui sert aussi au direct.
     private static final int C_BG = PlayerOption.C_BG;
     private static final int C_CARD = PlayerOption.C_CARD;
@@ -250,6 +265,8 @@ public class NativePlayerActivity extends AppCompatActivity {
     private LinearLayout centerControls;
     private ImageButton btnCenterPause;
     private Button btnBackToLive;
+    /** Téléphone : dernière commande de la barre d'infos, « Depuis le début » ou « Revenir au direct ». */
+    private Button btnRestart;
     private TextView cornerBadge;
     private float playbackSpeed = 1f;
     /** Orientation sur téléphone : 0 automatique, 1 paysage, 2 verrouillée. */
@@ -261,6 +278,13 @@ public class NativePlayerActivity extends AppCompatActivity {
     private long liveDelayMs;
     /** Le flux a lâché pendant la pause : la reprise repartira au direct. */
     private boolean liveLostWhilePaused;
+    // ── Différé du programme en cours ──
+    /** true : le lecteur joue l'archive du programme, pas le direct (la chaîne ne change pas). */
+    private boolean archive;
+    private long archiveStartMs, archiveEndMs;
+    private String archiveUrl, archiveTitle;
+    /** Archive annoncée par la page, par adresse de chaîne (liste : archive Xtream ou replay M3U). */
+    private final HashMap<String, Catchup> catchupByUrl = new HashMap<>();
     private final Handler tickHandler = new Handler(Looper.getMainLooper());
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
@@ -440,11 +464,19 @@ public class NativePlayerActivity extends AppCompatActivity {
                     channelPrograms.add(programs != null ? programs : new JSONArray());
                     channelNumbers.add(entry.length() > 4 ? entry.optString(4, "") : "");
                     channelLogos.add(entry.length() > 5 ? entry.optString(5, "") : "");
+                    JSONArray catchup = entry.length() > 6 ? entry.optJSONArray(6) : null;
+                    if (catchup != null && catchup.length() >= 5) {
+                        Catchup c = new Catchup(catchup.optString(0, ""), catchup.optString(1, ""),
+                                catchup.optString(2, ""), catchup.optLong(3, 0), catchup.optLong(4, 0));
+                        if (c.isAvailable()) catchupByUrl.put(channelUrls.get(i), c);
+                    }
                 }
                 channelTotal = Math.max(channelUrls.size(), getIntent().getIntExtra("channelTotal", channelUrls.size()));
                 if (channelIndex >= 0 && channelIndex < channelUrls.size()) {
                     streamUrl = channelUrls.get(channelIndex); streamTitle = channelTitles.get(channelIndex);
                 }
+                android.util.Log.i("IPTV-Playback", "zap_catchup channels=" + catchupByUrl.size()
+                    + " current=" + catchupByUrl.containsKey(streamUrl));
             } catch (Exception ignored) { channelUrls = null; channelTitles = null; programLineCache.clear(); }
         }
         // Après une rotation, l'index sauvegardé désigne déjà la liste complète : l'adoption
@@ -1205,6 +1237,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         cancelPendingZap();
         if (channelUrls == null || channelTitles == null || channelIndex < 0) return;
         if (next < 0 || next >= channelUrls.size() || next == channelIndex) return;
+        final boolean wasArchive = archive;
         cancelLiveReconnect("zap");
         if (recording) stopRecording();
         // Sauver la progression sous l'ancienne identité avant toute modification de mediaId.
@@ -1233,7 +1266,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
         if (!vod) {
             previousIndex = channelIndex;
-            // Nouvelle chaîne : elle démarre au direct, la pause et le retard sont abandonnés.
+            // Nouvelle chaîne : elle démarre au direct, la pause, le retard et le différé sont abandonnés.
+            leaveArchive();
             pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false; playWhenReady = true;
         }
         channelIndex = next;
@@ -1250,6 +1284,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         } else {
             initPlayer(streamUrl);
         }
+        // Le zap quitte le différé : la rangée Progression n'a plus lieu d'être.
+        if (wasArchive && tvUi) rebuildBandRows();
         if (!vod) showZapOverlay(next);
         // TV : bandeau de commandes ouvert, il le reste ; sinon le bandeau de zap avec logo suffit, sans doublon en bas.
         if (tvUi && isChannelPanelOpen()) {
@@ -1572,11 +1608,16 @@ public class NativePlayerActivity extends AppCompatActivity {
         infoNext.setSingleLine(true);
         infoNext.setEllipsize(android.text.TextUtils.TruncateAt.END);
         if (!tvUi && !vod) {
-            // Téléphone : « Ensuite… » à gauche ; à droite, retour au direct, dernière chaîne, liste.
+            // Téléphone : informations et raccourcis de lecture, puis navigation accessible au pouce.
             LinearLayout bottom = new LinearLayout(this);
             bottom.setOrientation(LinearLayout.HORIZONTAL);
             bottom.setGravity(Gravity.CENTER_VERTICAL);
             bottom.addView(infoNext, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            // « Depuis le début » et « Revenir au direct » occupent la même place : au plus
+            // une des deux est visible, selon qu'on est au direct ou dans l'archive.
+            btnRestart = phonePill("", R.drawable.ic_player_replay, "Regarder le programme depuis le début", v -> restartLiveFromStart());
+            btnRestart.setVisibility(View.GONE);
+            bottom.addView(btnRestart);
             btnBackToLive = phonePill("Revenir au direct", 0, "Revenir au direct", v -> backToLive());
             btnBackToLive.setVisibility(View.GONE);
             bottom.addView(btnBackToLive);
@@ -1584,11 +1625,35 @@ public class NativePlayerActivity extends AppCompatActivity {
                 btnPrevious = phonePill("", R.drawable.ic_player_replay, "Revenir à la chaîne précédente", v -> { if (previousIndex >= 0) switchTo(previousIndex); });
                 bottom.addView(btnPrevious);
                 updatePreviousButton();
-                bottom.addView(phonePill("Chaînes", R.drawable.ic_player_list, "Ouvrir la liste des chaînes", v -> openChannelPanel()));
             }
+            // Enregistrement du direct : bouton visible au-dessus de la navigation, à portée
+            // de pouce pendant un match. Sur HLS, le Recorder repart de 3 segments en arrière
+            // (≈ 15-20 s) : appuyé juste après l'action, le fichier contient le but et son
+            // ralenti. Sur MPEG-TS, la capture part du direct.
+            btnRec = phonePill("Enregistrer", R.drawable.ic_player_record, "Enregistrer le direct", v -> toggleRecording());
+            btnRec.setVisibility(isHttpUrl(streamUrl) ? View.VISIBLE : View.GONE);
+            bottom.addView(btnRec);
             LinearLayout.LayoutParams bottomParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             bottomParams.setMargins(0, dp(8), 0, 0);
             infoBar.addView(bottom, bottomParams);
+            LinearLayout navigation = new LinearLayout(this);
+            navigation.setOrientation(LinearLayout.HORIZONTAL);
+            Button returnToChannels = phonePill("Retour aux chaînes", R.drawable.ic_player_back,
+                    "Retour à la liste des chaînes", v -> finish());
+            returnToChannels.setPadding(dp(8), 0, dp(8), 0);
+            LinearLayout.LayoutParams returnParams = new LinearLayout.LayoutParams(0, dp(48), 1f);
+            navigation.addView(returnToChannels, returnParams);
+            if (channelUrls != null) {
+                Button browseChannels = phonePill("Parcourir", R.drawable.ic_player_list,
+                        "Parcourir les chaînes sans quitter le lecteur", v -> openChannelPanel());
+                LinearLayout.LayoutParams browseParams = new LinearLayout.LayoutParams(0, dp(48), 1f);
+                browseParams.setMargins(dp(8), 0, 0, 0);
+                navigation.addView(browseChannels, browseParams);
+            }
+            LinearLayout.LayoutParams navigationParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            navigationParams.setMargins(0, dp(8), 0, 0);
+            infoBar.addView(navigation, navigationParams);
         } else {
             LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             nextParams.setMargins(0, dp(6), 0, 0);
@@ -1659,8 +1724,14 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (vod) { updateVodHeader(); return; }
         long now = System.currentTimeMillis();
         String number = numberAt(channelIndex);
-        int current = currentProgramIndex(channelIndex, now);
-        JSONArray p = current >= 0 ? programAt(channelIndex, current) : null;
+        // En différé, le bandeau décrit l'instant d'antenne regardé, pas l'heure courante :
+        // progression, « reste » et programme affiché suivent la position dans l'archive.
+        long watched = now;
+        if (archive) {
+            watched = Math.max(archiveStartMs, Math.min(archiveWatchedAtMs(), Math.max(archiveStartMs, archiveEndMs - 1)));
+        }
+        int current = currentProgramIndex(channelIndex, watched);
+        JSONArray p = archive ? archiveProgram() : (current >= 0 ? programAt(channelIndex, current) : null);
         if (topSubtitle != null) {
             // Téléphone : la barre du haut porte le nom de la chaîne et le programme en cours.
             if (tvTitle != null) tvTitle.setText((number.isEmpty() ? "" : number + " · ") + streamTitle);
@@ -1671,12 +1742,21 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (infoBar == null) return;
         String group = channelGroups != null && channelIndex >= 0 && channelIndex < channelGroups.size() ? channelGroups.get(channelIndex) : "";
         String badge = liveBadge();
-        String word = badge == null ? "DIRECT" : badge;
-        String mark = badge == null || pausedAtMs == 0 ? "●" : "❚❚";
+        // Le retard chiffré reste au badge du coin : l'étiquette garde « DIFFÉRÉ », court.
+        String word = archive ? (isPaused() ? "EN PAUSE" : "DIFFÉRÉ") : (badge == null ? "DIRECT" : badge);
+        boolean muted = archive || badge == null || pausedAtMs > 0;
+        String mark = isPaused() ? "❚❚" : "●";
         String state = mark + "  " + word;
-        String head = state + "  ·  " + (number.isEmpty() ? "" : number + "  ") + streamTitle + (group.isEmpty() ? "" : "  ·  " + group);
+        // Étiquette : état, numéro, catégorie. Le nom de la chaîne n'y figure que si le
+        // grand titre affiche le programme — sans guide il répéterait le titre.
+        StringBuilder headText = new StringBuilder(state);
+        String[] headParts = { number, p != null ? streamTitle : "", group };
+        for (String part : headParts) {
+            if (!part.isEmpty()) headText.append("  ·  ").append(part);
+        }
+        String head = headText.toString();
         SpannableString label = new SpannableString(head);
-        label.setSpan(new ForegroundColorSpan(badge == null ? C_LIVE : C_DIM), 0, mark.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        label.setSpan(new ForegroundColorSpan(muted ? C_DIM : C_LIVE), 0, mark.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         label.setSpan(new ForegroundColorSpan(C_TEXT), mark.length(), state.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         label.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), mark.length(), state.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         infoChannel.setText(label);
@@ -1684,16 +1764,26 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (p != null) {
             long start = p.optLong(0), end = p.optLong(1);
             infoNow.setText(p.optString(2, streamTitle));
-            infoProgress.setProgress((int) Math.max(0, Math.min(1000, (now - start) * 1000 / Math.max(1, end - start))));
-            long remaining = Math.max(0, (end - now + 59_999) / 60_000);
+            infoProgress.setProgress((int) Math.max(0, Math.min(1000, (watched - start) * 1000 / Math.max(1, end - start))));
+            long remaining = Math.max(0, (end - watched + 59_999) / 60_000);
             infoTimes.setText(hour(start) + " – " + hour(end) + "  ·  reste " + formatMinutes(remaining));
             infoTimeRow.setVisibility(View.VISIBLE);
         } else {
             infoNow.setText(streamTitle);
             infoTimeRow.setVisibility(View.GONE);
         }
+        if (seekRow != null && archive) updateSeekRow();
+        // En différé, la ligne du bas dit ce qui passe en direct : c'est ce que « Revenir au
+        // direct » fera rejoindre.
+        int liveIndex = archive ? currentProgramIndex(channelIndex, now) : -1;
+        JSONArray live = liveIndex >= 0 ? programAt(channelIndex, liveIndex) : null;
         JSONArray next = nextProgram(channelIndex, now);
-        if (next != null) {
+        if (archive) {
+            // Pas d'horaire ici : celui du programme en cours est déjà sur la ligne du
+            // dessus, et « en direct » désigne bien souvent le même titre (on est dedans).
+            infoNext.setText(live != null ? "En direct  ·  " + live.optString(2, "") : "En direct");
+            infoNext.setVisibility(View.VISIBLE);
+        } else if (next != null) {
             infoNext.setText("Ensuite  " + hour(next.optLong(0)) + "  ·  " + next.optString(2, ""));
             infoNext.setVisibility(View.VISIBLE);
         } else if (p == null && channelPrograms != null && channelIndex >= 0 && channelIndex < channelPrograms.size() && channelPrograms.get(channelIndex) != UNKNOWN_EPG) {
@@ -1703,6 +1793,18 @@ public class NativePlayerActivity extends AppCompatActivity {
             infoNext.setVisibility(tvUi ? View.GONE : View.INVISIBLE);
         }
         if (btnBackToLive != null) btnBackToLive.setVisibility(isBehindLive() ? View.VISIBLE : View.GONE);
+        if (btnRestart != null) btnRestart.setVisibility(canRestartArchive() ? View.VISIBLE : View.GONE);
+        if (btnRec != null) btnRec.setVisibility(!archive && isHttpUrl(streamUrl) ? View.VISIBLE : View.GONE);
+    }
+
+    /** Barre de progression du bandeau TV : position dans le programme différé. */
+    private void updateSeekRow() {
+        long start = archiveStartMs, end = archiveEndMs;
+        long position = Math.max(0, Math.min(archiveWatchedAtMs(), end) - start);
+        long duration = Math.max(1, end - start);
+        seekBar.setProgress((int) Math.min(1000, position * 1000 / duration));
+        seekElapsed.setText(formatMs(position));
+        seekRemaining.setText("−" + formatMs(Math.max(0, duration - position)));
     }
 
     /** TV, films et séries : titre, épisode, heure de fin, barre de progression. */
@@ -2207,8 +2309,12 @@ public class NativePlayerActivity extends AppCompatActivity {
                     if (vod && episodeIds != null && channelUrls != null && channelIndex + 1 < channelUrls.size()) {
                         startNextEpisodeCountdown();
                     }
-                    // Un direct ne finit pas : le serveur a coupé (souvent après une longue pause).
-                    if (!vod && !casting && playerView != null) {
+                    // Le programme rattrapé est fini : on rejoint le direct de la même chaîne,
+                    // au lieu de laisser une image figée sur la dernière seconde de l'archive.
+                    if (archive) {
+                        backToLive();
+                    } else if (!vod && !casting && playerView != null) {
+                        // Un direct ne finit pas : le serveur a coupé (souvent après une longue pause).
                         if (pausedAtMs > 0) liveLostWhilePaused = true;
                         else if (canRecoverLive()) queueLiveReconnect("Le flux s'est arrêté.");
                     }
@@ -2232,6 +2338,8 @@ public class NativePlayerActivity extends AppCompatActivity {
             @Override public void onPlayWhenReadyChanged(boolean ready, int reason) {
                 if (vod || player == null || ready != player.getPlayWhenReady()) return;
                 playWhenReady = ready;
+                // Différé : une pause est une pause de lecture, sans retard de direct à suivre.
+                if (archive) return;
                 if (!ready) {
                     if (pausedAtMs == 0) pausedAtMs = SystemClock.elapsedRealtime();
                     if (liveReconnect.isRecovering()) liveLostWhilePaused = true;
@@ -2477,7 +2585,7 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private boolean canRecoverLive() {
-        return !vod && !casting && streamUrl != null && playWhenReady && pausedAtMs == 0
+        return !vod && !archive && !casting && streamUrl != null && playWhenReady && pausedAtMs == 0
             && player != null && player.getPlayWhenReady()
             && (resumed || isInPipMode()) && !isFinishing() && !isDestroyed();
     }
@@ -2885,6 +2993,15 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void updateRecButton() {
+        if (btnRec == null) return;
+        // Pas d'enregistrement en différé : la pastille capte le direct, pas le programme relu.
+        boolean available = !vod && !archive && isHttpUrl(streamUrl);
+        btnRec.setVisibility(available ? View.VISIBLE : View.GONE);
+        if (!available) return;
+        // Pastille orange pendant la capture (comme le badge DIRECT), fond sombre au repos.
+        btnRec.setText(recording ? "Arrêter" : "Enregistrer");
+        btnRec.setContentDescription(recording ? "Arrêter l'enregistrement" : "Enregistrer le direct");
+        styleFocusable(btnRec, recording ? C_LIVE : PlayerOption.C_PILL, C_TEXT, C_TEXT);
         refreshControls();
     }
 
@@ -3168,6 +3285,9 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private void releasePlayer() {
         cancelLiveReconnect("release");
+        // Le média quitte la mémoire : le différé aussi. Revenir dans le lecteur repart au
+        // direct plutôt que de rejouer une archive à sa première image.
+        if (archive) { leaveArchive(); if (tvBand != null) rebuildBandRows(); }
         // Lecteur libéré (arrière-plan, erreur, destruction) : une interruption ouverte ne peut
         // plus se terminer normalement ; la clôturer pour ne pas gonfler une session ultérieure.
         rebuffer.close();
@@ -3377,24 +3497,119 @@ public class NativePlayerActivity extends AppCompatActivity {
         }
     }
 
-    // ── Pause, et reprise du direct ─────────────────────────────────
+    // ── Pause, reprise du direct et différé ─────────────────────────
 
     private boolean isPaused() {
         return player != null ? !player.getPlayWhenReady() : !playWhenReady;
     }
 
-    /** Direct en pause ou en retard (au-delà du seuil d'affichage). */
+    /** Direct en pause ou en retard, ou archive du programme en cours. */
     private boolean isBehindLive() {
-        return !vod && (pausedAtMs > 0 || liveDelayMs >= LIVE_DELAY_SHOWN_MS);
+        return !vod && (archive || pausedAtMs > 0 || liveDelayMs >= LIVE_DELAY_SHOWN_MS);
     }
 
     private long currentLiveDelayMs() {
         return liveDelayMs + (pausedAtMs > 0 ? SystemClock.elapsedRealtime() - pausedAtMs : 0);
     }
 
+    // ── Différé du programme en cours ───────────────────────────────
+
+    /** Instant d'antenne regardé : début du programme + position dans l'archive. */
+    private long archiveWatchedAtMs() {
+        long position = player != null ? Math.max(0, player.getCurrentPosition()) : 0;
+        return archiveStartMs + position;
+    }
+
+    /** Programme joué en différé, sous la même forme que ceux du guide. */
+    private JSONArray archiveProgram() {
+        JSONArray p = new JSONArray();
+        p.put(archiveStartMs); p.put(archiveEndMs); p.put(archiveTitle != null ? archiveTitle : "");
+        return p;
+    }
+
+    /** « Depuis le début » proposé : la chaîne a une archive et elle couvre le programme à l'antenne. */
+    private boolean canRestartArchive() {
+        if (vod || archive || casting || streamUrl == null) return false;
+        Catchup c = catchupByUrl.get(streamUrl);
+        if (c == null) return false;
+        long now = System.currentTimeMillis();
+        // Xtream : le programme est relu dans le guide transmis au moment de l'appui, donc
+        // l'action reste juste même si la chaîne a changé d'émission depuis l'ouverture.
+        if (!c.template.isEmpty()) return currentProgramIndex(channelIndex, now) >= 0;
+        return now >= c.urlStart && now < c.urlEnd;
+    }
+
+    /**
+     * Adresse de l'archive du programme à l'antenne maintenant, ou null. `window` reçoit le
+     * début et la fin de ce programme : ils bornent la barre de progression du différé.
+     */
+    private String archiveUrlAt(long[] window) {
+        Catchup c = catchupByUrl.get(streamUrl);
+        if (c == null) return null;
+        long now = System.currentTimeMillis();
+        if (!c.template.isEmpty()) {
+            int index = currentProgramIndex(channelIndex, now);
+            JSONArray p = index >= 0 ? programAt(channelIndex, index) : null;
+            if (p == null) return null;
+            window[0] = p.optLong(0); window[1] = p.optLong(1);
+            return timeshiftUrl(c, window[0], window[1]);
+        }
+        if (now < c.urlStart || now >= c.urlEnd) return null;
+        window[0] = c.urlStart; window[1] = c.urlEnd;
+        return c.url;
+    }
+
+    /** Adresse /timeshift/ : durée du programme en minutes, début à l'heure du serveur. */
+    private static String timeshiftUrl(Catchup c, long start, long end) {
+        long minutes = Math.max(1, (long) Math.ceil((end - start) / 60_000.0));
+        java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("yyyy-MM-dd:HH-mm", Locale.ROOT);
+        if (!c.timezone.isEmpty()) format.setTimeZone(java.util.TimeZone.getTimeZone(c.timezone));
+        return c.template.replace("{minutes}", String.valueOf(minutes)).replace("{start}", format.format(new Date(start)));
+    }
+
+    private void leaveArchive() {
+        archive = false; archiveStartMs = 0; archiveEndMs = 0; archiveUrl = null; archiveTitle = null;
+    }
+
+    /** Rejoue le programme à l'antenne depuis son début, sans quitter la chaîne ni le zap. */
+    private void restartLiveFromStart() {
+        if (vod || archive || casting) return;
+        long[] window = new long[2];
+        String url = archiveUrlAt(window);
+        if (url == null) {
+            Toast.makeText(this, "Différé indisponible pour ce programme.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        archiveTitle = null;
+        if (channelPrograms != null && channelIndex >= 0 && channelIndex < channelPrograms.size()) {
+            JSONArray programs = channelPrograms.get(channelIndex);
+            for (int i = 0; i < programs.length(); i++) {
+                JSONArray p = programs.optJSONArray(i);
+                if (p != null && p.optLong(0) == window[0] && p.optLong(1) == window[1]) { archiveTitle = p.optString(2, ""); break; }
+            }
+        }
+        archive = true; archiveStartMs = window[0]; archiveEndMs = window[1]; archiveUrl = url;
+        // Le différé n'est pas une pause du direct : aucun retard à mémoriser.
+        pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false; playWhenReady = true;
+        cancelLiveReconnect("archive");
+        cancelPendingZap();
+        if (recording) stopRecording();
+        if (player != null) prepareMedia(url); else initPlayer(url);
+        lastUsedKey = "live";
+        if (tvUi) rebuildBandRows();
+        refreshControls();
+        Toast.makeText(this, archiveTitle != null && !archiveTitle.isEmpty() ? "Depuis le début · " + archiveTitle : "Depuis le début",
+            Toast.LENGTH_SHORT).show();
+    }
+
     /** « EN PAUSE · 0:42 », « DIFFÉRÉ −0:42 », ou null au direct. */
     private String liveBadge() {
         if (vod) return null;
+        if (archive) {
+            long delay = Math.max(0, System.currentTimeMillis() - archiveWatchedAtMs());
+            if (isPaused()) return "EN PAUSE · " + formatClock(delay);
+            return delay >= 2_000 ? "DIFFÉRÉ −" + formatClock(delay) : "DIFFÉRÉ";
+        }
         if (pausedAtMs > 0) return "EN PAUSE · " + formatClock(currentLiveDelayMs());
         if (liveDelayMs >= LIVE_DELAY_SHOWN_MS) return "DIFFÉRÉ −" + formatClock(liveDelayMs);
         return null;
@@ -3415,16 +3630,16 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (player == null || casting) return;
         if (pause == isPaused()) return;
         if (pause) {
-            if (!vod && liveReconnect.isRecovering()) liveLostWhilePaused = true;
+            if (!vod && !archive && liveReconnect.isRecovering()) liveLostWhilePaused = true;
             cancelLiveReconnect("paused");
             player.setPlayWhenReady(false);
             playWhenReady = false;
-            if (!vod) pausedAtMs = SystemClock.elapsedRealtime();
-        } else if (!vod && liveLostWhilePaused) {
+            if (!vod && !archive) pausedAtMs = SystemClock.elapsedRealtime();
+        } else if (!vod && !archive && liveLostWhilePaused) {
             reconnectLive(true);
             return;
         } else {
-            if (!vod && pausedAtMs > 0) {
+            if (!vod && !archive && pausedAtMs > 0) {
                 liveDelayMs += SystemClock.elapsedRealtime() - pausedAtMs;
                 pausedAtMs = 0;
             }
@@ -3442,6 +3657,18 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void backToLive() {
+        if (archive) {
+            // Le différé est un autre média : on rouvre le direct de la même chaîne.
+            leaveArchive();
+            pausedAtMs = 0; liveDelayMs = 0; liveLostWhilePaused = false; playWhenReady = true;
+            cancelLiveReconnect("archive_live");
+            if (player != null) prepareMedia(streamUrl); else initPlayer(streamUrl);
+            if (tvUi) rebuildBandRows();
+            Toast.makeText(this, "Retour au direct", Toast.LENGTH_SHORT).show();
+            lastUsedKey = "pause";
+            refreshControls();
+            return;
+        }
         boolean seekable = player != null && !liveLostWhilePaused
             && player.isCurrentMediaItemLive() && player.isCurrentMediaItemSeekable();
         if (seekable) {
@@ -3476,7 +3703,7 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private boolean needsTicker() {
         if (pipActive) return false;
-        if (!vod && (pausedAtMs > 0 || liveDelayMs > 0)) return true;
+        if (!vod && (archive || pausedAtMs > 0 || liveDelayMs > 0)) return true;
         return vod && tvUi && isControlsVisible;
     }
 
@@ -3492,7 +3719,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         boolean show = badge != null && !pipActive && !isControlsVisible && !infoOnly;
         cornerBadge.setVisibility(show ? View.VISIBLE : View.GONE);
         if (show) {
-            String mark = pausedAtMs > 0 ? "❚❚  " : "●  ";
+            String mark = isPaused() ? "❚❚  " : "●  ";
             SpannableString text = new SpannableString(mark + badge);
             text.setSpan(new ForegroundColorSpan(C_DIM), 0, mark.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
             cornerBadge.setText(text);
@@ -3519,15 +3746,28 @@ public class NativePlayerActivity extends AppCompatActivity {
             @Override public void onOptionUsed(PlayerOption option) { lastUsedKey = option.key; }
             @Override public void onListChanged(boolean open) { scheduleHideControls(); }
         });
-        List<TvBand.Row> rows = new ArrayList<>();
-        if (vod) rows.add(new TvBand.Row("Progression", buildSeekRow(), null));
-        rows.add(new TvBand.Row("Lecture", null, tvPlaybackOptions()));
-        rows.add(new TvBand.Row("Réglages", null, settingOptions()));
-        tvBand.setRows(rows);
+        fillBandRows();
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, dp(8), 0, 0);
         infoBar.addView(tvBand.view(), lp);
         tvBand.view().setVisibility(View.GONE);
+    }
+
+    /** Rangées du bandeau : la Progression n'existe qu'en VOD et en différé. */
+    private void fillBandRows() {
+        List<TvBand.Row> rows = new ArrayList<>();
+        if (vod || archive) rows.add(new TvBand.Row("Progression", buildSeekRow(), null));
+        rows.add(new TvBand.Row("Lecture", null, tvPlaybackOptions()));
+        rows.add(new TvBand.Row("Réglages", null, settingOptions()));
+        tvBand.setRows(rows);
+    }
+
+    /** Reconstruit le bandeau quand on entre ou sort du différé (rangée Progression, options). */
+    private void rebuildBandRows() {
+        if (tvBand == null) return;
+        fillBandRows();
+        // Bandeau fermé : ne pas lui donner le focus (il est invisible).
+        if (isControlsVisible) focusBandOnOpen();
     }
 
     /** Rangée Progression : focusable ; ◀ ▶ reculent ou avancent, maintenir accélère. */
@@ -3622,6 +3862,11 @@ public class NativePlayerActivity extends AppCompatActivity {
     private List<PlayerOption> tvPlaybackOptions() {
         List<PlayerOption> list = new ArrayList<>();
         if (!vod) {
+            // En tête de la rangée Lecture : c'est un saut dans le programme, pas un réglage.
+            // Il cède sa place à « Revenir au direct » dès que le différé est lancé.
+            list.add(PlayerOption.action("restart", "Depuis le début", this::restartLiveFromStart)
+                .icon(() -> R.drawable.ic_player_replay)
+                .visible(this::canRestartArchive).build());
             list.add(PlayerOption.action("live", "Revenir au direct", this::backToLive)
                 .visible(() -> isBehindLive() && pausedAtMs == 0).build());
         }
@@ -3635,7 +3880,8 @@ public class NativePlayerActivity extends AppCompatActivity {
             list.add(PlayerOption.action("previous", "Revenir à", () -> { if (previousIndex >= 0) switchTo(previousIndex); })
                 .value(() -> previousIndex >= 0 && channelTitles != null && previousIndex < channelTitles.size() ? channelTitles.get(previousIndex) : null)
                 .visible(() -> previousIndex >= 0 && previousIndex != channelIndex && channelTitles != null && previousIndex < channelTitles.size()).build());
-            list.add(PlayerOption.action("reload", "Relancer le flux", this::reloadCurrentLive).build());
+            list.add(PlayerOption.action("reload", "Relancer le flux", this::reloadCurrentLive)
+                .visible(() -> !archive).build());
             list.add(PlayerOption.action("favorite", "Ajouter aux favoris", this::toggleCurrentFavorite)
                 .label(() -> favoriteStore.isFavorite(streamUrl) ? "Retirer des favoris" : "Ajouter aux favoris").build());
             list.add(recordOption("Enregistrer"));
@@ -3691,7 +3937,8 @@ public class NativePlayerActivity extends AppCompatActivity {
         return PlayerOption.action("record", label, this::toggleRecording)
             .label(() -> recording ? "Arrêter l'enregistrement" : label)
             .dot(C_LIVE)
-            .visible(() -> isHttpUrl(streamUrl)).build();
+            // En différé on regarde le programme, on ne capture pas le direct : pas d'ambiguïté.
+            .visible(() -> isHttpUrl(streamUrl) && !archive).build();
     }
 
     private static String formatSpeed(float speed) {

@@ -46,7 +46,7 @@ export interface ScheduledRecording {
 }
 
 interface NativePlayerPluginType {
-  open(options: { url: string; title?: string | undefined; tvUi?: boolean | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; channelLogos?: string[] | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
+  open(options: { url: string; title?: string | undefined; tvUi?: boolean | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; channelIndex?: number | undefined; channelGroups?: string[] | undefined; channelEpg?: NativeProgram[][] | undefined; channelCatchup?: NativeCatchup[] | undefined; channelNumbers?: string[] | undefined; channelTotal?: number | undefined; channelLogos?: string[] | undefined; listKey?: string | undefined; listIndex?: number | undefined; windowStart?: number | undefined }): Promise<{ channelUrl?: string | undefined; jumpNumber?: string | undefined; stats?: PlaybackStats | undefined }>;
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
   openWeb(options: { url: string; title?: string | undefined; packages?: string[] | undefined; allowAppHome?: boolean | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
@@ -124,8 +124,27 @@ function isAvailable(): boolean {
 
 /** Programme transmis au lecteur Android : [début ms, fin ms, titre]. */
 export type NativeProgram = [number, number, string];
+
+/**
+ * Archive du programme en cours, pour le bouton « Depuis le début » du lecteur Android.
+ * - archive Xtream : `template` (avec `{minutes}` et `{start}`) et `timezone` ; le lecteur
+ *   les remplit avec le programme à l'antenne au moment de l'appui, donc le modèle ne
+ *   vieillit pas quand la chaîne change d'émission ;
+ * - replay M3U : `url` déjà calculée, valable jusqu'à `urlEnd` (le modèle M3U peut dépendre
+ *   de l'heure de l'appui : il n'est pas rejouable côté natif).
+ */
+export interface NativeCatchup {
+  template: string;
+  timezone: string;
+  url: string;
+  urlStart: number;
+  urlEnd: number;
+}
+
 export interface NativeZapContext {
   urls: string[]; titles: string[]; index: number; groups?: string[]; epg?: NativeProgram[][]; numbers?: string[]; total?: number; logos?: string[];
+  /** Archive du programme en cours, alignée sur `urls` (chaîne sans archive : entrée vide). */
+  catchup?: NativeCatchup[];
   /** Début de la fenêtre dans la liste complète. */
   start?: number;
   /** Liste complète déjà transmise au lecteur Android (zapping sur toutes les chaînes). */
@@ -226,6 +245,13 @@ export function setNativeEpg(data: EPGData | null | undefined): void { nativeEpg
 /** Guide chargé (diagnostic mémoire). */
 export function getLoadedEpg(): EPGData | null { return nativeEpg; }
 
+/** Archive d'un programme, fournie par l'écran qui connaît l'abonnement (Xtream ou M3U). */
+export type NativeCatchupProvider = (channel: Channel, start: number, end: number) => NativeCatchup | null;
+let nativeCatchupProvider: NativeCatchupProvider | null = null;
+/** Branche le fournisseur d'archives : le lecteur Android gagne « Depuis le début ». */
+export function setNativeCatchupProvider(provider: NativeCatchupProvider | null): void { nativeCatchupProvider = provider; }
+const EMPTY_CATCHUP: NativeCatchup = { template: '', timezone: '', url: '', urlStart: 0, urlEnd: 0 };
+
 function upcomingPrograms(channel: Channel, epg: EPGData, now: number): NativeProgram[] {
   const programs = epg[channel.id];
   if (!programs?.length) return [];
@@ -277,6 +303,17 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
       const own = upcomingPrograms(c, epg, now);
       return own.length || i !== zap.index || !base ? own : upcomingPrograms(base, epg, now);
     });
+    const provider = nativeCatchupProvider;
+    if (provider) {
+      const catchups = windowSlice.map((c, i) => {
+        const programs = epg[c.id] ?? (i === zap.index && base ? epg[base.id] : undefined);
+        const current = programs?.find(p => new Date(p.startTime).getTime() <= now && now < new Date(p.endTime).getTime());
+        if (!current) return null;
+        return provider(c, new Date(current.startTime).getTime(), new Date(current.endTime).getTime());
+      });
+      // Une seule chaîne avec archive suffit : le lecteur masque les autres entrées vides.
+      if (catchups.some(Boolean)) zap.catchup = catchups.map(c => c ?? EMPTY_CATCHUP);
+    }
   }
   return zap;
 }
@@ -308,6 +345,7 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
           channelUrls: zap.urls, channelTitles: zap.titles, channelIndex: zap.index,
           ...(zap.groups?.length === zap.urls.length ? { channelGroups: zap.groups } : {}),
           ...(zap.epg?.length === zap.urls.length ? { channelEpg: zap.epg } : {}),
+          ...(zap.catchup?.length === zap.urls.length ? { channelCatchup: zap.catchup } : {}),
           ...(zap.numbers?.length === zap.urls.length ? { channelNumbers: zap.numbers, channelTotal: zap.total ?? zap.urls.length } : {}),
           ...(zap.logos?.length === zap.urls.length ? { channelLogos: zap.logos } : {}),
           ...(zap.listKey && zap.listIndex !== undefined && zap.start !== undefined ? { listKey: zap.listKey, listIndex: zap.listIndex, windowStart: zap.start } : {}),

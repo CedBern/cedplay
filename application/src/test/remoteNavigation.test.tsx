@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
@@ -236,4 +237,28 @@ it('le parcours horizontal des rubriques ne mesure pas les cartes du catalogue',
   for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
   expect(screen.getByRole('tab', { name: 'Découvrir' })).toHaveFocus();
   expect(measured).not.toHaveBeenCalled();
+});
+
+it('Retour depuis une catégorie Direct rejoint le menu et permet d’ouvrir Films', async () => {
+  geometry();
+  function Page() {
+    useRemoteNavigation();
+    const [tab, setTab] = useState('channels');
+    const groups = ['France', 'Autres'].map((name, i) => ({ name, channels: [{ id: String(i), name: `Chaîne ${i}`, url: `https://example.test/${i}.ts`, group: name }] }));
+    return <Tabs value={tab} activationMode="manual" onValueChange={setTab}><MainNavigation tv onNavigate={setTab} />
+      <TabsContent value="channels"><TvLiveScreen playlistId="back-menu" groups={groups} favoriteIds={[]} onPlay={() => {}} /></TabsContent>
+      <TabsContent value="movies"><button>Catalogue films</button></TabsContent>
+    </Tabs>;
+  }
+  render(<Page />);
+  screen.getByRole('button', { name: /^Toutes/ }).focus();
+  for (let i = 0; i < 4; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  const back = new Event('tv-live-back', { cancelable: true });
+  window.dispatchEvent(back);
+  expect(back.defaultPrevented).toBe(true);
+  expect(screen.getByRole('tab', { name: 'Direct' })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(screen.getByRole('tab', { name: 'Films' })).toHaveFocus();
+  await userEvent.keyboard('{Enter}');
+  expect(screen.getByRole('button', { name: 'Catalogue films' })).toBeVisible();
 });

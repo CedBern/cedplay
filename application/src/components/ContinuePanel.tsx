@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { focusRemote } from '@/utils/remoteNavigation';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import { getPlayHistory, getVodWatchlistFromDB, getFavoritesFromDB, manageContinueEntry, type PlayHistoryEntry, type VodWatchlistItem } from '@/utils/idb';
 import { getCurrentProgram, getUpcomingProgram } from '@/utils/epgXmltv';
@@ -83,6 +84,14 @@ const dayLabel = (ms: number) => {
   return new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
 };
 
+function focusDiscoverMenu(root: HTMLElement): boolean {
+  const panel = root.closest('[role="tabpanel"]');
+  const tab = document.getElementById(panel?.getAttribute('aria-labelledby') ?? '');
+  if (!tab) return false;
+  focusRemote(tab);
+  return true;
+}
+
 /** Une rangée : composant de module, pour que le focus télécommande survive aux re-rendus. */
 function DiscoverRow({ id, title, children, action, caption, tvMode }: { id: DiscoverRowId; title: string; children: ReactNode; action?: ReactNode; caption?: string | undefined; tvMode: boolean }) {
   return (
@@ -94,7 +103,7 @@ function DiscoverRow({ id, title, children, action, caption, tvMode }: { id: Dis
         </div>
         {action}
       </div>
-      <div data-discover-rail className="rail -mx-2 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-2 px-2 py-1.5 sm:mx-0 sm:scroll-px-0 sm:px-0">
+      <div data-discover-rail className="rail -mx-2 flex items-start snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-2 px-2 py-1.5 sm:mx-0 sm:scroll-px-0 sm:px-0">
         {children}
       </div>
     </section>
@@ -110,7 +119,11 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
   const [podcastProgress, setPodcastProgress] = useState<Record<string, PodcastProgress>>(() => readAllEpisodeProgress());
   const [feeds, setFeeds] = useState<PodcastFeed[]>(() => readPodcastFeeds());
   const [episodesByFeed, setEpisodesByFeed] = useState<Record<string, PodcastEpisode[]>>(() => readPodcastEpisodesByFeed());
-  const [forYouSnapshot] = useState(() => readForYouSnapshot(playlist.id));
+  const [forYouSnapshot] = useState(() => {
+    const movies = readForYouSnapshot(playlist.id);
+    const series = readForYouSnapshot(playlist.id, 'series');
+    return Array.from({ length: Math.max(movies.length, series.length) }, (_, i) => [movies[i], series[i]]).flat().filter(i => i !== undefined);
+  });
   // Ordre des familles : calculé une fois à l'ouverture, puis figé jusqu'à la prochaine.
   const [families, setFamilies] = useState<DiscoverFamily[] | null>(null);
   const [filter, setFilter] = useState<DiscoverFilter>('all');
@@ -236,9 +249,9 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
   );
 
   const forYou = useMemo(() => {
-    if (filter !== 'all' && filter !== 'movies') return [];
-    const resumeIds = new Set(resume.flatMap(r => (r.kind === 'vod' ? [vodItemId(r.entry)] : [])));
-    return forYouItems(forYouSnapshot.filter(i => !adultVod.isAdult('movie', i.categoryId)), resumeIds, watchlistItems);
+    if (filter === 'podcasts') return [];
+    const resumeIds = new Set(resume.flatMap(r => (r.kind === 'vod' ? [`${r.entry.mediaKind ?? 'movie'}:${vodItemId(r.entry)}`] : [])));
+    return forYouItems(forYouSnapshot.filter(i => (filter === 'all' || (filter === 'series' ? i.kind === 'series' : i.kind !== 'series')) && !adultVod.isAdult(i.kind ?? 'movie', i.categoryId)), resumeIds, watchlistItems);
   }, [filter, resume, forYouSnapshot, watchlistItems, adultVod]);
 
   const fresh = useMemo(() => newEpisodes(feeds, episodesByFeed, podcastProgress, Date.now()), [feeds, episodesByFeed, podcastProgress]);
@@ -330,6 +343,10 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     const root = rootRef.current;
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (!root || !active || !root.contains(active)) return;
+    if (active.matches('[data-discover-filter]')) {
+      if (focusDiscoverMenu(root)) event.preventDefault();
+      return;
+    }
     const rail = active.closest<HTMLElement>('[data-discover-rail]');
     if (rail) {
       const first = rail.querySelector<HTMLElement>('[data-discover-card]');
@@ -342,6 +359,54 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     window.addEventListener('iptv-back', onBack);
     return () => window.removeEventListener('iptv-back', onBack);
   }, [onBack]);
+
+  // L'accueil possède ses rangées : les flèches ne doivent jamais choisir un bouton
+  // du menu à partir de coordonnées (rangées horizontales, filtres et actions imbriquées).
+  const onDiscoverKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!tvMode || !event.key.startsWith('Arrow') || event.altKey || event.ctrlKey || event.metaKey) return;
+    const root = rootRef.current;
+    const target = event.target instanceof HTMLElement ? event.target.closest('button') : null;
+    if (!root || !target) return;
+    const filters = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-discover-filter]'));
+    const selectedFilter = filters.find(b => b.getAttribute('aria-pressed') === 'true') ?? filters[0];
+    const rowElements = Array.from(root.querySelectorAll<HTMLElement>('[data-discover-row]'));
+    const cards = (row: HTMLElement) => Array.from(row.querySelectorAll<HTMLButtonElement>('[data-discover-card]:not(:disabled)'));
+    const move = (next?: HTMLElement) => {
+      event.preventDefault(); event.stopPropagation();
+      if (next) focusRemote(next);
+    };
+    if (target.hasAttribute('data-discover-filter')) {
+      const index = filters.indexOf(target);
+      if (event.key === 'ArrowUp') { move(); focusDiscoverMenu(root); }
+      else if (event.key === 'ArrowDown') move(rowElements[0] ? cards(rowElements[0])[0] : undefined);
+      else move(filters[index + (event.key === 'ArrowRight' ? 1 : -1)]);
+      return;
+    }
+    const row = target.closest<HTMLElement>('[data-discover-row]');
+    if (!row) { move(event.key === 'ArrowUp' ? selectedFilter : undefined); return; }
+    const rowCards = cards(row);
+    const article = target.closest('article');
+    const primary = article?.querySelector<HTMLButtonElement>('[data-discover-card]');
+    const actions = article ? Array.from(article.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(b => b !== primary) : [];
+    const actionIndex = actions.indexOf(target);
+    const cardIndex = Math.max(0, rowCards.indexOf(primary ?? target));
+    if (actionIndex >= 0) {
+      if (event.key === 'ArrowUp') { move(primary ?? undefined); return; }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        move(actions[actionIndex + (event.key === 'ArrowRight' ? 1 : -1)]); return;
+      }
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      move(rowCards[cardIndex + (event.key === 'ArrowRight' ? 1 : -1)]); return;
+    } else if (event.key === 'ArrowDown' && primary === target && actions.length) {
+      move(actions[0]); return;
+    } else if (event.key === 'ArrowDown' && !rowCards.includes(target) && !article) {
+      move(rowCards[0]); return;
+    }
+    const nextRow = rowElements[rowElements.indexOf(row) + (event.key === 'ArrowUp' ? -1 : 1)];
+    if (!nextRow) { move(event.key === 'ArrowUp' ? selectedFilter : undefined); return; }
+    const nextCards = cards(nextRow);
+    move(nextCards[Math.min(cardIndex, nextCards.length - 1)]);
+  };
 
   if (loading || families === null) {
     return <p role="status" className="text-sm text-neutral-400">Chargement de Découvrir…</p>;
@@ -356,6 +421,9 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
   const cardFocus = 'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-background';
   const peekProps = (p: Peek) => (tvMode ? { onFocus: () => setPeek(p) } : {});
 
+  // Reprendre mélange audio et vidéo : un seul gabarit évite les affiches hautes face aux cartes audio.
+  const resumeBody = `press flex w-full ${tvMode ? 'h-[128px]' : 'h-[112px]'} items-center gap-3 overflow-hidden p-3 text-left ${cardFocus}`;
+
   const selectionTitle = (id: DiscoverRowId) => (id === 'to-listen' && showSelection ? 'Sélection CedPlay' : ROW_TITLES[id]);
 
   const renderResume = (item: ResumeItem) => {
@@ -366,10 +434,10 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
       return (
         <article key={item.key} className={`${wideW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card`}>
           <button type="button" data-discover-card onClick={() => resumePodcast(prog)} aria-label={`Reprendre ${prog.title}`} {...peekProps({ eyebrow: 'Podcast · Reprendre', title: prog.title, meta: [prog.podcastTitle, left].filter(Boolean).join(' · '), hints: 'OK Reprendre l’écoute · ▼ Émission' })}
-            className={`press flex w-full items-center gap-3 p-3 text-left ${cardFocus}`}>
+            className={resumeBody}>
             {prog.artworkUrl
-              ? <img src={prog.artworkUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className={`${tvMode ? 'h-20 w-20' : 'h-14 w-14'} shrink-0 rounded-xl bg-secondary object-cover`} />
-              : <span className={`flex ${tvMode ? 'h-20 w-20' : 'h-14 w-14'} shrink-0 items-center justify-center rounded-xl bg-secondary text-[#5CC8B5]`}><Headphones className="h-6 w-6" aria-hidden="true" /></span>}
+              ? <img src={prog.artworkUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className={`${tvMode ? 'h-20 w-20' : 'h-16 w-16'} shrink-0 rounded-xl bg-secondary object-cover`} />
+              : <span className={`flex ${tvMode ? 'h-20 w-20' : 'h-16 w-16'} shrink-0 items-center justify-center rounded-xl bg-secondary text-[#5CC8B5]`}><Headphones className="h-6 w-6" aria-hidden="true" /></span>}
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-[#5CC8B5]"><Headphones className="h-3.5 w-3.5" aria-hidden="true" />Écouter</span>
               <span className="block truncate text-[12px] text-muted-foreground">{prog.podcastTitle}</span>
@@ -377,7 +445,7 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
               {left && <span className="block text-[12px] text-muted-foreground">{left}</span>}
             </span>
           </button>
-          {percent !== null && <span className="block h-1 w-full bg-neutral-800"><span className="block h-full bg-[#5CC8B5]" style={{ width: `${percent}%` }} /></span>}
+          <span className="block h-1 w-full bg-neutral-800"><span className="block h-full bg-[#5CC8B5]" style={{ width: `${percent ?? 0}%` }} /></span>
           {onOpenPodcasts && <div className="flex border-t border-neutral-800">
             <button type="button" onClick={() => onOpenPodcasts(prog.feedUrl)} aria-label={`Voir l’émission ${prog.podcastTitle}`} className="flex min-h-11 flex-1 items-center justify-center gap-1 px-2 text-xs text-neutral-300 hover:bg-white/10"><Info className="h-3.5 w-3.5" aria-hidden="true" />Émission</button>
           </div>}
@@ -389,21 +457,21 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
     const percent = entry.durationMs && entry.durationMs > 0 ? Math.min(100, Math.max(0, Math.round((entry.positionMs || 0) / entry.durationMs * 100))) : null;
     const remaining = Math.max(0, Math.ceil(((entry.durationMs || 0) - (entry.positionMs || 0)) / 60000));
     const kindLabel = entry.mediaKind === 'series' ? 'Série' : 'Film';
-    return <article key={item.key} className={`poster ${posterW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card`}>
-      <button type="button" data-discover-card onClick={() => resumeVod(entry)} {...peekProps({ eyebrow: `${kindLabel} · Reprendre`, title: entry.name || 'Sans titre', meta: [entry.episodeName, percent !== null ? `${remaining} min restantes` : null].filter(Boolean).join(' · ') || undefined, hints: 'OK Reprendre · ▼ Fiche, Vu, Retirer' })}
-        className={`press w-full text-left ${cardFocus}`}>
-        <div style={POSTER} className="relative flex items-center justify-center overflow-hidden bg-neutral-900">
-          {entry.mediaKind === 'series' ? <MonitorPlay className="h-8 w-8 text-primary" aria-hidden="true" /> : <Film className="h-8 w-8 text-primary" aria-hidden="true" />}
+    return <article key={item.key} className={`${wideW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card`}>
+      <button type="button" data-discover-card aria-label={`Reprendre ${entry.name || 'ce titre'}`} onClick={() => resumeVod(entry)} {...peekProps({ eyebrow: `${kindLabel} · Reprendre`, title: entry.name || 'Sans titre', meta: [entry.episodeName, percent !== null ? `${remaining} min restantes` : null].filter(Boolean).join(' · ') || undefined, hints: 'OK Reprendre' })}
+        className={resumeBody}>
+        <span style={{ width: tvMode ? 54 : 48, height: tvMode ? 80 : 72 }} className="relative flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-neutral-900">
+          {entry.mediaKind === 'series' ? <MonitorPlay className="h-6 w-6 text-primary" aria-hidden="true" /> : <Film className="h-6 w-6 text-primary" aria-hidden="true" />}
           {poster && <img src={poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />}
-          <span className="absolute bottom-2 right-2 rounded-full bg-black/75 p-2"><Play className="h-4 w-4" aria-hidden="true" /></span>
-        </div>
-        <div className="p-2">
-          <p className={`${tvMode ? 'text-[15px]' : 'text-xs'} line-clamp-2`}>{entry.name || 'Sans titre'}</p>
-          {entry.episodeName && <p className="mt-1 truncate text-[11px] text-neutral-400">{entry.episodeName}</p>}
-          <p className="mt-1 text-[11px] text-neutral-400">{kindLabel} · Reprendre à {Math.max(1, Math.floor((entry.positionMs || 0) / 60000))} min</p>
-          {percent !== null && <><div role="progressbar" aria-label={`Progression de ${entry.name || 'ce titre'}`} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} className="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-700"><div className="h-full bg-primary" style={{ width: `${percent}%` }} /></div><p className="mt-1 text-[11px] text-neutral-400">{percent} % · {remaining} min restantes</p></>}
-        </div>
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-primary"><Play className="h-3.5 w-3.5" aria-hidden="true" />Regarder</span>
+          <span className={`block line-clamp-2 ${tvMode ? 'text-[16px]' : 'text-[14px]'} font-semibold leading-tight text-foreground`}>{entry.name || 'Sans titre'}</span>
+          <span className="block truncate text-[12px] text-muted-foreground">{entry.episodeName || `${kindLabel} · Reprendre à ${Math.max(1, Math.floor((entry.positionMs || 0) / 60000))} min`}</span>
+          {percent !== null && <span className="block text-[12px] text-muted-foreground">{percent} % · {remaining} min restantes</span>}
+        </span>
       </button>
+      <div role={percent !== null ? 'progressbar' : undefined} aria-label={percent !== null ? `Progression de ${entry.name || 'ce titre'}` : undefined} aria-valuenow={percent ?? undefined} aria-valuemin={0} aria-valuemax={100} className="h-1 w-full bg-neutral-800"><div className="h-full bg-primary" style={{ width: `${percent ?? 0}%` }} /></div>
       <div className="grid grid-cols-3 border-t border-neutral-800">
         <button type="button" aria-label={`Fiche de ${entry.name || 'ce titre'}`} onClick={() => openVodDetails(entry)} className="flex min-h-11 min-w-0 items-center justify-center gap-1 px-1 py-2 text-xs text-neutral-300 hover:bg-white/10"><Info className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />Fiche</button>
         <button type="button" aria-label={`Marquer ${entry.name || 'ce titre'} comme vu`} onClick={() => { void manageEntry(entry, 'completed'); }} className="flex min-h-11 min-w-0 items-center justify-center gap-1 px-1 py-2 text-xs text-neutral-300 hover:bg-white/10"><Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />Vu</button>
@@ -476,8 +544,8 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
         ))}</DiscoverRow>;
       case 'for-you':
         return <DiscoverRow key={id} id={id} title={selectionTitle(id)} tvMode={tvMode} caption="D’après tes visionnages, dans ta playlist">{forYou.map(item => (
-          <button key={item.id} type="button" data-discover-card onClick={() => onOpenVod('movie', { id: item.id, name: item.name, kind: 'movie', playlistId: playlist.id, addedAt: 0, ...(item.poster ? { poster: item.poster } : {}), ...(item.categoryId ? { categoryId: item.categoryId } : {}) })}
-            {...peekProps({ eyebrow: 'Film · Pour toi', title: item.name, meta: item.reason, hints: 'OK Fiche du film' })}
+          <button key={item.id} type="button" data-discover-card onClick={() => onOpenVod(item.kind ?? 'movie', { id: item.id, name: item.name, kind: item.kind ?? 'movie', playlistId: playlist.id, addedAt: 0, ...(item.poster ? { poster: item.poster } : {}), ...(item.categoryId ? { categoryId: item.categoryId } : {}) })}
+            {...peekProps({ eyebrow: `${item.kind === 'series' ? 'Série' : 'Film'} · Pour toi`, title: item.name, meta: item.reason, hints: 'OK Fiche du film' })}
             className={`poster press ${posterW} shrink-0 snap-start overflow-hidden rounded-2xl border border-neutral-900 bg-card text-left ${cardFocus}`}>
             <div style={POSTER} className="relative flex items-center justify-center overflow-hidden bg-neutral-900">
               <Film className="h-8 w-8 text-primary" aria-hidden="true" />
@@ -531,28 +599,25 @@ export function ContinuePanel({ playlist, onChannelSelect, onOpenVod, onResumeVo
   };
 
   return (
-    <div ref={rootRef} className="space-y-6">
-      <div className={`sticky top-0 z-20 -mx-2 flex flex-wrap items-center gap-2 bg-background/95 px-2 py-2 backdrop-blur ${tvMode ? '' : 'sm:mx-0 sm:px-0'}`}>
-        <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
+    <div ref={rootRef} data-discover-screen data-remote-self={tvMode ? '' : undefined} onKeyDown={onDiscoverKeyDown} className="space-y-6">
+      <div className={`${tvMode ? '' : 'sticky top-0'} z-20 -mx-2 flex items-center bg-background/95 px-2 py-2 backdrop-blur ${tvMode ? 'gap-6' : 'flex-wrap gap-2 sm:mx-0 sm:px-0'}`}>
+        <div role="group" aria-label="Type de contenu" className="inline-flex shrink-0 rounded-full border border-neutral-900 bg-card p-1">
           {FILTERS.map(f => (
-            <button key={f.value} type="button" data-discover-filter aria-pressed={filter === f.value} onClick={() => { setFilter(f.value); setPeek(null); }}
+            <button key={f.value} type="button" data-discover-filter data-remote-entry={tvMode && filter === f.value ? '' : undefined} aria-pressed={filter === f.value} onClick={() => { setFilter(f.value); setPeek(null); }}
               {...(f.value === 'all' && rows.length === 0 ? { 'data-remote-start': true } : {})}
               className={`${tvMode ? 'min-h-11 px-5 text-[17px]' : 'min-h-10 px-4 text-sm'} rounded-full font-medium transition-colors ${filter === f.value ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}>
               {f.label}
             </button>
           ))}
         </div>
+        {tvMode && <section aria-label="Contenu sélectionné" aria-live="polite" className="h-[72px] min-w-0 flex-1 overflow-hidden">
+          {peek && <>
+            <p className="truncate text-[12px] font-semibold uppercase tracking-wide text-[#FF8A6E]">{peek.eyebrow}</p>
+            <p className="truncate text-[22px] font-semibold leading-tight tracking-tight text-foreground">{peek.title}</p>
+            {peek.meta && <p className="truncate text-[15px] text-muted-foreground">{peek.meta}</p>}
+          </>}
+        </section>}
       </div>
-
-      {/* Place réservée même sans focus : les rangées ne sautent pas quand la fiche apparaît. */}
-      {tvMode && <section aria-label="Contenu sélectionné" aria-live="polite" className="h-[150px] max-w-3xl space-y-1.5 overflow-hidden">
-        {peek ? <>
-          <p className="text-[14px] font-semibold uppercase tracking-wide text-[#FF8A6E]">{peek.eyebrow}</p>
-          <p className="truncate text-[34px] font-semibold leading-tight tracking-tight text-foreground">{peek.title}</p>
-          {peek.meta && <p className="truncate text-[17px] text-muted-foreground">{peek.meta}</p>}
-          <p className="text-[16px] text-muted-foreground">{peek.hints}</p>
-        </> : <p className="pt-2 text-[17px] text-muted-foreground">Flèches pour parcourir · OK pour lancer · Retour pour remonter</p>}
-      </section>}
 
       {onlyEmptySelection && <div className="py-6 text-center">
         <Clock className="mx-auto mb-3 h-10 w-10 text-muted-foreground" aria-hidden="true" />

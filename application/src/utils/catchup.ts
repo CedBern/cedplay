@@ -80,9 +80,20 @@ export function formatTimeshiftStart(date: Date, timezone: string): string {
   return `${parts.year}-${parts.month}-${parts.day}:${parts.hour}-${parts.minute}`;
 }
 
+/**
+ * Modèle d'adresse d'archive Xtream, sans le programme : `{minutes}` et `{start}` sont
+ * remplis par le lecteur Android au moment où il démarre le différé, avec le programme
+ * réellement à l'antenne (une chaîne peut avoir changé d'émission depuis l'ouverture).
+ */
+export function timeshiftTemplate(account: XtreamAccount, streamId: string): string {
+  return `${account.server}/timeshift/${encodeURIComponent(account.username)}/${encodeURIComponent(account.password)}/{minutes}/{start}/${streamId}.ts`;
+}
+
 export function catchupUrl(account: XtreamAccount, streamId: string, start: Date, end: Date, timezone: string): string {
   const minutes = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 60_000));
-  return `${account.server}/timeshift/${encodeURIComponent(account.username)}/${encodeURIComponent(account.password)}/${minutes}/${formatTimeshiftStart(start, timezone)}/${streamId}.ts`;
+  return timeshiftTemplate(account, streamId)
+    .replace('{minutes}', String(minutes))
+    .replace('{start}', formatTimeshiftStart(start, timezone));
 }
 
 /** Une émission passée (ou en cours) est-elle encore dans la fenêtre d'archive ? */

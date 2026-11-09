@@ -48,6 +48,15 @@ describe('buildTasteProfile', () => {
     expect(profile.genres.get('Comédie')).toBeCloseTo(0.5, 5);
   });
 
+  it('accepte un poids fixe pour une œuvre possédée, sans date de visionnage', () => {
+    const profile = buildTasteProfile([
+      { ts: now, details: details({ id: 1, genres: ['Thriller'] }) },
+      { ts: 0, details: details({ id: 2, genres: ['Comédie'] }), weight: 0.6 },
+    ], now);
+    expect(profile.genres.get('Thriller')).toBeCloseTo(1, 5);
+    expect(profile.genres.get('Comédie')).toBeCloseTo(0.6, 5);
+  });
+
   it('donne plus de poids au réalisateur qu’à un second rôle', () => {
     const profile = buildTasteProfile([
       {

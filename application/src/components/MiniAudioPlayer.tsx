@@ -8,17 +8,18 @@ const SPEEDS = [0.8, 1, 1.25, 1.5, 1.75, 2] as const;
 
 export interface MiniAudioPlayerProps {
   tv?: boolean;
+  showPaused?: boolean;
   onOpenPodcasts?: () => void;
 }
 
-export function MiniAudioPlayer({ tv = false, onOpenPodcasts }: MiniAudioPlayerProps) {
+export function MiniAudioPlayer({ tv = false, showPaused = true, onOpenPodcasts }: MiniAudioPlayerProps) {
   const [state, setState] = useState<AudioPlaybackState>(() => AudioBridge.getState());
 
   useEffect(() => {
     return AudioBridge.subscribe(setState);
   }, []);
 
-  if (!state.active || !state.episodeId) return null;
+  if (!state.active || !state.episodeId || (!showPaused && !state.playing)) return null;
 
   const percent = state.durationMs > 0
     ? Math.min(100, Math.max(0, Math.round((state.positionMs / state.durationMs) * 100)))

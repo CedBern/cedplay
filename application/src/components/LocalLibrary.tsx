@@ -3,7 +3,8 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LocalLibraryBridge, type LocalFolder, type LocalMedia } from '@/utils/nativePlayer';
-import { formatFileSize, parseLocalFilename } from '@/utils/localLibrary';
+import { formatFileSize, localLibraryWorks, parseLocalFilename } from '@/utils/localLibrary';
+import { saveLocalLibraryWorks } from '@/utils/idb';
 import { pickBestMatch, searchTmdb, tmdbImageUrl } from '@/utils/tmdb';
 import {
   Captions, Film, FolderPlus, HardDrive, Loader2, Play, RefreshCw, Search, Trash2,
@@ -80,15 +81,23 @@ export function LocalLibrary({ tmdbApiKey }: LocalLibraryProps) {
   const [search, setSearch] = useState('');
   const [initialized, setInitialized] = useState(false);
 
+  // L'index des œuvres est ce que « Pour toi » peut lire depuis le catalogue, qui
+  // ne relance jamais le scan natif. Son échec ne doit pas bloquer la lecture.
+  const persist = useCallback(async (list: LocalMedia[]) => {
+    try { await saveLocalLibraryWorks(localLibraryWorks(list)); }
+    catch { /* suggestions facultatives */ }
+  }, []);
+
   const scan = useCallback(async (uri?: string) => {
     setScanning(true);
     const result = await LocalLibraryBridge.scanLibrary(uri);
     if (result) {
       setFiles(result.files);
+      void persist(result.files);
       if (result.truncated) toast.info('Bibliothèque très volumineuse : 2000 fichiers affichés (parcours complet quand même possible).');
     }
     setScanning(false);
-  }, []);
+  }, [persist]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,10 +106,13 @@ export function LocalLibrary({ tmdbApiKey }: LocalLibraryProps) {
       if (cancelled) return;
       setFolders(list);
       if (list.length) await scan();
+      // Plus aucun dossier : un index laissé par une session précédente ne doit
+      // pas continuer à orienter les recommandations.
+      else void persist([]);
       if (!cancelled) setInitialized(true);
     })();
     return () => { cancelled = true; };
-  }, [scan]);
+  }, [scan, persist]);
 
   const addFolder = async () => {
     const folder = await LocalLibraryBridge.pickFolder();
@@ -108,10 +120,10 @@ export function LocalLibrary({ tmdbApiKey }: LocalLibraryProps) {
     setScanning(true);
     const result = await LocalLibraryBridge.scanLibrary(folder.uri);
     if (result) {
-      setFiles(prev => {
-        const seen = new Set(prev.map(f => f.uri));
-        return [...prev, ...result.files.filter(f => !seen.has(f.uri))];
-      });
+      const seen = new Set(files.map(f => f.uri));
+      const merged = [...files, ...result.files.filter(f => !seen.has(f.uri))];
+      setFiles(merged);
+      void persist(merged);
     }
     setFolders(await LocalLibraryBridge.listFolders());
     setScanning(false);
@@ -119,7 +131,9 @@ export function LocalLibrary({ tmdbApiKey }: LocalLibraryProps) {
 
   const removeFolder = async (uri: string) => {
     if (!(await LocalLibraryBridge.removeFolder(uri))) return;
-    setFolders(prev => prev.filter(f => f.uri !== uri));
+    const remaining = folders.filter(f => f.uri !== uri);
+    setFolders(remaining);
+    if (remaining.length === 0) { setFiles([]); void persist([]); return; }
     await scan();
   };
 
@@ -196,6 +210,11 @@ export function LocalLibrary({ tmdbApiKey }: LocalLibraryProps) {
         ))}
         <span className="text-xs text-neutral-500">{files.length} fichier{files.length > 1 ? 's' : ''}</span>
       </div>
+
+      {files.length > 0 && <p className="text-xs text-neutral-500">
+        Cette bibliothèque nourrit aussi « Pour toi » : les films présents au catalogue servent d’amorces,
+        et seuls les titres sont envoyés à TMDB pour affiner ton profil de goût.
+      </p>}
 
       {visible.length === 0 ? (
         <p className="text-neutral-400 py-16 text-center">Aucune vidéo trouvée dans ce dossier.</p>

@@ -78,3 +78,48 @@ it('ne considère pas un remake ou un film commencé comme terminé', () => {
   expect(recs.map(r => r.item.id)).toEqual(['2']);
   expect(recommendForHistory([{ ...watched('Dune', '7'), channelId: 'vod:1:movie:1', status: 'started', positionMs: 90000 }], values, { playlistId: '1', nowMs: now }).map(r => r.item.id)).toEqual(['1', '2']);
 });
+
+describe('recommendForHistory — séries', () => {
+  const watchedSeries = (name: string, categoryId: string, seriesId: string, over: Partial<PlayHistoryEntry> = {}): PlayHistoryEntry => ({
+    channelId: `vod:1:series:ep-${seriesId}`,
+    ts: now,
+    kind: 'vod',
+    playlistId: '1',
+    mediaKind: 'series',
+    seriesId,
+    name,
+    categoryId,
+    status: 'started',
+    positionMs: 120_000,
+    ...over,
+  });
+
+  it('recommande des séries de la même catégorie et exclut celle en cours', () => {
+    const values = [item('7', 'Breaking Bad', '12'), item('8', 'Better Call Saul', '12'), item('9', 'Titanic', '99')];
+    const recs = recommendForHistory([watchedSeries('Breaking Bad', '12', '7')], values, { playlistId: '1', nowMs: now, kind: 'series' });
+    expect(recs.map(r => r.item.id)).toEqual(['8']);
+  });
+
+  it('ne mélange pas films et séries', () => {
+    expect(recommendForHistory([watched('Breaking Bad', '12')], [item('8', 'Better Call Saul', '12')], { playlistId: '1', nowMs: now, kind: 'series' })).toEqual([]);
+    expect(recommendForHistory([watchedSeries('Breaking Bad', '12', '7')], [item('1', 'Breaking Bad', '12')], { playlistId: '1', nowMs: now })).toEqual([]);
+  });
+
+  it('compte chaque série une fois, même avec plusieurs épisodes vus', () => {
+    const values = [item('8', 'Better Call Saul', '12')];
+    const one = recommendForHistory([watchedSeries('Breaking Bad', '12', '7')], values, { playlistId: '1', nowMs: now, kind: 'series' });
+    const three = recommendForHistory([
+      watchedSeries('Breaking Bad', '12', '7', { channelId: 'vod:1:series:ep1', ts: now - 2000 }),
+      watchedSeries('Breaking Bad', '12', '7', { channelId: 'vod:1:series:ep2', ts: now - 1000 }),
+      watchedSeries('Breaking Bad', '12', '7', { channelId: 'vod:1:series:ep3', ts: now }),
+    ], values, { playlistId: '1', nowMs: now, kind: 'series' });
+    expect(three[0]?.score).toBeCloseTo(one[0]!.score);
+  });
+
+  it('rapproche par titre un historique ancien sans seriesId', () => {
+    const legacy = watchedSeries('Breaking Bad', '12', '7', { channelId: 'vod:1:series:99' });
+    delete legacy.seriesId;
+    const recs = recommendForHistory([legacy], [item('7', 'Breaking Bad', '12'), item('8', 'Better Call Saul', '12')], { playlistId: '1', nowMs: now, kind: 'series' });
+    expect(recs.map(r => r.item.id)).toEqual(['8']);
+  });
+});

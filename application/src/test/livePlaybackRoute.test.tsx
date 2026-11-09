@@ -46,6 +46,17 @@ it('Lecture ouvre Android sans monter le lecteur web et bloque les doubles appui
   await waitFor(async () => expect((await getPlayHistory())[0]?.channelId).toBe(channel.id));
 });
 
+it('le bouton Lecteur du direct passe par Android quand le lecteur natif est disponible', async () => {
+  native.open.mockImplementation(async (_url, _title, _zap, returned) => { returned(channel.url); return true; });
+  render(<IPTVPlayer />);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Direct' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Lecture test' }));
+  await waitFor(() => expect(native.open).toHaveBeenCalledOnce());
+  fireEvent.click(await screen.findByRole('button', { name: 'Lecteur' }));
+  await waitFor(() => expect(native.open).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText('Vidéo web de contrôle')).toBeNull();
+});
+
 it('garde la lecture web dans le navigateur et amène le lecteur à l’écran', async () => {
   native.available = false;
   const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');

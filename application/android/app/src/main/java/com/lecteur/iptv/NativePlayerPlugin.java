@@ -108,10 +108,12 @@ public class NativePlayerPlugin extends Plugin {
                     // Groupes et programmes (facultatifs) : alimentent le bandeau et le panneau des chaînes.
                     JSArray groups = call.getArray("channelGroups", null);
                     JSArray epg = call.getArray("channelEpg", null);
+                    JSArray catchup = call.getArray("channelCatchup", null);
                     JSArray numbers = call.getArray("channelNumbers", null);
                     JSArray logos = call.getArray("channelLogos", null);
                     if (groups != null && groups.length() != urlList.size()) groups = null;
                     if (epg != null && epg.length() != urlList.size()) epg = null;
+                    if (catchup != null && catchup.length() != urlList.size()) catchup = null;
                     if (numbers != null && numbers.length() != urlList.size()) numbers = null;
                     if (logos != null && logos.length() != urlList.size()) logos = null;
                     channelFile = File.createTempFile("zap-", ".json", getContext().getCacheDir());
@@ -132,6 +134,18 @@ public class NativePlayerPlugin extends Plugin {
                             writer.endArray();
                             writer.value(numbers != null ? numbers.optString(i, "") : "");
                             writer.value(logos != null ? logos.optString(i, "") : "");
+                            // Archive du programme en cours : modèle Xtream (rempli à l'appui)
+                            // ou adresse M3U déjà calculée, avec la fenêtre du programme.
+                            org.json.JSONObject c = catchup != null ? catchup.optJSONObject(i) : null;
+                            writer.beginArray();
+                            if (c != null) {
+                                writer.value(c.optString("template", ""));
+                                writer.value(c.optString("timezone", ""));
+                                writer.value(c.optString("url", ""));
+                                writer.value(c.optLong("urlStart", 0));
+                                writer.value(c.optLong("urlEnd", 0));
+                            }
+                            writer.endArray();
                             writer.endArray();
                         }
                         writer.endArray();

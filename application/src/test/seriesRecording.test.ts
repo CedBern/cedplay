@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ScheduledRecording } from '@/utils/nativePlayer';
 
 const store = new Map<string, unknown>();
@@ -25,7 +25,12 @@ const day = Date.UTC(2026, 10, 9);
 const channel = { id: 'c', name: 'Chaîne', url: 'http://h.test/c.m3u8' };
 const episode = (id: string, fromH: number, toH: number) => ({ id, channelId: 'c', title: 'La Série', startTime: new Date(day + fromH * H), endTime: new Date(day + toH * H) });
 
-beforeEach(() => { store.clear(); scheduled.length = 0; });
+// `recordingWindow` cale le départ sur l'horloge réelle : sans horloge figée, cette
+// émission du 9 novembre 2026 devenait « déjà commencée » dès 10 h UTC et le test
+// tombait tous les jours à la même heure.
+let clock: ReturnType<typeof vi.spyOn>;
+beforeEach(() => { store.clear(); scheduled.length = 0; clock = vi.spyOn(Date, 'now').mockReturnValue(day); });
+afterEach(() => { clock.mockRestore(); });
 
 it('programme chaque épisode consécutif jusqu’à sa fin, marges comprises', async () => {
   // 10 h – 10 h 30 puis 10 h 30 – 11 h, marges 2 min avant et 5 min après.

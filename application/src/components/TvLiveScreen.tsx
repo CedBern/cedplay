@@ -1,3 +1,4 @@
+import { focusMainNavigation } from '@/utils/remoteNavigation';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - type resolution sometimes lags in certain editors
@@ -5,6 +6,7 @@ import { useVirtualizer, defaultRangeExtractor } from '@tanstack/react-virtual';
 import { CalendarDays, CircleDot, Clock, Eye, Grid2X2, Heart, List, ListChecks, Lock, Pencil, Play, Search, SlidersHorizontal, Star } from 'lucide-react';
 import type { FavoriteList } from '@/utils/favoriteLists';
 import { byChannelName } from '@/utils/channelCustomization';
+import { channelQuality } from '@/utils/channelQuality';
 import { ChannelLogo } from '@/components/ChannelLogo';
 import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData, EPGProgram } from '@/types/epg';
@@ -36,9 +38,9 @@ const CategoryButton = React.memo(function CategoryButton({ item, index, selecte
     {item.kind === 'action' && item.id === 'search' && index > 0 && <div className="mx-2 my-1.5 border-t border-neutral-900" aria-hidden="true" />}
     <button type="button" aria-current={selected ? 'true' : undefined} data-tv-item data-tv-cat={index}
       data-remote-entry={index === 0 ? '' : undefined} tabIndex={focused ? 0 : -1}
-      className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] ${selected ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}>
+      className={`tv-cat flex min-h-10 w-full items-center gap-2.5 rounded-xl px-3 py-1.5 text-left text-[15px] ${selected ? 'is-selected' : ''} ${item.kind === 'action' ? 'text-muted-foreground' : ''}`}>
       <span className="flex w-4 shrink-0 justify-center">{icon}</span>
-      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+      <span className="min-w-0 flex-1 line-clamp-2 leading-5">{item.label}</span>
       {item.kind === 'category' && <span className="shrink-0 font-mono text-xs tabular-nums opacity-70">{item.locked ? '' : item.count}</span>}
     </button>
   </React.Fragment>;
@@ -81,7 +83,7 @@ const ChannelRow = React.memo(function ChannelRow({ channel, index, number, star
       {program && <span className="block truncate text-xs leading-4 opacity-70">{program.title}</span>}
     </span>
     {favorite && <Heart className="h-3.5 w-3.5 shrink-0 fill-current opacity-80" aria-label="Favori" />}
-    {channel.quality && <span className="shrink-0 rounded border border-current/30 px-1.5 font-mono text-[10px] leading-4 opacity-70">{channel.quality}</span>}
+    {channelQuality(channel) && <span className="shrink-0 rounded border border-current/30 px-1.5 font-mono text-[10px] leading-4 opacity-70">{channelQuality(channel)}</span>}
     {playing && <span className="h-2 w-2 shrink-0 rounded-full bg-live" aria-label="En cours" />}
   </button>;
 });
@@ -265,7 +267,16 @@ export function TvLiveScreen({
     });
 
   // Hauteur : tout l'espace restant sous les rubriques, sans défilement de page.
-  const [height, setHeight] = useState<number | null>(null);
+  // La valeur est estimée dès le premier rendu à partir de l'en-tête déjà monté : avec
+  // `null`, la première peinture n'a aucune hauteur, la rangée de grille prend la taille
+  // du contenu et la zone défilante mesure plusieurs centaines de milliers de pixels
+  // (virtualiseur bloqué sur toutes les chaînes). Le layout effect affine ensuite.
+  const [height, setHeight] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const header = document.querySelector('[data-app-header]');
+    const top = header?.getBoundingClientRect().bottom ?? 96;
+    return Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - 12));
+  });
   useLayoutEffect(() => {
     const measure = () => {
       const top = rootRef.current?.getBoundingClientRect().top ?? 0;
@@ -481,6 +492,7 @@ export function TvLiveScreen({
     else if (key === 'ArrowUp') {
       // Haut sur le premier élément : la navigation générale remonte aux rubriques.
       handled = column === 'cat' ? moveCat(-1) : column === 'list' ? moveRow(-1) : moveInfo(-1);
+      if (!handled) handled = focusMainNavigation(rootRef.current);
     } else if (key === 'ArrowRight') handled = (column === 'cat' ? go('list') : column === 'list' ? go('info') : false) || true;
     else if (key === 'ArrowLeft') handled = (column === 'info' ? go('list') : column === 'list' ? go('cat') : false) || true;
     else if (key === 'PageDown' || key === 'ChannelDown') handled = column === 'list' ? moveRow(PAGE) || true : column === 'cat' ? moveCat(PAGE) || true : false;
@@ -495,6 +507,7 @@ export function TvLiveScreen({
       if (!(active instanceof HTMLElement) || !rootRef.current?.contains(active)) return;
       if (column === 'info') { event.preventDefault(); go('list'); }
       else if (column === 'list') { event.preventDefault(); go('cat'); }
+      else if (column === 'cat' && focusMainNavigation(rootRef.current)) event.preventDefault();
     };
     window.addEventListener('tv-live-back', onBack);
     return () => window.removeEventListener('tv-live-back', onBack);
@@ -678,14 +691,14 @@ export function TvLiveScreen({
               </span>
             </div>
             <div className="mt-2 flex min-w-0 items-baseline gap-2">
-              <h3 className="min-w-0 truncate text-base font-semibold leading-6">{highlighted.name}</h3>
-              {highlighted.quality && <span className="shrink-0 font-mono text-xs text-muted-foreground">{highlighted.quality}</span>}
+              <h3 className="min-w-0 line-clamp-2 text-base font-semibold leading-6">{highlighted.name}</h3>
+              {channelQuality(highlighted) && <span className="shrink-0 font-mono text-xs text-muted-foreground">{channelQuality(highlighted)}</span>}
             </div>
           </> : <div className="mt-3 flex items-center gap-3">
             <ChannelLogo src={highlighted.logo ?? null} name={highlighted.name} />
             <div className="min-w-0">
               <h3 className="line-clamp-2 text-lg font-semibold leading-6">{highlighted.name}</h3>
-              {highlighted.quality && <span className="font-mono text-xs text-muted-foreground">{highlighted.quality}</span>}
+              {channelQuality(highlighted) && <span className="font-mono text-xs text-muted-foreground">{channelQuality(highlighted)}</span>}
             </div>
           </div>}
           <div className={`${preview ? 'mt-2' : 'mt-4'} min-h-0 flex-1 space-y-3 overflow-hidden text-sm`}>

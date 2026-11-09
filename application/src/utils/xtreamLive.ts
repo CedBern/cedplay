@@ -1,3 +1,4 @@
+import { channelQuality } from '@/utils/channelQuality';
 import { v5 as uuidv5 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { getProxyBase } from '@/utils/proxy';
@@ -58,11 +59,13 @@ export function buildLiveChannel(account: XtreamLiveAccount, stream: RawStream, 
   const base = `${account.server}/live/${encodeURIComponent(account.username)}/${encodeURIComponent(account.password)}/${stream.stream_id}`;
   const fallback: XtreamStreamFormat = format === 'm3u8' ? 'ts' : 'm3u8';
   const name = String(stream.name ?? '').trim();
+  const quality = channelQuality({ name });
   const altVariant: Channel = {
     id: uuidv5(`${account.server}\0${stream.stream_id}\0${fallback}`, uuidv5.URL),
     name: `${name} (${fallback.toUpperCase()})`,
     url: `${base}.${fallback}`,
     group,
+    ...(quality ? { quality } : {}),
     isFavorite: false,
   };
   return {
@@ -75,6 +78,7 @@ export function buildLiveChannel(account: XtreamLiveAccount, stream: RawStream, 
     ...(stream.custom_sid || stream.epg_channel_id ? { tvgId: stream.custom_sid || stream.epg_channel_id } : {}),
     // Numéro du fournisseur : alimente la numérotation canonique partagée avec le lecteur Android.
     ...(typeof stream.num === 'number' && stream.num > 0 ? { chno: String(stream.num) } : {}),
+    ...(quality ? { quality } : {}),
     isFavorite: false,
   };
 }

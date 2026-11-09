@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NativePlayerBridge, RecordingsBridge, buildNativeZap, findChannelByNumber } from '@/utils/nativePlayer';
+import { NativePlayerBridge, RecordingsBridge, buildNativeZap, findChannelByNumber, setNativeCatchupProvider } from '@/utils/nativePlayer';
 import { isPlaybackDelegated, onPlaybackDelegated, setPlaybackDelegated } from '@/utils/playbackOwnership';
 import type { Channel } from '@/types/channel';
 import { DEFAULT_USER_AGENT, setActiveUserAgent } from '@/utils/userAgent';
@@ -147,6 +147,29 @@ it('garde les voisins quand la chaîne sélectionnée est une variante', () => {
   const variant = { id: 'a-hd', name: 'A HD', url: 'https://example.test/a-hd' };
   const base = { id: 'a', name: 'A', url: 'https://example.test/a', variants: [variant] };
   expect(buildNativeZap([base, { id: 'b', name: 'B', url: 'https://example.test/b' }], variant)).toEqual({ urls: [variant.url, 'https://example.test/b'], titles: ['A HD', 'B'], index: 0, start: 0, numbers: ['1', '2'], total: 2 });
+});
+
+it('joint l’archive du programme en cours, alignée sur les chaînes du zap', () => {
+  const now = Date.now();
+  const channels = [
+    { id: 'a', name: 'A', url: 'https://example.test/a' },
+    { id: 'b', name: 'B', url: 'https://example.test/b' },
+  ];
+  const epg = {
+    a: [{ id: 'p1', channelId: 'a', title: 'En cours', startTime: new Date(now - 600_000), endTime: new Date(now + 600_000) }],
+  };
+  setNativeCatchupProvider(channel => channel.id === 'a'
+    ? { template: 'http://srv.test/timeshift/jo/p/{minutes}/{start}/1.ts', timezone: 'Europe/Paris', url: '', urlStart: 0, urlEnd: 0 }
+    : null);
+  try {
+    const zap = buildNativeZap(channels, channels[0], 300, epg);
+    expect(zap.catchup).toHaveLength(2);
+    expect(zap.catchup?.[0]?.timezone).toBe('Europe/Paris');
+    // Chaîne sans archive : entrée vide, mais la place est gardée (alignement sur urls).
+    expect(zap.catchup?.[1]).toEqual({ template: '', timezone: '', url: '', urlStart: 0, urlEnd: 0 });
+  } finally {
+    setNativeCatchupProvider(null);
+  }
 });
 
 describe('Numéros de chaîne', () => {

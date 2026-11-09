@@ -5,13 +5,15 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TvVodScreen, storedVodPosition } from '@/components/TvVodScreen';
+import { TvSeriesFiche } from '@/components/TvSeriesFiche';
 import { VodPoster } from '@/components/VodPoster';
 import type { PlaylistInfo } from '@/types/channel';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import { getPlaybackUrl } from '@/hooks/useVideoPlayer';
 import { onPlaybackDelegated } from '@/utils/playbackOwnership';
 import { catalogRequest, getXtreamAccount, parseCatalog, parseCategories, parseDetails, readVodProgress, saveVodProgress, vodUrl, type CatalogCategory, type CatalogDetails, type CatalogItem } from '@/utils/xtreamCatalog';
-import { getPlayHistory, getExternalWatches, pushPlayHistory, updateVodHistoryProgress, historyScope, getVodWatchlistFromDB, toggleVodWatchlist, type PlayHistoryEntry, type VodWatchlistItem } from '@/utils/idb';
+import { getPlayHistory, getExternalWatches, getLocalLibraryWorks, pushPlayHistory, updateVodHistoryProgress, historyScope, getVodWatchlistFromDB, toggleVodWatchlist, type PlayHistoryEntry, type VodWatchlistItem } from '@/utils/idb';
+import { localLibraryWatches, LOCAL_SEED_LIMIT, type LocalWork } from '@/utils/localLibrary';
 import { recommendForHistory } from '@/utils/recommendations';
 import { attachUsageMeter } from '@/utils/usageJournal';
 import { saveForYouSnapshot } from '@/utils/discover';
@@ -30,8 +32,6 @@ import { rememberVodCategories } from '@/utils/parentalVod';
 import { toast } from 'sonner';
 
 import { categoryCatalogCache } from '@/utils/vodPosterCache';
-
-const fullCatalogCache = new Map<string, { fetchedAt: number; items: CatalogItem[] }>();
 
 function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { url: string; title: string; mediaId: string; restart: boolean; subtitleVtt?: string; onEnded?: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -198,7 +198,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const [showForYou, setShowForYou] = useState(false);
   // Mobile : rail toujours affiché. TV : calcul seulement quand l'entrée est ouverte
   // (le classement parcourt tout le catalogue et l'enrichissement interroge TMDB).
-  const recsWanted = kind === 'movie' && (!tvMode || showForYou);
+  const recsWanted = !tvMode || showForYou;
   const handledRequest = useRef<number | null>(null);
   const pendingResume = useRef<string | null>(null);
 
@@ -248,25 +248,36 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       window.removeEventListener('focus', invalidate);
     };
   }, []);
-  const catalogCacheKey = JSON.stringify([playlist.id, account]);
   // « Vu ailleurs » : visionnages importés (Netflix, Prime, YouTube…), restés hors
   // de l'historique de lecture. Déclaré avant l'effet ci-dessous : des films vus
   // ailleurs suffisent à amorcer le chargement du catalogue complet.
   const [externalWatches, setExternalWatches] = useState<PlayHistoryEntry[]>([]);
 
-  // Historique de lecture + catalogue complet : le catalogue entier n'est chargé
-  // que si des films ont déjà été regardés (recommandations « Pour toi ») ou si
-  // des visionnages importés peuvent amorcer le rail.
+  // Bibliothèque locale (USB/SD) : index enregistré par LocalLibrary après chaque
+  // analyse. Il nourrit « Pour toi » sans relancer le scan natif depuis le catalogue.
+  const [localWorks, setLocalWorks] = useState<LocalWork[]>([]);
   useEffect(() => {
-    if (!account || kind !== 'movie') return;
     let cancelled = false;
-    void getPlayHistory().then(async (h) => {
+    const load = () => {
+      void getLocalLibraryWorks()
+        .then(works => { if (!cancelled) setLocalWorks(works); })
+        .catch(() => {});
+    };
+    load();
+    window.addEventListener('local-library-updated', load);
+    return () => { cancelled = true; window.removeEventListener('local-library-updated', load); };
+  }, []);
+
+  // Historique de lecture : léger (IndexedDB), il n'entraîne plus le téléchargement
+  // du catalogue complet. Le pool des recommandations est construit au fil des
+  // catégories consultées et conservé dans `categoryCatalogCache`.
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+    void getPlayHistory().then(h => {
       if (cancelled) return;
-      // « Pour toi » ne dépend que des œuvres qualifiées (terminées ou ≥ 1 min, avec un
-      // titre) : le tick de progression d'une lecture en cours (position avancée) ne
-      // change pas cet ensemble — ne pas replacer l'historique ni rescorcer le catalogue.
       const signature = h.map(historyScope)
-        .filter(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && !!e.name && (e.status === 'completed' || (e.positionMs || 0) >= 60000))
+        .filter(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === kind && !!e.name && (e.status === 'completed' || (e.positionMs || 0) >= 60000))
         .map(e => `${e.channelId}:${e.status}`)
         .sort()
         .join('|');
@@ -274,22 +285,22 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         historySignatureRef.current = signature;
         setVodHistory(h);
       }
-      // Les visionnages importés n'étant pas dans l'historique de lecture, ils
-      // doivent aussi déclencher le chargement : sans catalogue, aucune amorce.
-      if (!externalWatches.some(e => e.mediaKind !== 'series') && !h.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && (e.status === 'completed' || (e.positionMs || 0) >= 60000))) return;
-      const cached = fullCatalogCache.get(catalogCacheKey);
-      if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) { setAllMovies(cached.items); return; }
-      try {
-        const data = await catalogRequest(account, 'get_vod_streams', {});
-        if (cancelled) return;
-        const values = parseCatalog(data, 'movie');
-        fullCatalogCache.set(catalogCacheKey, { fetchedAt: Date.now(), items: values });
-        while (fullCatalogCache.size > 3) fullCatalogCache.delete(fullCatalogCache.keys().next().value!);
-        setAllMovies(values);
-      } catch { /* recommandations optionnelles */ }
     }).catch(() => {});
+    // Reprise immédiate du pool déjà consulté pendant cette session.
+    const prefix = `${playlist.id}:${account.server}:${kind}:`;
+    const seen = new Set<string>();
+    const merged: CatalogItem[] = [];
+    for (const [key, value] of categoryCatalogCache) {
+      if (!key.startsWith(prefix)) continue;
+      for (const item of value.items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        merged.push(item);
+      }
+    }
+    if (merged.length) setAllMovies(merged);
     return () => { cancelled = true; };
-  }, [account, kind, playlist.id, catalogCacheKey, reload, historyRevision, externalWatches]);
+  }, [account, kind, playlist.id, reload, historyRevision]);
 
   const visibleAllMovies = useMemo(
     () => hideAdult ? allMovies.filter(item => !adultCategoryIds.has(item.categoryId)) : allMovies,
@@ -314,12 +325,14 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     window.addEventListener('external-watches-updated', update);
     return () => window.removeEventListener('external-watches-updated', update);
   }, [reloadExternal]);
-  // Films vus ailleurs que le catalogue propose aussi : ils amorcent le classement
-  // local (catégorie + titre) sans réseau. Sans eux, un profil venu de Netflix ne
-  // produirait aucun rail tant qu'aucun film n'a été lancé dans CedPlay.
+  // Œuvres vues ailleurs que le catalogue propose aussi : elles amorcent le classement
+  // local (catégorie + titre) sans réseau. Les œuvres de la bibliothèque locale suivent
+  // le même chemin : posséder un titre au catalogue vaut un visionnage, par type.
   const seeds = useMemo(
-    () => (recsWanted ? externalSeeds(externalWatches, visibleAllMovies, playlist.id) : []),
-    [recsWanted, externalWatches, visibleAllMovies, playlist.id],
+    () => (recsWanted
+      ? externalSeeds([...localLibraryWatches(localWorks.filter(work => work.kind === kind).slice(0, LOCAL_SEED_LIMIT)), ...externalWatches], visibleAllMovies, playlist.id, kind)
+      : []),
+    [recsWanted, localWorks, externalWatches, visibleAllMovies, playlist.id, kind],
   );
   const rankingHistory = useMemo(() => {
     if (!seeds.length) return vodHistory;
@@ -329,8 +342,8 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   // Classement local immédiat (catégorie + titre). Le pool de 40 laisse au profil de
   // goût la possibilité de promouvoir un titre qui n'était pas dans les 12 premiers.
   const baseRecommendations = useMemo(
-    () => (recsWanted ? recommendForHistory(rankingHistory, visibleAllMovies, { limit: 40, playlistId: playlist.id }) : []),
-    [recsWanted, rankingHistory, visibleAllMovies, playlist.id],
+    () => (recsWanted ? recommendForHistory(rankingHistory, visibleAllMovies, { limit: 40, playlistId: playlist.id, kind }) : []),
+    [recsWanted, rankingHistory, visibleAllMovies, playlist.id, kind],
   );
   // Résolution TMDB bornée (derniers films vus + meilleurs candidats), en arrière-plan :
   // le rail reste affiché pendant l'enrichissement et retombe sur le classement local
@@ -348,13 +361,14 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     let cancelled = false;
     const { history, movies } = tasteInputsRef.current;
     void enrichRecommendations({
-      history, movies, candidates: baseRecommendations.map(entry => entry.item), playlistId: playlist.id, apiKey,
+      kind, history, movies, candidates: baseRecommendations.map(entry => entry.item), playlistId: playlist.id, apiKey,
       external: externalWatches,
+      local: localWorks,
     })
       .then(result => { if (!cancelled) setTaste(result); })
       .catch(() => { if (!cancelled) setTaste(null); });
     return () => { cancelled = true; };
-  }, [baseRecommendations, tmdbApiKey, playlist.id, recsWanted, externalWatches]);
+  }, [baseRecommendations, tmdbApiKey, playlist.id, recsWanted, externalWatches, localWorks, kind]);
   const recommendations = useMemo(() => {
     if (!recsWanted) return [];
     const usable = taste && taste.playlistId === playlist.id && taste.profile.sampleSize > 0 ? taste : null;
@@ -363,9 +377,10 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       limit: tvMode ? 20 : 12,
       pool: 40,
       playlistId: playlist.id,
+      kind,
       ...(usable ? { profile: usable.profile, detailsByItemId: usable.detailsByItemId } : {}),
     });
-  }, [recsWanted, tvMode, rankingHistory, visibleAllMovies, playlist.id, taste]);
+  }, [recsWanted, tvMode, rankingHistory, visibleAllMovies, playlist.id, taste, kind]);
   // Découvrir affiche « Pour toi » sans recharger le catalogue : on y mémorise le dernier calcul.
   useEffect(() => {
     if (!recsWanted || visibleAllMovies.length === 0) return;
@@ -375,20 +390,21 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.categoryId ? { categoryId: item.categoryId } : {}),
       ...(reasons[0] ? { reason: reasons[0] } : {}),
-    })));
-  }, [recsWanted, visibleAllMovies.length, recommendations, playlist.id]);
+    })), kind);
+  }, [recsWanted, visibleAllMovies.length, recommendations, playlist.id, kind]);
   // TV : première justification affichée dans la fiche éclair de l'affiche surlignée.
   const forYouReasons = useMemo(
     () => new Map(recommendations.flatMap(({ item, reasons }) => (reasons[0] ? [[item.id, reasons[0]] as const] : []))),
     [recommendations],
   );
-  // Films vus ici (au moins une minute ou terminés) ou importés : sans eux, rien à suggérer.
+  // Œuvres vues ici (au moins une minute ou terminées), importées ou possédées sur
+  // USB/SD : sans elles, rien à suggérer. Le seuil s'applique au même type que le rail.
   const hasTasteSeed = useMemo(
-    () => externalWatches.some(e => e.mediaKind !== 'series') || vodHistory.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && (e.status === 'completed' || (e.positionMs || 0) >= 60000)),
-    [externalWatches, vodHistory, playlist.id],
+    () => localWorks.some(w => w.kind === kind) || externalWatches.some(e => (e.mediaKind ?? 'movie') === kind) || vodHistory.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === kind && (e.status === 'completed' || (e.positionMs || 0) >= 60000)),
+    [localWorks, externalWatches, vodHistory, playlist.id, kind],
   );
   const forYouEmptyText = !hasTasteSeed
-    ? 'Aucun film vu pour l’instant : lance un film, les suggestions apparaîtront ici.'
+    ? `Aucun ${kind === 'movie' ? 'film' : 'épisode'} vu pour l’instant : lance ${kind === 'movie' ? 'un film' : 'une série'}, les suggestions apparaîtront ici.`
     : visibleAllMovies.length === 0
       ? 'Préparation des suggestions…'
       : 'Aucun titre du catalogue ne correspond encore à tes visionnages.';
@@ -397,7 +413,10 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     if (!account) return;
     const controller = new AbortController(); setError(''); setLoading(true); setCategory(null); setItems([]); setCategories([]); setCategoriesStatus('loading');
     void catalogRequest(account, kind === 'movie' ? 'get_vod_categories' : 'get_series_categories', {}, controller.signal)
-      .then(parseCategories).then(values => {
+      .then(parseCategories).then(rawValues => {
+        // Une catégorie « test » du fournisseur n'apporte rien : elle encombre la
+        // colonne TV et peut être vide. Les autres catégories restent intactes.
+        const values = rawValues.filter(c => !/^test\b/i.test(c.name.trim()));
         if (controller.signal.aborted) return;
         setCategories(values);
         setCategoriesStatus('ready');
@@ -407,16 +426,18 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         // Contrôle parental : la catégorie par défaut ne doit jamais être une catégorie verrouillée.
         const selectable = hideAdultRef.current ? values.filter(c => !isAdultGroupName(c.name)) : values;
         // Mode TV : retrouver la catégorie de la dernière visite si le catalogue la connaît encore.
+        // Une ancienne valeur « toutes les catégories » est ignorée : elle déclenchait le
+        // téléchargement complet du catalogue, qui figeait la box pendant plusieurs minutes.
         const fallback = selectable.find(c => /^FR\b|FRANCE/i.test(c.name))?.id || selectable[0]?.id || '';
         const stored = tvMode ? storedVodPosition(playlist.id, kind)?.category ?? null : null;
-        setCategory(stored !== null && (stored === '' || selectable.some(c => c.id === stored)) ? stored : fallback);
+        setCategory(stored !== null && stored !== '' && selectable.some(c => c.id === stored) ? stored : fallback);
       })
       .catch(e => { if (!controller.signal.aborted) { setError(e.message); setCategoriesStatus('error'); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [account, kind, reload, tvMode, playlist.id]);
   useEffect(() => {
-    if (!account || category === null) return;
+    if (!account || category === null || category === '') return;
     const cacheKey = `${playlist.id}:${account.server}:${kind}:${category}`;
     const cached = categoryCatalogCache.get(cacheKey);
     if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) {
@@ -430,6 +451,14 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           categoryCatalogCache.set(cacheKey, { fetchedAt: Date.now(), items: values });
           while (categoryCatalogCache.size > 20) categoryCatalogCache.delete(categoryCatalogCache.keys().next().value!);
           setItems(values);
+          // Pool des recommandations : ce qui a déjà été parcouru, sans jamais demander
+          // les dizaines de milliers de titres du fournisseur en une seule requête.
+          setAllMovies(previous => {
+            if (!previous.length) return values;
+            const known = new Set(previous.map(item => item.id));
+            const added = values.filter(item => !known.has(item.id));
+            return added.length ? [...previous, ...added] : previous;
+          });
         }
       })
       .catch(e => { if (!controller.signal.aborted) setError(e.message); })
@@ -475,6 +504,14 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     ficheFocusPlaced.current = true;
     el.focus();
   }, [tvMode, selected, details]);
+  // TV : le panneau de sous-titres s'ouvre depuis les options de l'épisode ; le focus
+  // y entre pour régler la piste sans chercher la zone du regard.
+  useEffect(() => {
+    if (!tvMode || !subtitleEpisodeId) return;
+    const root = document.querySelector<HTMLElement>('[role="dialog"][data-state="open"] [data-tv-subtitles]');
+    const first = root?.querySelector<HTMLElement>('button, input, select');
+    first?.focus();
+  }, [tvMode, subtitleEpisodeId]);
 
   const baseItems = useMemo(() => {
     if (tvMode && showForYou) return recommendations.map(r => r.item);
@@ -713,14 +750,15 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, []);
 
   // Mode TV : actions de l'écran télécommande (TvVodScreen) ; fiches et lecture restent partagées.
-  const handleSelectCategory = useCallback((id: string) => { setCategory(id); setShowWatchlistOnly(false); setShowForYou(false); }, []);
+  const handleSelectCategory = useCallback((id: string) => { if (!id) return; setCategory(id); setShowWatchlistOnly(false); setShowForYou(false); }, []);
   const toggleWatchlistOnly = useCallback(() => { setShowForYou(false); setShowWatchlistOnly(v => !v); }, []);
   const toggleForYou = useCallback(() => { setShowWatchlistOnly(false); setShowForYou(v => !v); }, []);
-  const handleRefresh = useCallback(() => { fullCatalogCache.delete(catalogCacheKey); categoryCatalogCache.clear(); setAllMovies([]); setReload(v => v + 1); }, [catalogCacheKey]);
+  const handleRefresh = useCallback(() => { categoryCatalogCache.clear(); setAllMovies([]); setReload(v => v + 1); }, []);
   // « Afficher davantage » étend la limite EFFECTIVE : après une restauration au-delà
   // de 60 titres (affiche mémorisée au titre 85 ⇒ 120 affichés), la limite de base est
   // déjà dépassée et « +60 » depuis elle ne montrerait rien de plus.
   const handleLoadMore = useCallback(() => setLimit(v => Math.max(v, tvLimit) + 60), [tvLimit]);
+  // Fiche série TV (TvSeriesFiche) : ajout/retrait de Ma Liste sans rouvrir le catalogue.
   const toggleWatchlistItem = useCallback(async (item: CatalogItem) => {
     const added = await toggleVodWatchlist({
       id: item.id,
@@ -734,8 +772,11 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     });
     toast.success(added ? 'Ajouté à Ma Liste' : 'Retiré de Ma Liste');
   }, [kind, playlist.id]);
-  const playItem = (item: CatalogItem) => { if (item.extension) void play(item.id, item.extension, item.name); };
   if (!account) return <section className="space-y-3 text-white"><h2 className="text-xl font-semibold">{kind === 'movie' ? 'Films' : 'Séries'}</h2><p className="text-neutral-300">Pour accéder au catalogue, importe ta liste depuis « Ajouter » → « Connexion Xtream ». Les identifiants doivent correspondre à la liste active.</p></section>;
+  // Fiche série TV : détails en haut, puis saison / épisodes / options pilotés par
+  // TvSeriesFiche (une seule règle Haut-Bas-Gauche-Droite). Le reste de la fiche
+  // partagée garde sa mise en page mobile.
+  const tvSeriesFiche = tvMode && kind === 'series' && !shownTitle;
   const ficheDialog = <Dialog open={!!selected} onOpenChange={open => { if (!open) setSelected(null); }}><DialogContent
     onOpenAutoFocus={e => {
       // Mode TV : le focus entre par le bouton principal (lecture), pas par la croix de
@@ -748,9 +789,85 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       if (el && !(el instanceof HTMLButtonElement && el.disabled)) { ficheFocusPlaced.current = true; el.focus(); return; }
       dialog?.focus();
     }}
+    onCloseAutoFocus={e => {
+      // TV : refermer la fiche rend la main à l'affiche ouverte dans la grille,
+      // pas aux rubriques du haut — sinon il faut redescendre à chaque titre.
+      if (!tvMode) return;
+      const el = document.querySelector<HTMLElement>('[data-tv-vod] [data-tv-item][tabindex="0"]');
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+    }}
     // grid-cols-1 = minmax(0, 1fr) : sans lui, la rangée « Films similaires » (cartes
     // non rétrécissables) élargit la colonne implicite et pousse toute la fiche hors écran.
-    className="grid-cols-1 bg-neutral-950 text-white border-neutral-900 max-h-[90dvh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 sm:max-w-2xl"><DialogHeader><DialogTitle className="flex items-center gap-2">{selected && !shownTitle && matchStreamingPlatformOrNetwork(selected.name) && <PlatformLogo platformId={matchStreamingPlatformOrNetwork(selected.name)} size="sm" className="h-5 w-5 rounded" />}<span className="truncate">{shownTitle ? shownTitle.title : selected?.name}</span></DialogTitle><DialogDescription>{shownTitle ? 'Titre recommandé, absent de ta playlist' : kind === 'movie' ? 'Fiche du film et lecture' : 'Saisons et épisodes'}</DialogDescription></DialogHeader>
+    className={tvSeriesFiche
+      ? 'flex h-[90dvh] max-h-[90dvh] flex-col gap-3 overflow-hidden bg-neutral-950 text-white border-neutral-900 p-4 sm:p-6 sm:max-w-3xl'
+      : 'grid-cols-1 bg-neutral-950 text-white border-neutral-900 max-h-[90dvh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 sm:max-w-2xl'}><DialogHeader><DialogTitle className="flex items-center gap-2">{selected && !shownTitle && matchStreamingPlatformOrNetwork(selected.name) && <PlatformLogo platformId={matchStreamingPlatformOrNetwork(selected.name)} size="sm" className="h-5 w-5 rounded" />}<span className="truncate">{shownTitle ? shownTitle.title : selected?.name}</span></DialogTitle><DialogDescription>{shownTitle ? 'Titre recommandé, absent de ta playlist' : kind === 'movie' ? 'Fiche du film et lecture' : 'Saisons et épisodes'}</DialogDescription></DialogHeader>
+    {selected && !shownTitle && forYouReasons.get(selected.id) && <p className="text-xs text-primary">{forYouReasons.get(selected.id)}</p>}
+    {tvSeriesFiche && selected ? <>
+      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1 text-sm text-neutral-300">
+        {details && <p>{[details.releaseDate, details.duration].filter(Boolean).join(' · ')}</p>}
+        {details?.plot?.trim() ? <p className="whitespace-pre-line">{details.plot}</p> : !details && !detailError && <p role="status">Chargement de la fiche…</p>}
+        {detailError && <p role="alert" className="text-amber-300">{detailError}</p>}
+        {details?.director && <p>Réalisation : {details.director}</p>}
+        {details?.cast && <p>Avec : {details.cast}</p>}
+        <TmdbPanel
+          compact
+          name={selected.name}
+          year={details?.releaseDate.match(/\d{4}/)?.[0] || normalizeTitle(selected.name).year}
+          tmdbId={details?.tmdbId || selected.tmdbId}
+          sheetKey={selected.id}
+          onActiveChange={setTmdbTitle}
+          kind={kind}
+          apiKey={tmdbApiKey}
+          region={normalizeWatchRegion(settings.watchRegion)}
+          providerIds={settings.watchProviderIds ?? []}
+          catalogItems={allMovies.length > 0 ? allMovies : items}
+          onOpenItem={setSelected}
+          provided={details || detailError
+            ? { overview: !!details?.plot?.trim(), director: !!details?.director?.trim(), cast: !!details?.cast?.trim() }
+            : { overview: true, director: true, cast: true }}
+        />
+        {settings.subtitlesEnabled !== false && subtitleEpisodeId && (
+          <div data-tv-subtitles className="rounded-lg border border-neutral-800 p-2">
+            <SubtitleSelector
+              key={`${selected.id}:${subtitleEpisodeId || 'movie'}`}
+              mediaTitle={selected.name}
+              year={details?.releaseDate.match(/\d{4}/)?.[0] || normalizeTitle(selected.name).year}
+              kind={kind}
+              season={season ? parseInt(season, 10) : undefined}
+              episode={details?.episodes.find(e => e.id === subtitleEpisodeId)?.number}
+              mediaKey={mediaKey(subtitleEpisodeId || selected.id)}
+              autoTranslate={settings.subtitleAutoTranslate !== false}
+              apiKeys={{
+                openSubtitlesApiKey: settings.openSubtitlesApiKey ?? '',
+                deeplApiKey: settings.deeplApiKey ?? '',
+                subdlApiKey: settings.subdlApiKey ?? '',
+              }}
+              targetLang={settings.subtitlePreferredLang || 'fr'}
+              onSubtitleReady={setCurrentSub}
+            />
+          </div>
+        )}
+      </div>
+      {details && details.episodes.length > 0
+        ? <div className="h-[46%] min-h-[240px] shrink-0">
+          <TvSeriesFiche
+            episodes={details.episodes}
+            season={season}
+            onSeasonChange={setSeason}
+            watchlisted={watchlistIds.has(selected.id)}
+            onToggleWatchlist={() => void toggleWatchlistItem(selected)}
+            subtitlesEnabled={settings.subtitlesEnabled !== false}
+            subtitleEpisodeId={subtitleEpisodeId}
+            onSubtitles={episode => { setCurrentSub(null); setSubtitleEpisodeId(episode.id); }}
+            onPlay={(episode, restart) => { if (episode.extension) void play(episode.id, episode.extension, episode.name, restart); }}
+            progress={cachedProgress}
+            busy={busy}
+          />
+        </div>
+        : <p className="text-sm text-muted-foreground">{details ? 'Aucun épisode fourni pour cette série.' : detailError ? '' : 'Chargement des épisodes…'}</p>}
+    </> : <>
     {selected && !shownTitle && (
       <div className="flex items-center gap-2 pt-1 pb-1">
         <Button
@@ -799,7 +916,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         apiKey={tmdbApiKey}
         region={normalizeWatchRegion(settings.watchRegion)}
         providerIds={settings.watchProviderIds ?? []}
-        catalogItems={kind === 'movie' && allMovies.length > 0 ? allMovies : items}
+        catalogItems={allMovies.length > 0 ? allMovies : items}
         onOpenItem={setSelected}
         // Tant que la fiche du fournisseur n'est pas arrivée, on la suppose complète :
         // évite d'afficher le synopsis TMDB puis de le retirer une fraction de seconde après.
@@ -832,6 +949,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     {kind === 'series' && details && !shownTitle && <div className="space-y-3">
       {details.episodes.length === 0 ? <p>Aucun épisode fourni pour cette série.</p> : <><select aria-label="Saison" className="w-full bg-neutral-900 p-3 rounded-md" value={season} onChange={e => setSeason(e.target.value)}>{[...new Set(details.episodes.map(e => e.season))].map(s => <option key={s} value={s}>Saison {s}</option>)}</select><div className="space-y-2">{details.episodes.filter(e => e.season === season).map((e, idx) => <div key={e.id} className="bg-white/5 rounded-lg p-3 space-y-2"><p>{e.number}. {e.name}</p>{e.plot && <p className="text-xs text-neutral-400 line-clamp-3">{e.plot}</p>}<div className="flex flex-wrap gap-2">{settings.subtitlesEnabled !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setCurrentSub(null); setSubtitleEpisodeId(e.id); }}>Sous-titres épisode {e.number}</Button>}<Button size="sm" disabled={busy || !e.extension} {...(idx === 0 ? { 'data-remote-start': true } : {})} onClick={() => void play(e.id, e.extension, e.name)}>{progressLabel(e.id)}</Button>{cachedProgress(e.id).saved && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void play(e.id, e.extension, e.name, true)}>Depuis le début</Button>}</div>{!e.extension && <p className="text-xs text-amber-300">Format non fourni.</p>}</div>)}</div></>}
     </div>}
+    </>}
   </DialogContent></Dialog>;
   const playingDialog = <Dialog open={!!playing} onOpenChange={open => { if (!open) { setPlaying(null); setQueueNext(null); setAutoNextCountdown(null); } }}><DialogContent className="bg-neutral-950 text-white sm:max-w-4xl"><DialogHeader><DialogTitle>Lecture</DialogTitle><DialogDescription>Pause, déplacement et reprise de lecture.</DialogDescription></DialogHeader>{playing && <div className="relative">
     {autoNextCountdown !== null && queueNext && <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center" data-testid="next-episode-overlay">
@@ -860,49 +978,52 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       showWatchlistOnly={showWatchlistOnly}
       onToggleWatchlistOnly={toggleWatchlistOnly}
       showForYou={showForYou}
-      onToggleForYou={kind === 'movie' ? toggleForYou : undefined}
-      forYouReasons={forYouReasons}
+      onToggleForYou={toggleForYou}
       forYouEmptyText={forYouEmptyText}
       watchlistCount={visibleWatchlist.length}
       watchlistIds={watchlistIds}
-      onToggleWatchlistItem={toggleWatchlistItem}
       onOpen={setSelected}
-      onPlay={kind === 'movie' ? playItem : undefined}
       onRefresh={handleRefresh}
       onSearch={onSearch}
       onShowLocal={onShowLocal}
-      progressLabel={progressLabel}
+      progress={cachedProgress}
     />
     {ficheDialog}
     {playingDialog}
   </section>;
   return <section className="text-white space-y-4">
-    {kind === 'movie' && !tvMode && <div className="space-y-2">
+    {!tvMode && <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[17px] font-semibold tracking-tight text-foreground">Pour toi, d'après tes visionnages</h3>
         <ExternalWatchDialog watches={externalWatches} onChanged={reloadExternal} />
       </div>
-      {externalWatches.length > 0 && <p className="text-[11px] leading-tight text-neutral-500">
-        {externalSummary(externalWatches)}
-        {taste && taste.playlistId === playlist.id && taste.externalSampleSize > 0
-          ? ` · ${taste.externalSampleSize} fiche(s) TMDB ajoutée(s) au profil`
-          : ''}
-      </p>}
+      {(() => {
+        const sameKindExternal = externalWatches.filter(entry => (entry.mediaKind ?? 'movie') === kind);
+        const sameKindLocal = localWorks.filter(work => work.kind === kind);
+        if (!sameKindExternal.length && !sameKindLocal.length) return null;
+        return <p className="text-[11px] leading-tight text-neutral-500">
+          {[
+            sameKindExternal.length > 0 ? externalSummary(sameKindExternal) : '',
+            sameKindLocal.length > 0 ? `${sameKindLocal.length} titre${sameKindLocal.length > 1 ? 's' : ''} de ta bibliothèque USB/SD` : '',
+          ].filter(Boolean).join(' · ')}
+          {taste && taste.playlistId === playlist.id && taste.externalSampleSize + taste.localSampleSize > 0
+            ? ` · ${taste.externalSampleSize + taste.localSampleSize} fiche(s) TMDB ajoutée(s) au profil`
+            : ''}
+        </p>;
+      })()}
       {recommendations.length > 0
         ? <div className="rail flex snap-x gap-3 overflow-x-auto pb-1">
           {recommendations.map(({ item, reasons }) => <button key={item.id} onClick={() => setSelected(item)} className="poster press w-28 shrink-0 snap-start text-left rounded-xl overflow-hidden bg-card border border-neutral-900" title={reasons.length ? `${item.name} — ${reasons.join(' · ')}` : item.name}>
-            <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center"><VodPoster src={item.poster} kind="movie" /></div>
+            <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center"><VodPoster src={item.poster} kind={kind} /></div>
             <div className="p-1.5"><p className="text-[11px] leading-tight line-clamp-2">{item.name}</p>{item.rating && <p className="text-[10px] text-neutral-400">★ {item.rating}</p>}{reasons[0] && <p className="text-[10px] leading-tight text-neutral-500 line-clamp-1">{reasons[0]}</p>}</div>
           </button>)}
         </div>
-        : <p className="text-xs text-neutral-400">{externalWatches.length > 0
-          ? 'Aucun titre du catalogue ne correspond encore à ces visionnages. Importe l’historique d’une autre plateforme ou lance un film ici.'
-          : 'Aucun film vu pour l’instant : lance un film ici ou importe ton historique Netflix, Prime Video, YouTube…'}</p>}
+        : <p className="text-xs text-neutral-400">{forYouEmptyText}</p>}
     </div>}
     {/* Une seule ligne, même sur téléphone : catégorie, Ma Liste, Actualiser. */}
     <div className="flex items-center gap-2">
       <div className="flex-1 min-w-0">
-        <select aria-label="Catégorie VOD" className="bg-neutral-900 p-3 rounded-md w-full" value={category || ''} onChange={e => { setCategory(e.target.value); setShowWatchlistOnly(false); }}><option value="">Toutes les catégories</option>{visibleCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+        <select aria-label="Catégorie VOD" className="bg-neutral-900 p-3 rounded-md w-full" value={category || ''} onChange={e => { if (!e.target.value) return; setCategory(e.target.value); setShowWatchlistOnly(false); }}>{visibleCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
       </div>
       <Button
         variant={showWatchlistOnly ? 'default' : 'outline'}

@@ -13,6 +13,7 @@ export interface Recommendation {
 
 export interface RecommendationOptions {
   playlistId: string;
+  kind?: 'movie' | 'series';
   limit?: number;
   /** Injectable pour rendre le calcul déterministe dans les tests. */
   nowMs?: number;
@@ -82,14 +83,32 @@ export function recommendForHistory(
 ): Recommendation[] {
   const now = options?.nowMs ?? Date.now();
   const limit = options?.limit ?? 12;
-  const watched = history.map(historyScope).filter(e => e.kind === 'vod' && e.playlistId === options.playlistId && e.mediaKind === 'movie' && !!e.name && (e.status === 'completed' || (e.positionMs || 0) >= 60000));
+  const kind = options.kind ?? 'movie';
+  const watched = history.map(historyScope).filter(e => e.kind === 'vod' && e.playlistId === options.playlistId && e.mediaKind === kind && !!e.name && (e.status === 'completed' || (e.positionMs || 0) >= 60000));
   if (!watched.length) return [];
-  const completedIds = new Set(watched.filter(e => e.status === 'completed').map(e => e.channelId));
+
+  // Un épisode par entrée d'historique : pour les séries, ne compter chaque œuvre
+  // qu'une fois (le plus récent épisode), sinon une série à épisodes vus pèse
+  // artificiellement plus lourd qu'une autre.
+  const works = kind === 'series'
+    ? [...watched].sort((a, b) => b.ts - a.ts).filter((entry, index, list) => {
+      const key = entry.seriesId ?? normalizeForCompare(normalizeTitle(entry.name as string).title);
+      return list.findIndex(other => (other.seriesId ?? normalizeForCompare(normalizeTitle(other.name as string).title)) === key) === index;
+    })
+    : watched;
+  // Films : seuls les titres terminés sont exclus (un film commencé reste suggérable).
+  // Séries : l'identifiant de catalogue est le `seriesId` ; l'historique ancien qui
+  // n'en a pas est rapproché par titre pour ne pas recommander la série en cours.
+  const watchedIds = new Set(works
+    .filter(entry => kind === 'series' || entry.status === 'completed')
+    .map(entry => (kind === 'series' ? entry.seriesId : entry.channelId.split(':').pop()))
+    .filter((id): id is string => !!id));
+  const watchedNames = new Set(works.map(entry => normalizeForCompare(normalizeTitle(entry.name as string).title)));
 
   // Visionnages normalisés et récence calculés UNE fois : dans la boucle interne, la
   // normalisation + Math.exp par couple film × visionnage coûtait ~1 M d'appels sur un
   // catalogue de 20 000 films (gel de plusieurs secondes à chaque recalcul).
-  const watchedMeta = watched.map((w) => {
+  const watchedMeta = works.map((w) => {
     const name = normalizeForCompare(normalizeTitle(w.name as string).title);
     return {
       categoryId: w.categoryId,
@@ -103,7 +122,7 @@ export function recommendForHistory(
   const scored: ScoredItem[] = [];
   for (const item of items) {
     const { name, tokens } = catalogTitle(item);
-    if (!name || completedIds.has(`vod:${options.playlistId}:movie:${item.id}`)) continue;
+    if (!name || watchedIds.has(item.id) || (kind === 'series' && watchedNames.has(name))) continue;
     let score = 0;
     let bestWeight = 0;
     let bestReason = '';

@@ -36,5 +36,22 @@ export function remoteNeighbor(current: HTMLElement, targets: HTMLElement[], key
 
 export function focusRemote(el: HTMLElement): void {
   el.focus({ preventScroll: true });
+  if (document.documentElement.classList.contains('tv-mode') && el.closest('[data-main-navigation]')) {
+    document.documentElement.classList.remove('tv-chrome-hidden');
+    if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+    window.scrollTo(0, 0);
+    return;
+  }
+
   el.scrollIntoView?.({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+}
+
+/** Sortie déterministe d'un écran TV, sans remonter toutes ses catégories une par une. */
+export function focusMainNavigation(from?: Element | null): boolean {
+  const panel = from?.closest('[role="tabpanel"]');
+  const tab = document.getElementById(panel?.getAttribute('aria-labelledby') ?? '')
+    ?? document.querySelector<HTMLElement>('[data-main-navigation] [role="tab"][aria-selected="true"]');
+  if (!tab) return false;
+  focusRemote(tab);
+  return true;
 }

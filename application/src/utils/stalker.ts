@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { channelQuality } from '@/utils/channelQuality';
 import type { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
 
 /**
@@ -183,12 +184,14 @@ export async function downloadStalkerPlaylist(account: StalkerAccount, name?: st
     const channelId = `${prefix}_${id}`;
     const logo = logoUrl(account, str(item.logo));
     const number = str(item.number).trim();
+    const quality = channelQuality({ name: title });
     channels.push({
       id: channelId,
       name: title,
       url: stalkerChannelUrl(account, cmd, id),
       group: genres.get(str(item.tv_genre_id)) || 'Sans groupe',
       ...(logo ? { logo } : {}),
+      ...(quality ? { quality } : {}),
       ...(/^\d{1,9}$/.test(number) ? { chno: number } : {}),
     });
   }

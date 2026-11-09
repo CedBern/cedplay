@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VodLibrary } from '@/components/VodLibrary';
 import { clearVodCategoryCache } from '@/utils/vodPosterCache';
@@ -62,6 +62,32 @@ it('ouvre le bon épisode de la saison choisie dans le chemin séries', async ()
   expect(screen.queryByText('1. Pilote')).toBeNull();
   await userEvent.click(screen.getByRole('button', { name: 'Regarder' }));
   expect(mocks.openVod).toHaveBeenCalledWith('https://provider.test/series/u/p/200.mkv', 'Retour', 'test:series:200', false);
+});
+
+it('TV : la fiche série se pilote sans mélanger descente et droite', async () => {
+  mocks.request.mockImplementation((_a, action) => Promise.resolve(action === 'get_series_categories'
+    ? [{ category_id: '1', category_name: 'France' }]
+    : action === 'get_series' ? [{ series_id: 10, name: 'Ma série' }]
+      : { info: { plot: 'Une histoire' }, episodes: { 1: [
+        { id: 100, title: 'Pilote', episode_num: 1, container_extension: 'mp4' },
+        { id: 101, title: 'Retour', episode_num: 2, container_extension: 'mp4' },
+      ] } }));
+  mocks.openVod.mockResolvedValue(true);
+  render(<VodLibrary playlist={playlist} kind="series" tvMode />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Ma série' }));
+  const first = await screen.findByRole('button', { name: /1\. Pilote/ });
+  await waitFor(() => expect(document.activeElement).toBe(first));
+  // Bas change d'épisode (et non de bouton dans la carte).
+  fireEvent.keyDown(first, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /2\. Retour/ }));
+  // Droite entre dans les options de cet épisode.
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowRight' });
+  const play = screen.getByRole('button', { name: 'Regarder' });
+  expect(document.activeElement).toBe(play);
+  fireEvent.click(play);
+  await waitFor(() => expect(mocks.openVod).toHaveBeenCalledWith(
+    'https://provider.test/series/u/p/101.mp4', 'Retour', 'test:series:101', false, undefined, expect.objectContaining({ index: 1 }),
+  ));
 });
 
 it('permet de relancer un catalogue après un échec réseau', async () => {
@@ -202,7 +228,7 @@ it('propose « Vu ailleurs » dès l’arrivée, sans aucun historique ni import
   expect(screen.getByRole('heading', { name: /Pour toi/ })).toBeVisible();
 });
 
-it('charge le catalogue complet quand des films vus ailleurs peuvent amorcer le rail', async () => {
+it('amorce le rail depuis la catégorie chargée quand des films vus ailleurs existent', async () => {
   mocks.getExternalWatches.mockResolvedValue([{
     channelId: 'elsewhere:netflix:movie:inception', ts: Date.now(), kind: 'vod', mediaKind: 'movie',
     name: 'Inception', tmdbId: 27205, platform: 'netflix', status: 'completed',
@@ -212,9 +238,11 @@ it('charge le catalogue complet quand des films vus ailleurs peuvent amorcer le 
     : [{ stream_id: 1, name: 'Inception', category_id: '1', tmdb_id: 27205, container_extension: 'mp4' },
        { stream_id: 2, name: 'Interstellar', category_id: '1', tmdb_id: 157336, container_extension: 'mp4' }]));
   render(<VodLibrary playlist={playlist} kind="movie" />);
+  // Aucune requête « toutes catégories » : elle figeait la box sur les gros catalogues.
   await waitFor(() => {
     const full = mocks.request.mock.calls.filter(call => call[1] === 'get_vod_streams' && Object.keys(call[2] ?? {}).length === 0);
-    expect(full).toHaveLength(1);
+    expect(full).toHaveLength(0);
+    expect(mocks.request).toHaveBeenCalledWith(expect.anything(), 'get_vod_streams', { category_id: '1' }, expect.anything());
   });
   await screen.findByText(/1 visionnage ailleurs/);
   // L'amorce rend le rail utile : au moins un titre (Interstellar, même catégorie).
@@ -246,4 +274,25 @@ it('TV : « Pour toi » remplit la grille avec les suggestions du catalogue', as
   await screen.findByRole('heading', { name: 'Docs' });
   expect(screen.getByRole('region', { name: /Titres : Docs/ })).toHaveTextContent('Océans');
   expect(screen.getByRole('button', { name: 'Pour toi' })).toHaveAttribute('aria-pressed', 'false');
+});
+
+it('ignore une catégorie mémorisée « toutes » et charge la première catégorie réelle', async () => {
+  localStorage.setItem('cedplay.tvVod:test:movie', JSON.stringify({ category: '', itemId: '1' }));
+  mocks.request.mockImplementation((_a, action) => Promise.resolve(action === 'get_vod_categories'
+    ? [{ category_id: '1', category_name: 'Action' }, { category_id: '2', category_name: 'Comédie' }]
+    : [{ stream_id: 10, name: 'Film Un', category_id: '1', container_extension: 'mp4' }]));
+  render(<VodLibrary playlist={playlist} kind="movie" tvMode />);
+  expect(await screen.findByRole('button', { name: /Film Un/ })).toBeVisible();
+  const full = mocks.request.mock.calls.filter(call => call[1] === 'get_vod_streams' && Object.keys(call[2] ?? {}).length === 0);
+  expect(full).toHaveLength(0);
+  expect(mocks.request).toHaveBeenCalledWith(expect.anything(), 'get_vod_streams', { category_id: '1' }, expect.anything());
+});
+
+it('masque une catégorie « test » du fournisseur', async () => {
+  mocks.request.mockImplementation((_a, action) => Promise.resolve(action === 'get_vod_categories'
+    ? [{ category_id: '1', category_name: 'test' }, { category_id: '2', category_name: 'Films' }]
+    : [{ stream_id: 10, name: 'Film Un', category_id: '2', container_extension: 'mp4' }]));
+  render(<VodLibrary playlist={playlist} kind="movie" tvMode />);
+  expect(await screen.findByRole('button', { name: 'Films' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'test' })).toBeNull();
 });

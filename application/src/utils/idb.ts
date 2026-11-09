@@ -3,6 +3,7 @@ import { PlaylistInfo } from '../types/channel';
 import { Backup, createBackup, rebuildPlaylist, playlistSignature, type LocalBackup } from './backup';
 import { readMyPlatforms, writeMyPlatforms } from './myPlatforms';
 import { mergeExternalWatches } from './externalWatch';
+import type { LocalWork } from './localLibrary';
 import { v5 as uuidv5 } from 'uuid';
 
 const DB_NAME = 'IPTVPlayerDB';
@@ -449,6 +450,21 @@ export async function saveExternalWatches(entries: PlayHistoryEntry[]): Promise<
 
 export async function clearExternalWatches(): Promise<void> {
   await saveExternalWatches([]);
+}
+
+// Bibliothèque locale (USB/SD) : index allégé des œuvres déjà analysées. Il évite de
+// relancer le scan natif à chaque ouverture du catalogue et nourrit « Pour toi ».
+const LOCAL_LIBRARY_WORKS_KEY = 'localLibraryWorks';
+
+export async function getLocalLibraryWorks(): Promise<LocalWork[]> {
+  const saved = await getMeta<LocalWork[]>(LOCAL_LIBRARY_WORKS_KEY);
+  if (!Array.isArray(saved)) return [];
+  return saved.filter(work => work && typeof work.title === 'string' && work.title.trim() !== '');
+}
+
+export async function saveLocalLibraryWorks(works: LocalWork[]): Promise<void> {
+  await setMeta(LOCAL_LIBRARY_WORKS_KEY, works.filter(work => work && typeof work.title === 'string' && work.title.trim() !== ''));
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('local-library-updated'));
 }
 
 /** Retirer masque seulement la carte, sans effacer l'historique ni la reprise. */

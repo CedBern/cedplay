@@ -1,3 +1,4 @@
+import { CHANNEL_QUALITIES, channelQuality, selectChannelQuality } from '@/utils/channelQuality';
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -102,6 +103,8 @@ const ChannelCard = React.memo(function ChannelCard({
   onChannelSelect, onNativeChannelSelect, onMosaic, onRecord, onEditChannel, toggleFavorite,
 }: ChannelCardProps) {
   const variantList = showVariants ? channel.variants || [] : [];
+  // Liste importée avant la détection à l'import : lire la qualité dans le libellé.
+  const quality = channelQuality(channel);
   const exportChannel = () => {
     try {
       const variantsAll = [channel, ...(channel.variants || [])];
@@ -129,37 +132,51 @@ const ChannelCard = React.memo(function ChannelCard({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <Card
-            className={`cursor-pointer rounded-2xl border-transparent shadow-none transition-colors ${
+            className={`relative cursor-pointer rounded-2xl border-transparent shadow-none transition-colors ${
               isPlaying
                 ? 'bg-secondary shadow-[inset_3px_0_0_hsl(var(--primary))]'
                 : isSelected
                   ? 'legacy-channel-selection bg-accent/60 ring-1 ring-muted-foreground/60'
                   : 'bg-transparent hover:bg-accent/60'
             }`}
-            onClick={() => onChannelSelect(channel)}
           >
+            {/* Toute la ligne est le bouton de lecture (tactile, clavier, télécommande).
+                Un frère superposé plutôt qu'un rôle sur la carte : le cœur à droite
+                reste un vrai bouton, exposé et atteignable séparément. */}
+            <button
+              type="button"
+              data-channel-play
+              aria-label={`Lire ${channel.name}`}
+              className="absolute inset-0 rounded-2xl"
+              onClick={() => onChannelSelect(channel)}
+            />
             <CardContent className={`channel-row-content ${compactMode ? 'p-2' : 'px-3 py-3'}`}>
               <div className={`flex items-center ${compactMode ? 'space-x-2' : 'space-x-4'}`}>
                 {selectedGroup === 'favorites' && favoriteNumber !== undefined && <span className="w-5 shrink-0 text-right font-mono text-[13px] text-primary" aria-label={`Favori numéro ${favoriteNumber}`}>{favoriteNumber}</span>}
-                {selectedGroup !== 'favorites' && channel.chno && <span className="w-8 shrink-0 text-right font-mono text-[12px] text-muted-foreground" aria-label={`Chaîne numéro ${channel.chno}`}>{channel.chno}</span>}
+                {/* Pas de numéro de chaîne avant le logo : ceux du fournisseur (TF1 = 4,
+                    France 2 = 8…) n'ont aucune logique lisible et laissaient un grand vide
+                    à gauche. Le numéro de favori reste : c'est le raccourci de zap, dans l'ordre
+                    de la liste Favoris. */}
                 {/* Channel Logo */}
                 <ChannelLogo src={channel.logo ?? null} name={channel.name} compact={compactMode} />
 
                 {/* Channel Info */}
                 <div className="flex-1 min-w-0">
-                  <h3 className={`font-semibold tracking-tight truncate flex items-center gap-2 ${compactMode ? 'text-sm' : 'text-[15px]'} ${isPlaying ? 'text-primary' : ''}`}>
-                    {/* Numéro TNT devant le nom, sauf si la ligne affiche déjà un numéro personnalisé. */}
-                    <span className="truncate">{highlight(selectedGroup !== 'favorites' && channel.chno ? channel.name : tntDisplayName(channel.name), searchTerm)}</span>
-                    {channel.quality && (
+                  <h3 className={`font-semibold tracking-tight grid items-start gap-2 min-w-0 ${compactMode ? 'text-sm' : 'text-[15px]'} ${isPlaying ? 'text-primary' : ''}`} style={{ gridTemplateColumns: 'minmax(0, 1fr) auto auto' }}>
+                    {/* Numéro TNT devant le nom, sauf si la ligne affiche déjà un numéro personnalisé.
+                        Deux lignes autorisées : les noms du fournisseur peuvent être longs, une
+                        seule ligne les réduisait à « FR: TF… » à côté du badge qualité. */}
+                    <span className="min-w-0 line-clamp-2 break-words">{highlight(selectedGroup !== 'favorites' && channel.chno ? channel.name : tntDisplayName(channel.name), searchTerm)}</span>
+                    {quality && (
                       <Badge
-                        variant={channel.quality === '4K' || channel.quality === 'UHD' ? 'default' : 'outline'}
-                        className={`font-mono text-[10px] px-1.5 py-0 leading-4 tracking-wide ${compactMode ? 'scale-90' : ''} ${channel.quality === '4K' || channel.quality === 'UHD' ? 'border-transparent bg-primary text-primary-foreground' : 'border-neutral-700 bg-transparent text-muted-foreground'}`}
+                        variant={quality === '4K' || quality === 'UHD' ? 'default' : 'outline'}
+                        className={`shrink-0 font-mono text-[10px] px-1.5 py-0 leading-4 tracking-wide ${compactMode ? 'scale-90' : ''} ${quality === '4K' || quality === 'UHD' ? 'border-transparent bg-primary text-primary-foreground' : 'border-neutral-700 bg-transparent text-muted-foreground'}`}
                       >
-                        {channel.quality}
+                        {quality}
                       </Badge>
                     )}
                     {variantList.length > 0 && (
-                      <Badge variant="secondary" className="text-[10px] px-1 py-0" title={`${variantList.length} variant(s) hidden`}>
+                      <Badge variant="secondary" className="shrink-0 text-[10px] px-1 py-0" title={`${variantList.length} variant(s) hidden`}>
                         +{variantList.length}
                       </Badge>
                     )}
@@ -172,7 +189,7 @@ const ChannelCard = React.memo(function ChannelCard({
                         {currentProgram ? (
                           <span>{currentProgram.title}</span>
                         ) : upcomingProgram ? (
-                          <span>Next: {upcomingProgram.title}</span>
+                          <span>À suivre : {upcomingProgram.title}</span>
                         ) : null}
                       </div>
                     );
@@ -181,35 +198,36 @@ const ChannelCard = React.memo(function ChannelCard({
                     const currentProgram = getCurrentProgram(channel.id, epgData, now);
                     const upcomingProgram = getUpcomingProgram(channel.id, epgData, now);
                     return (
-                      <div className="mt-1 space-y-1">
+                      <div className="mt-1">
                         {currentProgram ? (
-                          <div className="text-xs">
-                            <div className="flex items-center gap-1 text-[13px] text-muted-foreground">
-                              <span className="truncate">{currentProgram.title}</span>
-                            </div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="font-mono tabular-nums text-[11px] text-neutral-500">
+                          <>
+                            <div className="truncate text-[13px] text-neutral-300">{currentProgram.title}</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="shrink-0 font-mono tabular-nums text-[11px] text-neutral-500">
                                 {formatTime(currentProgram.startTime)}–{formatTime(currentProgram.endTime)}
                               </span>
                               <Progress
                                 value={getProgramProgress(currentProgram, now)}
-                                className="h-0.5 flex-1 bg-neutral-800"
+                                className="h-0.5 min-w-8 flex-1 bg-neutral-800"
                               />
+                              {channel.group && (
+                                <span className="max-w-[45%] shrink-0 truncate text-[10px] text-neutral-500">{channel.group}</span>
+                              )}
                             </div>
-                          </div>
+                          </>
                         ) : (
-                          <div className={`${upcomingProgram ? '' : 'channel-empty-program '}text-xs text-muted-foreground`}>
-                            {upcomingProgram ? (
-                              <span>Next: {upcomingProgram.title} at <span className="font-mono">{formatTime(upcomingProgram.startTime)}</span></span>
-                            ) : (
-                              <span>Aucune information de programme</span>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className={`${upcomingProgram ? '' : 'channel-empty-program '}min-w-0 flex-1 truncate`}>
+                              {upcomingProgram ? (
+                                <>À suivre : {upcomingProgram.title} à <span className="font-mono">{formatTime(upcomingProgram.startTime)}</span></>
+                              ) : (
+                                'Aucune information de programme'
+                              )}
+                            </span>
+                            {channel.group && (
+                              <span className="shrink-0 text-[10px] text-neutral-500">{channel.group}</span>
                             )}
                           </div>
-                        )}
-                        {channel.group && (
-                          <Badge variant="outline" className="border-neutral-800 text-[11px] font-normal text-neutral-500">
-                            {channel.group}
-                          </Badge>
                         )}
                       </div>
                     );
@@ -221,24 +239,11 @@ const ChannelCard = React.memo(function ChannelCard({
                   )}
                 </div>
 
-                {/* Actions */}
-                <div data-channel-actions className={`flex items-center ${compactMode ? 'space-x-1' : 'space-x-2'}`}>
-                  {NativePlayerBridge.isAvailable() && (
-                    <Button
-                      variant="ghost"
-                      size={compactMode ? 'icon' : 'sm'}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onNativeChannelSelect) onNativeChannelSelect(channel);
-                        else void NativePlayerBridge.open(channel.url, channel.name, buildNativeZap(groups.flatMap(g => g.channels), channel));
-                      }}
-                      className="p-1 text-primary hover:text-primary hover:bg-primary/15"
-                      title="Ouvrir dans le lecteur Android (ExoPlayer)"
-                      aria-label={`Lire ${channel.name} dans le lecteur Android`}
-                    >
-                      <Zap className="h-4 w-4 fill-primary/30" />
-                    </Button>
-                  )}
+                {/* Actions : seul le favori reste, le reste de la ligne lance la lecture.
+                    L'éclair « lecteur natif » et le ▶ faisaient exactement la même chose
+                    que le tap sur la carte (sur Android, `onChannelSelect` ouvre déjà
+                    ExoPlayer) et prenaient la largeur du nom et du programme. */}
+                <div data-channel-actions className={`relative z-10 flex items-center ${compactMode ? 'space-x-1' : 'space-x-2'}`}>
                   <Button
                     variant="ghost"
                     size={compactMode ? 'icon' : 'sm'}
@@ -248,17 +253,6 @@ const ChannelCard = React.memo(function ChannelCard({
                     aria-label={isFavorite ? `Retirer ${channel.name} des favoris` : `Ajouter ${channel.name} aux favoris`}
                   >
                     <Heart className={`h-4 w-4 ${isFavorite ? 'fill-current text-primary' : 'text-muted-foreground'}`} />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size={compactMode ? 'icon' : 'sm'}
-                    onClick={(e) => { e.stopPropagation(); onChannelSelect(channel); }}
-                    className="p-1"
-                    title="Lecture"
-                    data-channel-play
-                    aria-label={`Lire ${channel.name}`}
-                  >
-                    <Play className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
@@ -328,7 +322,7 @@ const ChannelCard = React.memo(function ChannelCard({
               onClick={() => onChannelSelect(v)}
             >
               <div className="flex items-center gap-2 min-w-0">
-                <span className="truncate">{highlight(v.name, searchTerm)}</span>
+                <span className="min-w-0 flex-1 truncate">{highlight(v.name, searchTerm)}</span>
                 {v.quality && (
                   <Badge variant="outline" className="text-[9px]">{v.quality}</Badge>
                 )}
@@ -413,6 +407,7 @@ const ChannelCard = React.memo(function ChannelCard({
       const [favorites, setFavorites] = useState<string[]>([]);
       const [favLoading, setFavLoading] = useState(true);
   const [qualityFilter, setQualityFilter] = useState<string>('all');
+  const availableQualityFilters = useMemo(() => CHANNEL_QUALITIES.filter(q => groups.some(g => g.channels.some(ch => channelQuality(ch) === q || ch.variants?.some(v => channelQuality(v) === q)))), [groups]);
   const [showVariants, setShowVariants] = useState(false);
   const [searchMode, setSearchMode] = useState<'precise' | 'fuzzy'>('precise');
   const debouncedSearch = useDebounce(searchTerm, searchMode === 'fuzzy' ? 200 : 80);
@@ -551,16 +546,23 @@ const ChannelCard = React.memo(function ChannelCard({
           const order = new Map(recentChannels.map((ch, i) => [ch.id, i]));
           base.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
         } else if (selectedGroup !== 'all') base = base.filter(ch => ch.group === selectedGroup);
-        if (qualityFilter !== 'all') base = base.filter(ch => ch.quality === qualityFilter);
+        if (qualityFilter !== 'all') base = base.flatMap(ch => { const selected = selectChannelQuality(ch, qualityFilter); return selected ? [selected] : []; });
         if (parentalLocked) base = base.filter(ch => !lockedGroupSet.has(ch.group || ''));
         return { channels: base };
       }, [searchIndex, selectedGroup, favorites, favoriteLists, recentChannels, qualityFilter, debouncedSearch, searchMode, parentalLocked, lockedGroupSet]);
+
+      useEffect(() => {
+        if (preferencesLoaded && qualityFilter !== 'all' && !availableQualityFilters.includes(qualityFilter as typeof CHANNEL_QUALITIES[number])) setQualityFilter('all');
+      }, [preferencesLoaded, qualityFilter, availableQualityFilters]);
 
       // Keyboard shortcuts (now that filteredChannels exists)
       // La valeur courante de qualityFilter est lue via une ref : le listener n'est
       // attaché qu'une seule fois au lieu d'être recréé à chaque changement.
       const qualityFilterRef = React.useRef(qualityFilter);
       qualityFilterRef.current = qualityFilter;
+      // Le raccourci ne parcourt que les qualités présentes (ref : un seul listener).
+      const qualityOrderRef = React.useRef<readonly string[]>(['all']);
+      qualityOrderRef.current = ['all', ...availableQualityFilters];
       useEffect(() => {
         const handler = (e: KeyboardEvent) => {
           if (!keyboardNavigationEnabled || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -569,7 +571,7 @@ const ChannelCard = React.memo(function ChannelCard({
           if (e.key === '/' && !isTyping) { e.preventDefault(); searchInputRef.current?.focus(); }
           else if (e.key === 'f' && !isTyping) { setSearchMode(m => { const next = m==='precise' ? 'fuzzy' : 'precise'; saveSearchMode(next).catch(()=>{}); return next; }); }
           else if (e.key === 'v' && !isTyping) { setShowVariants(v => !v); }
-          else if (e.key === 'q' && !isTyping) { const order: ReadonlyArray<string> = ['all','4K','FHD','HD','SD']; const idx = order.findIndex(o => o === qualityFilterRef.current); const next = order[(idx + 1) % order.length]; setQualityFilter(next); }
+          else if (e.key === 'q' && !isTyping) { const order = qualityOrderRef.current; const idx = order.findIndex(o => o === qualityFilterRef.current); const next = order[(idx + 1) % order.length] ?? 'all'; setQualityFilter(next); }
           else if (e.key === 'r' && !isTyping) { setSelectedGroup('recent'); }
           else if (e.key === 'c' && !isTyping) { setCompactMode(c => !c); }
           else if (e.key === 'x' && !isTyping) { setVirtualizationEnabled(v => !v); }
@@ -635,9 +637,13 @@ const ChannelCard = React.memo(function ChannelCard({
         const pending = pendingFocus.current;
         if (!pending) return;
         const row = Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-channel-id]') ?? []).find(el => el.dataset.channelId === pending.id);
-        const actions = row?.querySelectorAll<HTMLButtonElement>('[data-channel-actions] button');
-        const button = actions?.[Math.min(pending.action, actions.length - 1)];
-        if (button) { pendingFocus.current = null; focusRemote(button); }
+        if (!row) return;
+        const play = row.querySelector<HTMLElement>('[data-channel-play]');
+        const actions = row.querySelectorAll<HTMLButtonElement>('[data-channel-actions] button');
+        // action -1 = la carte elle-même (bouton de lecture) ; sinon on retrouve la même
+        // action de la ligne suivante (le cœur).
+        const target = pending.action < 0 ? play : (actions[Math.min(pending.action, actions.length - 1)] ?? play);
+        if (target) { pendingFocus.current = null; focusRemote(target); }
       }, []);
       // Une ligne hors écran n'existe pas encore : focus seulement après son montage.
       // Dépendances explicites : sans liste, l'effet relançait un parcours du DOM et un
@@ -655,13 +661,18 @@ const ChannelCard = React.memo(function ChannelCard({
 
       const moveRowFocus = (event: React.KeyboardEvent, index: number) => {
         if (event.defaultPrevented || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return;
-        if (!(event.target instanceof HTMLElement) || !event.target.closest('[data-channel-actions]')) return;
+        if (!(event.target instanceof HTMLElement)) return;
+        const inActions = event.target.closest('[data-channel-actions]');
+        // La carte est elle-même le bouton de lecture : Haut/Bas y change de chaîne,
+        // comme depuis le cœur à sa droite.
+        if (!inActions && !event.target.closest('[data-channel-play]')) return;
         const next = index + (event.key === 'ArrowDown' ? 1 : -1);
         if (next < 0) return; // Remonter aux filtres avec Haut sur la première chaîne.
         event.preventDefault();
         if (next >= channelsToRender.length) return;
         const actions = Array.from(event.currentTarget.querySelectorAll('[data-channel-actions] button'));
-        pendingFocus.current = { id: channelsToRender[next].id, action: Math.max(0, actions.indexOf(event.target)) };
+        const actionButton = inActions ? event.target.closest('button') : null;
+        pendingFocus.current = { id: channelsToRender[next].id, action: actionButton ? Math.max(0, actions.indexOf(actionButton)) : -1 };
         setRequestedRow(next);
         if (shouldVirtualize) rowVirtualizer.scrollToIndex(next, { align: 'auto' });
         restoreRowFocus();
@@ -744,16 +755,18 @@ const ChannelCard = React.memo(function ChannelCard({
           <div className="channel-filters shrink-0 flex flex-col gap-2 text-xs text-muted-foreground">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-                <span className="text-[11px] font-medium text-white/70">Qualité :</span>
-                {['all','4K','FHD','HD','SD'].map(q => (
+                <span className="text-[11px] font-medium text-white/70">Qualité annoncée :</span>
+                {['all', ...availableQualityFilters].map(q => (
                   <button
                     key={q}
                     onClick={() => setQualityFilter(q)}
                     className={`px-2.5 py-1 rounded-full border transition text-[11px] font-medium ${qualityFilter===q ? 'bg-foreground text-background border-foreground' : 'border-neutral-800 hover:bg-neutral-900 text-white'}`}
-                  >{q}</button>
+                    aria-label={q === 'all' ? 'Toutes les qualités' : `Qualité ${q}`}
+                    aria-pressed={qualityFilter === q}
+                  >{q === 'all' ? 'Toutes' : q}</button>
                 ))}
                 {qualityFilter!=='all' && (
-                  <button onClick={() => setQualityFilter('all')} className="ml-1 text-[11px] text-primary underline">Reset</button>
+                  <button onClick={() => setQualityFilter('all')} className="ml-1 text-[11px] text-primary underline">Réinitialiser</button>
                 )}
               </div>
               <button

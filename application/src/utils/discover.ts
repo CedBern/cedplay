@@ -166,6 +166,7 @@ export function episodesToListen(
 
 /** Recommandation « Pour toi » mémorisée par Films (le calcul complet y reste). */
 export interface ForYouSnapshotItem {
+  kind?: 'movie' | 'series';
   id: string;
   name: string;
   poster?: string;
@@ -175,8 +176,8 @@ export interface ForYouSnapshotItem {
 
 /** Pour toi : sans ce qui est déjà en cours ou déjà gardé dans Ma liste. */
 export function forYouItems(snapshot: ForYouSnapshotItem[], resumeIds: ReadonlySet<string>, myList: VodWatchlistItem[]): ForYouSnapshotItem[] {
-  const kept = new Set(myList.filter(i => i.kind === 'movie').map(i => i.id));
-  return snapshot.filter(i => !resumeIds.has(i.id) && !kept.has(i.id)).slice(0, MAX_FOR_YOU);
+  const kept = new Set(myList.map(i => `${i.kind}:${i.id}`));
+  return snapshot.filter(i => !resumeIds.has(i.id) && !resumeIds.has(`${i.kind ?? 'movie'}:${i.id}`) && !kept.has(`${i.kind ?? 'movie'}:${i.id}`)).slice(0, MAX_FOR_YOU);
 }
 
 /** Identifiant catalogue d'une entrée VOD `vod:<playlist>:<kind>:<id>`. */
@@ -186,13 +187,13 @@ export function vodItemId(entry: PlayHistoryEntry): string {
 
 const FOR_YOU_PREFIX = 'cedplay_foryou_v1_';
 
-export function readForYouSnapshot(playlistId: string): ForYouSnapshotItem[] {
+export function readForYouSnapshot(playlistId: string, kind: 'movie' | 'series' = 'movie'): ForYouSnapshotItem[] {
   try {
-    const raw = JSON.parse(localStorage.getItem(FOR_YOU_PREFIX + playlistId) || '[]');
-    return Array.isArray(raw) ? raw.filter((i): i is ForYouSnapshotItem => !!i && typeof i.id === 'string' && typeof i.name === 'string') : [];
+    const raw = JSON.parse(localStorage.getItem(FOR_YOU_PREFIX + playlistId + (kind === 'series' ? '_series' : '')) || '[]');
+    return Array.isArray(raw) ? raw.filter((i): i is ForYouSnapshotItem => !!i && typeof i.id === 'string' && typeof i.name === 'string').map(i => kind === 'series' ? { ...i, kind } : i) : [];
   } catch { return []; }
 }
 
-export function saveForYouSnapshot(playlistId: string, items: ForYouSnapshotItem[]): void {
-  try { localStorage.setItem(FOR_YOU_PREFIX + playlistId, JSON.stringify(items.slice(0, MAX_FOR_YOU))); } catch { /* quota */ }
+export function saveForYouSnapshot(playlistId: string, items: ForYouSnapshotItem[], kind: 'movie' | 'series' = 'movie'): void {
+  try { localStorage.setItem(FOR_YOU_PREFIX + playlistId + (kind === 'series' ? '_series' : ''), JSON.stringify(items.slice(0, MAX_FOR_YOU))); } catch { /* quota */ }
 }

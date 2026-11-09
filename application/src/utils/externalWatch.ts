@@ -416,7 +416,7 @@ export function mergeExternalWatches(
  * classement local (catégorie + titre) sans aucune requête réseau. Jointure par
  * identifiant TMDB quand il est fourni, sinon par titre exact et année compatible.
  */
-export function externalSeeds(watches: PlayHistoryEntry[], items: CatalogItem[], playlistId: string): PlayHistoryEntry[] {
+export function externalSeeds(watches: PlayHistoryEntry[], items: CatalogItem[], playlistId: string, kind: 'movie' | 'series' = 'movie'): PlayHistoryEntry[] {
   if (!watches.length || !items.length) return [];
   const byTmdb = new Map<number, CatalogItem>();
   const byTitle = new Map<string, CatalogItem[]>();
@@ -436,7 +436,7 @@ export function externalSeeds(watches: PlayHistoryEntry[], items: CatalogItem[],
     if (!watch.name) continue;
     // Le rail est composé de films : une série du même nom (Fargo, Hannibal…)
     // amorcerait le mauvais titre.
-    if (watch.mediaKind === 'series') continue;
+    if ((watch.mediaKind ?? 'movie') !== kind) continue;
     let item = watch.tmdbId ? byTmdb.get(watch.tmdbId) : undefined;
     if (!item) {
       const normalized = normalizeTitle(watch.name);
@@ -451,7 +451,7 @@ export function externalSeeds(watches: PlayHistoryEntry[], items: CatalogItem[],
       if (candidates.length !== 1) continue;
       item = candidates[0];
     }
-    const channelId = `vod:${playlistId}:movie:${item.id}`;
+    const channelId = `vod:${playlistId}:${kind}:${item.id}`;
     const known = seeds.get(channelId);
     if (known && known.ts >= watch.ts) continue;
     seeds.set(channelId, {
@@ -461,7 +461,7 @@ export function externalSeeds(watches: PlayHistoryEntry[], items: CatalogItem[],
       name: item.name,
       categoryId: item.categoryId,
       playlistId,
-      mediaKind: 'movie',
+      mediaKind: kind,
       status: 'completed',
       ...(watch.platform ? { platform: watch.platform } : {}),
       ...(watch.tmdbId || item.tmdbId ? { tmdbId: watch.tmdbId ?? item.tmdbId } : {}),

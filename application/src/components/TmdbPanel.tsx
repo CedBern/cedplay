@@ -36,6 +36,11 @@ interface TmdbPanelProps {
    * ces éléments ne sont alors pas répétés ici, TMDB ne sert que de repli.
    */
   provided?: { overview?: boolean; director?: boolean; cast?: boolean } | undefined;
+  /**
+   * Fiche TV : le texte seul, sans les commandes (rangées de titres, offres, avis).
+   * Un dialogue de télécommande ne doit exposer que des cibles de la fiche série.
+   */
+  compact?: boolean | undefined;
 }
 
 const formatRevenue = (revenue: number): string =>
@@ -140,7 +145,7 @@ function TitleRail({ heading, hint, note, items, onPick, isLocal }: TitleRailPro
  * liste chargée, il s'ouvre directement dans le catalogue.
  */
 export function TmdbPanel({
-  name, year, kind, apiKey, catalogItems, onOpenItem, region, providerIds, tmdbId, sheetKey, onActiveChange, provided,
+  name, year, kind, apiKey, catalogItems, onOpenItem, region, providerIds, tmdbId, sheetKey, onActiveChange, provided, compact = false,
 }: TmdbPanelProps) {
   const tmdbKind: TmdbKind = kind === 'movie' ? 'movie' : 'tv';
   const [details, setDetails] = useState<TmdbDetails | null>(null);
@@ -191,7 +196,7 @@ export function TmdbPanel({
   // « Disponible sur mes abonnements » : un seul appel /discover filtré par pays.
   useEffect(() => {
     setDiscover([]);
-    if (state !== 'ready' || !details || !apiKey?.trim() || !providerKey) return;
+    if (compact || state !== 'ready' || !details || !apiKey?.trim() || !providerKey) return;
     let cancelled = false;
     void fetchDiscover(
       tmdbKind,
@@ -201,7 +206,7 @@ export function TmdbPanel({
       .then((items) => { if (!cancelled) setDiscover(items); })
       .catch(() => { if (!cancelled) setDiscover([]); });
     return () => { cancelled = true; };
-  }, [state, details, providerKey, region, tmdbKind, apiKey]);
+  }, [compact, state, details, providerKey, region, tmdbKind, apiKey]);
 
   // Index des listes chargées : un titre déjà présent s'ouvre sans quitter la fiche.
   const catalogIndex = useMemo(() => {
@@ -238,6 +243,10 @@ export function TmdbPanel({
     (state === 'ready' && !details?.overview) || state === 'notfound' || state === 'error'
   );
   const missingOverview = noOverviewAnywhere && <p className="text-sm text-neutral-300">Synopsis non fourni.</p>;
+
+  // Fiche TV sans clé : il n'y a rien à montrer (ni note, ni casting, ni synopsis),
+  // seulement un appel à configurer TMDB — il n'a pas sa place dans la fiche série.
+  if (compact && state === 'nokey') return null;
 
   return (
     <div className="border-t border-neutral-900 pt-3 space-y-3 min-w-0">
@@ -291,12 +300,16 @@ export function TmdbPanel({
               {details.cast.length > 0 && !effectiveProvided?.cast && <p>Avec : {details.cast.map((c) => c.name).join(', ')}</p>}
             </div>
           </div>
-          {details.overview && !effectiveProvided?.overview && <Overview text={details.overview} />}
+          {details.overview && !effectiveProvided?.overview && (
+            compact
+              ? <p className="text-sm text-neutral-200 whitespace-pre-line line-clamp-5">{details.overview}</p>
+              : <Overview text={details.overview} />
+          )}
           {missingOverview}
 
-          <WatchProviders tmdbId={details.id} kind={kind} title={details.title || activeName} apiKey={apiKey} region={region} />
+          {!compact && <WatchProviders tmdbId={details.id} kind={kind} title={details.title || activeName} apiKey={apiKey} region={region} />}
 
-          {discover.length > 0 && (
+          {!compact && discover.length > 0 && (
             <TitleRail
               heading={`Sur mes abonnements ${watchRegionPhrase(region)}`}
               hint={`${discover.length} · faire défiler →`}
@@ -307,7 +320,7 @@ export function TmdbPanel({
             />
           )}
 
-          {details.similar.length > 0 && (
+          {!compact && details.similar.length > 0 && (
             <TitleRail
               heading={kind === 'movie' ? 'Films similaires' : 'Séries similaires'}
               hint={`${details.similar.length} · faire défiler →`}
@@ -318,7 +331,7 @@ export function TmdbPanel({
             />
           )}
 
-          {details.reviews.length > 0 && (
+          {!compact && details.reviews.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm font-medium text-white">Avis spectateurs</p>
               {details.reviews.slice(0, 3).map((r, i) => (

@@ -255,9 +255,13 @@ html:not(.dark) .border-white\/20 { border-color: hsl(40 12% 75%) !important; }
 html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .text-amber-400):not(.dark-surface, .dark-surface *) { color: hsl(32 80% 30%) !important; }
 
 /* ── Écrans télécommande (Direct TV, catalogue VOD) : catégories | liste/grille | aperçu/fiche ── */
-.tv-live { grid-template-columns: minmax(180px, 22%) minmax(0, 1fr) minmax(240px, 30%); }
-/* Catalogue VOD : colonnes latérales réduites, la grille d'affiches (5 colonnes) gagne la place. */
-.tv-vod { grid-template-columns: minmax(170px, 19%) minmax(0, 1fr) minmax(220px, 25%); }
+/* `grid-template-rows: minmax(0, 1fr)` borne la rangée à la hauteur de l'écran : sans elle, la
+   rangée `auto` prend la hauteur du contenu et la zone défilante grandit avec lui (liste Direct
+   de 18 900 chaînes = plusieurs centaines de milliers de pixels, aucun défilement possible). */
+.tv-live { grid-template-columns: minmax(180px, 22%) minmax(0, 1fr) minmax(240px, 30%); grid-template-rows: minmax(0, 1fr); }
+/* Catalogue VOD : deux colonnes. La fiche complète s'ouvre par OK depuis n'importe quelle
+   affiche ; la grille garde toute la largeur rendue par l'ancienne fiche éclair (6 colonnes). */
+.tv-vod { grid-template-columns: minmax(170px, 19%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .tv-live .tv-scroll, .tv-vod .tv-scroll { scrollbar-width: none; overscroll-behavior: contain; }
 .tv-live .tv-scroll::-webkit-scrollbar, .tv-vod .tv-scroll::-webkit-scrollbar { display: none; }
 .tv-live .tv-col, .tv-vod .tv-col { transition: border-color 200ms; }
@@ -289,6 +293,21 @@ html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .
 .tv-live [data-tv-item]:focus .bg-muted, .tv-vod [data-tv-item]:focus .bg-muted { background-color: hsl(var(--background) / 0.1); }
 /* Souris : simple survol, sans voler le repère du focus. */
 @media (hover: hover) { .tv-live [data-tv-item]:hover:not(:focus), .tv-vod [data-tv-item]:hover:not(:focus) { background-color: hsl(var(--accent) / 0.7); } }
+/* ── Fiche série TV (dialogue) : mêmes repères de focus que les écrans catalogue ── */
+.tv-fiche [data-tv-item] { outline: none !important; transition: background-color 120ms, color 120ms; }
+.tv-fiche [data-tv-item]:focus, .tv-fiche [data-tv-item]:focus-visible {
+  background-color: hsl(var(--foreground)) !important;
+  color: hsl(var(--background)) !important;
+  box-shadow: 0 0 0 3px hsl(var(--primary)), 0 8px 22px -8px hsl(0 0% 0% / 0.7) !important;
+}
+.tv-fiche [data-tv-item]:focus .text-muted-foreground { color: hsl(var(--background) / 0.68) !important; }
+.tv-fiche .tv-fiche-ep.is-selected { background-color: hsl(var(--secondary)); box-shadow: inset 3px 0 0 hsl(var(--primary)); }
+.tv-fiche .tv-fiche-step, .tv-fiche .tv-fiche-action { background-color: hsl(var(--secondary) / 0.6); }
+.tv-fiche .tv-fiche-action.is-primary { background-color: hsl(var(--foreground)); color: hsl(var(--background)); box-shadow: none; font-weight: 600; }
+.tv-fiche .tv-fiche-action.is-primary svg { fill: currentColor; }
+.tv-fiche .tv-fiche-scroll { scrollbar-width: none; overscroll-behavior: contain; }
+.tv-fiche .tv-fiche-scroll::-webkit-scrollbar { display: none; }
+@media (hover: hover) { .tv-fiche [data-tv-item]:hover:not(:focus) { background-color: hsl(var(--accent) / 0.7); } }
 /* La page ne défile pas sous l'écran TV : tout tient dans la hauteur de l'écran. */
 html.tv-mode:has([data-tv-live], [data-tv-vod]) body { overflow: hidden; }
 
@@ -333,3 +352,6 @@ html.tv-mode :is(.tv-live, .tv-vod) .tv-row:focus { transform: none; }
 html.tv-mode :is(.screen-enter, .hero-copy, .hero-image) { animation: none; transition: none; transform: none; opacity: 1; }
 html.tv-mode .glass { -webkit-backdrop-filter: none; backdrop-filter: none; }
 html.tv-mode :is(.tv-scroll, [data-app-header]) { scroll-behavior: auto; }
+
+/* Accueil TV : garder les cartes focalisées sous le menu fixe, sans superposition. */
+html.tv-mode [data-discover-screen] button { scroll-margin-top: 96px; scroll-margin-bottom: 16px; }

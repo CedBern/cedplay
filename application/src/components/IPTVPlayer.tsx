@@ -1,9 +1,9 @@
-import { NativePlayerBridge, AudioBridge, buildNativeZap, setNativeEpg, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
+import { NativePlayerBridge, AudioBridge, buildNativeZap, setNativeEpg, setNativeCatchupProvider, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
 import { watchNativeFavorites } from '@/utils/nativeFavorites';
 import { findExistingPlaylist, reconcilePlaylist } from '@/utils/playlistIdentity';
 import { getXtreamAccount, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { canRefreshPlaylist, downloadXtreamLive, isXtreamLiveImport, readLiveSelection, saveLiveSelection } from '@/utils/xtreamLive';
-import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -43,7 +43,7 @@ import { parseM3UInWorker } from '@/utils/parseWorker';
 import { adultGroupNames } from '@/utils/parentalControl';
 import { maybeUpgradePin } from '@/utils/pinHash';
 import { popDueReminders } from '@/utils/reminders';
-import { loadCatchupIndex, streamIdOf, catchupUrl, type CatchupIndex } from '@/utils/catchup';
+import { loadCatchupIndex, streamIdOf, catchupUrl, timeshiftTemplate, type CatchupIndex } from '@/utils/catchup';
 import { hasM3UCatchup, m3uCatchupDays, m3uCatchupUrl } from '@/utils/m3uCatchup';
 import { applySeriesRules } from '@/utils/recordingRules';
 import { EpgSettingsDialog } from '@/components/EpgSettingsDialog';
@@ -120,28 +120,11 @@ export function IPTVPlayer() {
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
-  // TV : l'en-tête se replie quand la télécommande entre dans le catalogue (Films, Séries)
-  // et revient dès que le focus le rejoint (Haut depuis la première rangée).
+  // Le menu TV reste visible : l'accès à Films/Séries prime sur le gain de hauteur.
   const headerRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    const root = document.documentElement;
-    if (!tvMode) return;
-    const onFocusIn = (event: FocusEvent) => {
-      const target = event.target instanceof Element ? event.target : null;
-      // Fiche, menu ou dialogue ouverts par-dessus : l'écran dessous ne bouge pas.
-      if (!target || target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
-      const hide = root.classList.contains('remote-navigation') && !!target.closest('[data-tv-vod]');
-      if (hide === root.classList.contains('tv-chrome-hidden')) return;
-      if (hide) root.style.setProperty('--tv-header-shift', `${Math.max(0, Math.round(headerRef.current?.getBoundingClientRect().bottom ?? 0))}px`);
-      root.classList.toggle('tv-chrome-hidden', hide);
-    };
-    document.addEventListener('focusin', onFocusIn);
-    return () => { document.removeEventListener('focusin', onFocusIn); root.classList.remove('tv-chrome-hidden'); };
-  }, [tvMode]);
-  // Sortie du catalogue sans passage du focus par l'en-tête (Retour) : il réapparaît.
-  useEffect(() => {
-    if (activeTab !== 'movies' && activeTab !== 'series') document.documentElement.classList.remove('tv-chrome-hidden');
-  }, [activeTab]);
+    document.documentElement.classList.remove('tv-chrome-hidden');
+  }, [tvMode, activeTab]);
   useEffect(() => {
     if (activeTab === 'player') webPlayerSection.current?.scrollIntoView({ block: 'start' });
   }, [activeTab, currentChannel?.id]);
@@ -582,6 +565,7 @@ export function IPTVPlayer() {
   // Bouton retour Android : sous-écran → rubrique parente → Accueil, puis sortie.
   useEffect(() => {
     const onBack = (event: Event) => {
+      if (event.defaultPrevented) return;
       // Écran TV : l'aperçu et la liste reviennent d'abord aux catégories, le guide à la liste.
       const tvBack = new Event('tv-live-back', { cancelable: true });
       window.dispatchEvent(tvBack);
@@ -642,6 +626,25 @@ export function IPTVPlayer() {
     return id ? catchupIndex!.archiveDays[id] ?? 0 : 0;
   }, [catchupIndex]);
   const catchupDays = useCallback((channel: Channel) => Math.max(xtreamCatchupDays(channel), m3uCatchupDays(channel)), [xtreamCatchupDays]);
+  // « Depuis le début » dans le lecteur Android : la page fournit l'archive du programme
+  // en cours de chaque chaîne du zap. Le lecteur refait l'adresse au moment de l'appui
+  // (archive Xtream), sinon il utilise celle calculée ici pour le replay M3U.
+  useEffect(() => {
+    if (!currentPlaylist) { setNativeCatchupProvider(null); return; }
+    const account = getXtreamAccount(currentPlaylist);
+    setNativeCatchupProvider((channel, start, end) => {
+      const streamId = account ? streamIdOf(channel) : null;
+      if (account && streamId && catchupIndex && xtreamCatchupDays(channel) > 0) {
+        return { template: timeshiftTemplate(account, streamId), timezone: catchupIndex.timezone, url: '', urlStart: 0, urlEnd: 0 };
+      }
+      if (m3uCatchupDays(channel) > 0) {
+        const url = m3uCatchupUrl(channel, new Date(start), new Date(end));
+        return url ? { template: '', timezone: '', url, urlStart: start, urlEnd: end } : null;
+      }
+      return null;
+    });
+    return () => setNativeCatchupProvider(null);
+  }, [currentPlaylist, catchupIndex, xtreamCatchupDays]);
   const playCatchup = useCallback((channel: Channel, program: EPGProgram) => {
     if (!currentPlaylist) return;
     if (!parentalUnlocked && parentalLockedGroups.includes(channel.group || '')) { setPinOpen(true); return; }
@@ -765,7 +768,21 @@ export function IPTVPlayer() {
     return () => { cancelled = true; window.clearTimeout(first); window.clearInterval(timer); };
   }, [loadingInitial, refreshPlaylistId, refreshHours]);
 
+  // Direct TV verrouille le défilement du document : ne pas hériter de la position
+  // d'une longue page Découvrir quand on change de rubrique.
+  useLayoutEffect(() => {
+    if (!tvMode) return;
+    if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+    window.scrollTo(0, 0);
+    window.dispatchEvent(new Event('resize'));
+  }, [activeTab, tvMode]);
+
   const navigate = (section: NavSection) => {
+    if (tvMode) {
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      window.scrollTo(0, 0);
+    }
+
     if (section === 'movies' || section === 'series') setActiveTab(section);
     else if (section === 'vod') setActiveTab(current => (current === 'movies' || current === 'series' ? current : lastVodTab));
     else setActiveTab(section);
@@ -923,7 +940,7 @@ export function IPTVPlayer() {
   );
 
   // En-tête : sur TV, une seule ligne (logo, rubriques, recherche) — repliable.
-  const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
+  const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${tvMode ? 'bg-background border-white/5' : scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
       <div className={tvMode ? 'tv-header-main min-w-0 flex-1 items-center gap-3' : 'flex items-center gap-2 min-w-0 flex-1'}>
         <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
           <BrandMark className="h-8 w-8 sm:h-9 sm:w-9" />
@@ -1038,7 +1055,7 @@ export function IPTVPlayer() {
                 <div className="flex w-full sm:w-auto items-center gap-1.5 shrink-0">
                   <Button variant={channelView === 'list' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'list' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'list'} title="Vue liste" onClick={() => setChannelView('list')}><List aria-hidden="true" className="h-4 w-4 mr-1.5" />Liste</Button>
                   <Button variant={channelView === 'grid' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'grid' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'grid'} title="Grille des programmes (guide TV)" onClick={() => setChannelView('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4 mr-1.5" />Grille</Button>
-                  {currentChannel && <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => { void AudioBridge?.pauseForVideo?.(); setWebSession(true); setActiveTab('player'); }} title={currentChannel.name}><Play aria-hidden="true" className="h-4 w-4 mr-2" />Lecteur</Button>}
+                  {currentChannel && <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => handleChannelSelect(currentChannel)} title={currentChannel.name}><Play aria-hidden="true" className="h-4 w-4 mr-2" />Lecteur</Button>}
                 </div>
               </CardHeader>
               <CardContent className="live-view-content flex-1 min-h-0 pb-6">
@@ -1315,7 +1332,7 @@ export function IPTVPlayer() {
           {currentPlaylist && <Suspense fallback={<PanelFallback className="h-64" />}><LazyRecordings channels={playableChannels} initialChannel={recordingsChannel && playableChannels.some(c => c.id === recordingsChannel.id) ? recordingsChannel : undefined} /></Suspense>}
         </DialogContent>
       </Dialog>
-      <MiniAudioPlayer tv={tvMode} onOpenPodcasts={() => setActiveTab('podcasts')} />
+      <MiniAudioPlayer showPaused={activeTab === 'podcasts'} tv={tvMode} onOpenPodcasts={() => setActiveTab('podcasts')} />
     </div>
   );
 }

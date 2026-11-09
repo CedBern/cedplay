@@ -297,6 +297,37 @@ describe('Podcasts Livraison 1A — Analyse RSS, vitesse + position et changemen
     // Temps restant lisible : durée audio restante (30:00 - 1:05), indépendante de la vitesse.
     expect(within(mini).getByText('Reste 29 min')).toBeInTheDocument();
   });
+
+  it('cache le bandeau d’un podcast en pause hors de l’espace Écouter', async () => {
+    const parsed = parsePodcastRss(SAMPLE_RSS, 'https://example.test/rss.xml');
+    const ep1 = parsed.episodes[1]!;
+
+    const { rerender } = render(<MiniAudioPlayer tv={false} showPaused={false} />);
+    await act(async () => { await AudioBridge.playEpisode(ep1); });
+    expect(screen.getByRole('complementary', { name: 'Mini-lecteur audio' })).toBeInTheDocument();
+
+    act(() => {
+      AudioBridge.receiveNativeAudioEventForTests({
+        active: true,
+        playing: false,
+        episodeId: ep1.id,
+        feedUrl: ep1.feedUrl,
+        audioUrl: ep1.audioUrl,
+        title: ep1.title,
+        podcastTitle: ep1.podcastTitle,
+        artworkUrl: ep1.artworkUrl ?? '',
+        positionMs: 65_000,
+        durationMs: ep1.durationMs,
+        speed: 1,
+      });
+    });
+    expect(screen.queryByRole('complementary', { name: 'Mini-lecteur audio' })).toBeNull();
+
+    // Sur l'écran Écouter, le bandeau reste disponible pour reprendre l'épisode.
+    rerender(<MiniAudioPlayer tv={false} showPaused />);
+    expect(screen.getByRole('complementary', { name: 'Mini-lecteur audio' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reprendre audio' })).toBeInTheDocument();
+  });
 });
 
 describe('Formats de flux pris en charge', () => {

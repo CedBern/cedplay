@@ -151,8 +151,11 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
           <CalendarClock className="h-5 w-5 text-red-400" aria-hidden="true" /> Programmer un enregistrement
         </h2>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="space-y-1">
+        {/* `grid-cols-1` fige la colonne mobile à minmax(0, 1fr) : sans lui, la largeur
+            intrinsèque du select (noms de chaînes très longs) élargissait la grille
+            au-delà du dialogue et coupait le formulaire sur téléphone. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="min-w-0 space-y-1">
             <label className="text-xs text-neutral-400" htmlFor="rec-channel-search">Chaîne</label>
             <Input
               id="rec-channel-search"
@@ -165,7 +168,7 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
               aria-label="Chaîne à enregistrer"
               value={channelId}
               onChange={e => setChannelId(e.target.value)}
-              className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-white"
+              className="w-full max-w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-white"
             >
               <option value="">— Choisir —</option>
               {visibleChannels.map(c => (
@@ -247,7 +250,7 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
           <Repeat className="h-5 w-5 text-primary" aria-hidden="true" /> Depuis le guide
         </h2>
         <p className="text-xs text-neutral-400">Dans le guide, OK maintenu (ou clic) sur une émission ouvre sa fiche : « Enregistrer » ou « Enregistrer la série ». Les marges couvrent un programme qui commence en avance ou finit en retard.</p>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <label className="text-xs text-neutral-400" htmlFor="rec-margin-before">Marge avant (minutes)</label>
             <Input id="rec-margin-before" type="number" min={0} max={60} value={prefs.marginBeforeMin} onChange={e => updateMargin('marginBeforeMin', Number(e.target.value))} />

@@ -109,7 +109,9 @@ export function useRemoteNavigation() {
       // Les écrans qui gèrent eux-mêmes leurs flèches (écran Direct TV) passent en premier ;
       // ce qu'ils laissent passer revient au gestionnaire général en phase de remontée.
       if (active instanceof HTMLElement && active.closest('[data-remote-self]')) return;
-      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && active instanceof HTMLElement && active.closest('[data-channel-actions]')) return;
+      // Dans une ligne de chaîne (carte jouable ou cœur), Haut/Bas reste au gestionnaire
+      // indexé de la liste : la virtualisation garde la ligne suivante montée.
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && active instanceof HTMLElement && active.closest('[data-channel-id]')) return;
       keydown(event);
     };
     window.addEventListener('keydown', activate, true);

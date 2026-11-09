@@ -13,6 +13,7 @@ import { normalizeForCompare } from '@/utils/titleNormalize';
 import { useDebounce } from '@/hooks/useDebounce';
 import { useAdultVodCategories } from '@/hooks/useAdultVodCategories';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
+import { channelQuality } from '@/utils/channelQuality';
 import type { Channel, PlaylistInfo } from '@/types/channel';
 import { Search, Tv, Film, MonitorPlay, ExternalLink, Play, Lock } from 'lucide-react';
 
@@ -51,6 +52,7 @@ export function GlobalSearchDialog({
   const [catalog, setCatalog] = useState<VodWatchlistItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  const [catalogProgress, setCatalogProgress] = useState<{ done: number; total: number } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [vodLimit, setVodLimit] = useState(12);
   const account = useMemo(() => playlist ? getXtreamAccount(playlist) : null, [playlist]);
@@ -63,23 +65,49 @@ export function GlobalSearchDialog({
   useEffect(() => { setCatalog([]); setCatalogError(''); setRefresh(0); }, [playlist?.id]);
   useEffect(() => { setVodLimit(12); }, [query]);
   useEffect(() => {
-    if (!catalogEnabled || !account || !playlist) { setCatalogLoading(false); return; }
+    if (!catalogEnabled || !account || !playlist) { setCatalogLoading(false); setCatalogProgress(null); return; }
     const controller = new AbortController();
     setCatalogLoading(true);
     setCatalogError('');
     setCatalog([]);
+    setCatalogProgress(null);
     const kinds = ['movie', 'series'] as const;
-    void Promise.allSettled(kinds.map(async kind => {
-      const items = await searchCatalogSource(account, playlist.id, kind, controller.signal);
-      if (!controller.signal.aborted) setCatalog(current => [...current.filter(item => item.kind !== kind), ...items]);
-    })).then(results => {
+    // Films puis séries, une seule requête à la fois : le fournisseur VOD coupe
+    // les requêtes parallèles, et la box n'aime pas huit téléchargements simultanés.
+    void (async () => {
+      const failed: (typeof kinds[number])[] = [];
+      let hadResults = false;
+      for (const kind of kinds) {
+        if (controller.signal.aborted) return;
+        try {
+          const items = await searchCatalogSource(account, playlist.id, kind, {
+            signal: controller.signal,
+            query: debouncedQuery,
+            // Les résultats arrivent catégorie par catégorie : l'utilisateur voit les
+            // premières correspondances sans attendre la fin de l'exploration.
+            onResults: partial => {
+              if (partial.length > 0) hadResults = true;
+              if (!controller.signal.aborted) setCatalog(current => [...current.filter(item => item.kind !== kind), ...partial]);
+            },
+            onProgress: (done, total) => {
+              if (!controller.signal.aborted) setCatalogProgress({ done, total });
+            },
+          });
+          if (items.length > 0) hadResults = true;
+          if (!controller.signal.aborted) setCatalog(current => [...current.filter(item => item.kind !== kind), ...items]);
+        } catch {
+          if (controller.signal.aborted) return;
+          failed.push(kind);
+        }
+      }
       if (controller.signal.aborted) return;
-      const failed = kinds.filter((_, index) => results[index].status === 'rejected');
-      if (failed.length) setCatalogError(`Catalogue ${failed.map(kind => kind === 'movie' ? 'films' : 'séries').join(' et ')} indisponible. Les autres résultats restent accessibles.`);
+      // Une panne des séries ne doit pas masquer des films déjà trouvés.
+      if (failed.length && !hadResults) setCatalogError(`Catalogue ${failed.map(kind => kind === 'movie' ? 'films' : 'séries').join(' et ')} indisponible. Les autres résultats restent accessibles.`);
       setCatalogLoading(false);
-    });
+      setCatalogProgress(null);
+    })();
     return () => controller.abort();
-  }, [catalogEnabled, account, playlist, refresh]);
+  }, [catalogEnabled, account, playlist, refresh, debouncedQuery]);
 
   useEffect(() => {
     if (open) {
@@ -191,7 +219,7 @@ export function GlobalSearchDialog({
           />
         </div>
 
-        {catalogLoading && <p role="status" className="text-xs text-primary">Chargement des catalogues films et séries…</p>}
+        {catalogLoading && <p role="status" className="text-xs text-primary">Recherche dans les catégories films et séries…{catalogProgress ? ` (${catalogProgress.done}/${catalogProgress.total})` : ''}</p>}
         {catalogError && <div role="alert" className="text-xs text-amber-300 space-y-2"><p>{catalogError}</p><button type="button" className="min-h-11 px-3 border border-neutral-700 rounded-lg" onClick={() => { if (account) invalidateSearchCatalog(account); setRefresh(value => value + 1); }}>Réessayer les catalogues</button></div>}
         {open && account && cleanQuery.length === 1 && <p className="text-xs text-neutral-400">Saisis au moins deux caractères pour chercher dans tous les films et séries.</p>}
         {!account && cleanQuery && <p className="text-xs text-neutral-400">Sans compte Xtream lié, la recherche VOD porte sur Ma liste.</p>}
@@ -246,7 +274,7 @@ export function GlobalSearchDialog({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {channel.quality && <Badge variant="outline" className="text-[10px] border-neutral-700">{channel.quality}</Badge>}
+                    {channelQuality(channel) && <Badge variant="outline" className="text-[10px] border-neutral-700">{channelQuality(channel)}</Badge>}
                     <Play className="h-4 w-4 text-primary" />
                   </div>
                 </button>
