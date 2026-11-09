@@ -2,6 +2,7 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { PlaylistInfo } from '../types/channel';
 import { Backup, createBackup, rebuildPlaylist, playlistSignature, type LocalBackup } from './backup';
 import { readMyPlatforms, writeMyPlatforms } from './myPlatforms';
+import { mergeExternalWatches } from './externalWatch';
 import { v5 as uuidv5 } from 'uuid';
 
 const DB_NAME = 'IPTVPlayerDB';
@@ -230,6 +231,13 @@ export async function restoreBackupToDB(backup: Backup): Promise<{ added: number
         const latest = new Map<string, PlayHistoryEntry>();
         for (const item of entries.sort((a, b) => b.ts - a.ts)) if (!latest.has(item.channelId)) latest.set(item.channelId, item);
         value = prunePlayHistory([...latest.values()]);
+      } else if (key === 'externalWatches') {
+        // Fusion par identité éditoriale (type + titre + année), la plus récente
+        // l'emporte — même règle que l'import : une œuvre vue sur deux plateformes
+        // ne se duplique pas et réimporter une sauvegarde ne rajoute rien.
+        const local = Array.isArray(previous?.value) ? previous!.value as PlayHistoryEntry[] : [];
+        const incoming = Array.isArray(value) ? value as PlayHistoryEntry[] : [];
+        value = mergeExternalWatches(local, incoming);
       } else if (key === 'vod_watchlist' && previous) {
         // Fusion par identité (id + liste + type), la liste locale reste prioritaire.
         const local = Array.isArray(previous.value) ? previous.value as VodWatchlistItem[] : [];
@@ -378,6 +386,10 @@ export interface PlayHistoryEntry {
   status?: 'started' | 'completed';
   positionMs?: number;
   durationMs?: number;
+  /** Identifiant TMDB : clé de jointure entre catalogue, « Vu ailleurs » et profil de goût. */
+  tmdbId?: number;
+  /** Plateforme d'origine (netflix, prime, youtube…) pour un visionnage hors CedPlay. */
+  platform?: string;
 }
 /** Migration sans perte de l'historique 1.4 : l'identité VOD contient déjà sa liste et son type. */
 export function historyScope(entry: PlayHistoryEntry): PlayHistoryEntry {
@@ -408,6 +420,35 @@ export async function pushPlayHistory(entry: PlayHistoryEntry): Promise<void> {
 }
 export async function getPlayHistory(): Promise<PlayHistoryEntry[]> {
   return prunePlayHistory((await getMeta<PlayHistoryEntry[]>(PLAY_HISTORY_KEY)) || []);
+}
+
+// « Vu ailleurs » : films et séries vus sur d'autres plateformes. Conservés à part
+// de l'historique de lecture — ils n'ont aucun flux à reprendre dans CedPlay et ne
+// doivent jamais apparaître dans « Reprendre ».
+const EXTERNAL_WATCHES_KEY = 'externalWatches';
+/** Un import Netflix peut contenir des années de visionnages : on garde les plus récents. */
+export const MAX_EXTERNAL_WATCHES = 500;
+
+export async function getExternalWatches(): Promise<PlayHistoryEntry[]> {
+  const saved = await getMeta<PlayHistoryEntry[]>(EXTERNAL_WATCHES_KEY);
+  if (!Array.isArray(saved)) return [];
+  return saved
+    .filter(entry => entry && typeof entry.channelId === 'string' && typeof entry.ts === 'number' && typeof entry.name === 'string')
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, MAX_EXTERNAL_WATCHES);
+}
+
+export async function saveExternalWatches(entries: PlayHistoryEntry[]): Promise<void> {
+  const capped = entries
+    .filter(entry => entry && typeof entry.channelId === 'string' && typeof entry.ts === 'number')
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, MAX_EXTERNAL_WATCHES);
+  await setMeta(EXTERNAL_WATCHES_KEY, capped);
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('external-watches-updated'));
+}
+
+export async function clearExternalWatches(): Promise<void> {
+  await saveExternalWatches([]);
 }
 
 /** Retirer masque seulement la carte, sans effacer l'historique ni la reprise. */

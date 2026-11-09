@@ -6,7 +6,7 @@ import { clearVodCategoryCache } from '@/utils/vodPosterCache';
 import { clearParentalVodRegistry, hasKnownAdultVodCategories, knownAdultVodCategoryIds } from '@/utils/parentalVod';
 import type { PlaylistInfo } from '@/types/channel';
 
-const mocks = vi.hoisted(() => ({ request: vi.fn(), openVod: vi.fn(), getPlayHistory: vi.fn(), pushPlayHistory: vi.fn(), getWatchlist: vi.fn() }));
+const mocks = vi.hoisted(() => ({ request: vi.fn(), openVod: vi.fn(), getPlayHistory: vi.fn(), pushPlayHistory: vi.fn(), getWatchlist: vi.fn(), getExternalWatches: vi.fn() }));
 vi.mock('@/utils/xtreamCatalog', async () => ({
   ...await vi.importActual<typeof import('@/utils/xtreamCatalog')>('@/utils/xtreamCatalog'),
   getXtreamAccount: () => ({ server: 'https://provider.test', username: 'u', password: 'p' }),
@@ -17,6 +17,7 @@ vi.mock('@/utils/idb', async () => ({
   getPlayHistory: (...args: unknown[]) => mocks.getPlayHistory(...args),
   pushPlayHistory: (...args: unknown[]) => mocks.pushPlayHistory(...args),
   getVodWatchlistFromDB: (...args: unknown[]) => mocks.getWatchlist(...args),
+  getExternalWatches: (...args: unknown[]) => mocks.getExternalWatches(...args),
 }));
 vi.mock('@/utils/nativePlayer', () => ({ NativePlayerBridge: { isAvailable: () => true, openVod: mocks.openVod } }));
 const playlist: PlaylistInfo = { id: 'test', name: 'Test', channels: [], groups: [] };
@@ -28,6 +29,7 @@ beforeEach(() => {
   mocks.getPlayHistory.mockResolvedValue([]);
   mocks.pushPlayHistory.mockResolvedValue(undefined);
   mocks.getWatchlist.mockResolvedValue([]);
+  mocks.getExternalWatches.mockResolvedValue([]);
 });
 afterEach(cleanup);
 
@@ -188,4 +190,34 @@ it('n’enregistre rien quand les catégories n’ont pas pu être lues', async 
   render(<VodLibrary playlist={playlist} kind="movie" />);
   await screen.findByRole('alert');
   expect(hasKnownAdultVodCategories('test', 'movie')).toBe(false);
+});
+
+it('propose « Vu ailleurs » dès l’arrivée, sans aucun historique ni import', async () => {
+  mocks.request.mockImplementation((_a, action) => Promise.resolve(action === 'get_vod_categories'
+    ? [{ category_id: '1', category_name: 'Films' }]
+    : [{ stream_id: 1, name: 'Inception', container_extension: 'mp4' }]));
+  render(<VodLibrary playlist={playlist} kind="movie" />);
+  await screen.findByRole('button', { name: 'Inception' });
+  expect(await screen.findByRole('button', { name: /Vu ailleurs/ })).toBeVisible();
+  expect(screen.getByRole('heading', { name: /Pour toi/ })).toBeVisible();
+});
+
+it('charge le catalogue complet quand des films vus ailleurs peuvent amorcer le rail', async () => {
+  mocks.getExternalWatches.mockResolvedValue([{
+    channelId: 'elsewhere:netflix:movie:inception', ts: Date.now(), kind: 'vod', mediaKind: 'movie',
+    name: 'Inception', tmdbId: 27205, platform: 'netflix', status: 'completed',
+  }]);
+  mocks.request.mockImplementation((_a, action) => Promise.resolve(action === 'get_vod_categories'
+    ? [{ category_id: '1', category_name: 'Films' }]
+    : [{ stream_id: 1, name: 'Inception', category_id: '1', tmdb_id: 27205, container_extension: 'mp4' },
+       { stream_id: 2, name: 'Interstellar', category_id: '1', tmdb_id: 157336, container_extension: 'mp4' }]));
+  render(<VodLibrary playlist={playlist} kind="movie" />);
+  await waitFor(() => {
+    const full = mocks.request.mock.calls.filter(call => call[1] === 'get_vod_streams' && Object.keys(call[2] ?? {}).length === 0);
+    expect(full).toHaveLength(1);
+  });
+  await screen.findByText(/1 visionnage ailleurs/);
+  // L'amorce rend le rail utile : au moins un titre (Interstellar, même catégorie).
+  expect(screen.queryByText(/Aucun titre du catalogue ne correspond/)).toBeNull();
+  expect(await screen.findByRole('button', { name: 'Interstellar' })).toBeVisible();
 });

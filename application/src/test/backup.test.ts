@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { openDB } from 'idb';
 import { createBackup, parseBackup } from '@/utils/backup';
 import { exportBackupFromDB, getMeta, getPlaylistsFromDB, restoreBackupToDB, savePlaylistToDB, setMeta } from '@/utils/idb';
+import { clearExternalWatches, getExternalWatches, saveExternalWatches } from '@/utils/idb';
+import { parseWatchImport } from '@/utils/externalWatch';
 import { M3UParser } from '@/utils/m3uParser';
 
 const playlist = () => M3UParser.parseM3U('#EXTM3U\n#EXTINF:-1 group-title="Tests",Alpha\nhttps://example.test/a');
@@ -120,5 +122,21 @@ describe('Sauvegarde complète et restauration additive', () => {
       JSON.stringify({ ...backup, playlists: [backup.playlists[0], backup.playlists[0]] })]) {
       expect(() => parseBackup(bad)).toThrow('Aucune donnée modifiée');
     }
+  });
+});
+
+describe('Restauration des visionnages « Vu ailleurs »', () => {
+  it('fusionne par identité éditoriale au lieu de dupliquer entre plateformes', async () => {
+    const netflix = parseWatchImport('Title,Date\nInception,2023-04-12', { platform: 'netflix' }).entries;
+    const prime = parseWatchImport('Title,Date\nInception,2024-04-12', { platform: 'prime' }).entries;
+    await saveExternalWatches(netflix);
+    const backup = await exportBackupFromDB();
+    await clearExternalWatches();
+    await saveExternalWatches(prime);
+    await restoreBackupToDB(backup);
+    await restoreBackupToDB(backup);
+    const restored = await getExternalWatches();
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({ name: 'Inception', platform: 'prime' });
   });
 });

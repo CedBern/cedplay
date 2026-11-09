@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getMeta, setMeta } from '@/utils/idb';
 import { normalizeForCompare } from '@/utils/titleNormalize';
 import { memoFetch } from '@/utils/memoFetch';
+import { parseWatchAvailability, type WatchAvailability } from '@/utils/watchAvailability';
 
 export type TmdbKind = 'movie' | 'tv';
 
@@ -31,6 +32,8 @@ export interface TmdbSimilar {
 
 export interface TmdbDetails {
   id: number;
+  /** Namespace film/série : films et séries partagent l'espace d'identifiants TMDB. */
+  kind?: TmdbKind;
   title: string;
   overview: string;
   releaseDate: string;
@@ -185,6 +188,22 @@ export async function fetchTmdbDetails(id: number, kind: TmdbKind, apiKey: strin
     const details = parseTmdbDetails(await tmdbGet(`/${kind}/${id}?append_to_response=credits,reviews,recommendations`, apiKey));
     await setMeta(cacheKey, { fetchedAt: Date.now(), details });
     return details;
+  });
+}
+
+/**
+ * Disponibilité légale du titre (France) : abonnement, gratuit, location, achat.
+ * Même cache 12 h et même déduplication en vol que les autres appels TMDB.
+ * `null` quand le pays n'a aucune offre répertoriée.
+ */
+export async function fetchWatchProviders(id: number, kind: TmdbKind, apiKey: string): Promise<WatchAvailability | null> {
+  const cacheKey = `tmdb_providers_${kind}_${id}`;
+  return memoFetch(cacheKey, async () => {
+    const cached = await getMeta<{ fetchedAt: number; availability: WatchAvailability | null }>(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.availability;
+    const availability = parseWatchAvailability(await tmdbGet(`/${kind}/${id}/watch/providers`, apiKey));
+    await setMeta(cacheKey, { fetchedAt: Date.now(), availability });
+    return availability;
   });
 }
 

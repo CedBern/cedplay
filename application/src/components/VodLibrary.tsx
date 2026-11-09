@@ -11,8 +11,11 @@ import { NativePlayerBridge } from '@/utils/nativePlayer';
 import { getPlaybackUrl } from '@/hooks/useVideoPlayer';
 import { onPlaybackDelegated } from '@/utils/playbackOwnership';
 import { catalogRequest, getXtreamAccount, parseCatalog, parseCategories, parseDetails, readVodProgress, saveVodProgress, vodUrl, type CatalogCategory, type CatalogDetails, type CatalogItem } from '@/utils/xtreamCatalog';
-import { getPlayHistory, pushPlayHistory, updateVodHistoryProgress, historyScope, getVodWatchlistFromDB, toggleVodWatchlist, type VodWatchlistItem } from '@/utils/idb';
+import { getPlayHistory, getExternalWatches, pushPlayHistory, updateVodHistoryProgress, historyScope, getVodWatchlistFromDB, toggleVodWatchlist, type PlayHistoryEntry, type VodWatchlistItem } from '@/utils/idb';
 import { recommendForHistory } from '@/utils/recommendations';
+import { enrichRecommendations, type TasteEnrichment } from '@/utils/tasteEnrichment';
+import { externalSeeds, externalSummary } from '@/utils/externalWatch';
+import { ExternalWatchDialog } from '@/components/ExternalWatchDialog';
 import { normalizeTitle, normalizeForCompare } from '@/utils/titleNormalize';
 import { TmdbPanel } from '@/components/TmdbPanel';
 import { SubtitleSelector, type ReadySubtitle } from '@/components/SubtitleSelector';
@@ -232,9 +235,14 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     };
   }, []);
   const catalogCacheKey = JSON.stringify([playlist.id, account]);
+  // « Vu ailleurs » : visionnages importés (Netflix, Prime, YouTube…), restés hors
+  // de l'historique de lecture. Déclaré avant l'effet ci-dessous : des films vus
+  // ailleurs suffisent à amorcer le chargement du catalogue complet.
+  const [externalWatches, setExternalWatches] = useState<PlayHistoryEntry[]>([]);
 
   // Historique de lecture + catalogue complet : le catalogue entier n'est chargé
-  // que si des films ont déjà été regardés (recommandations « Pour toi »).
+  // que si des films ont déjà été regardés (recommandations « Pour toi ») ou si
+  // des visionnages importés peuvent amorcer le rail.
   useEffect(() => {
     if (!account || kind !== 'movie') return;
     let cancelled = false;
@@ -252,7 +260,9 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         historySignatureRef.current = signature;
         setVodHistory(h);
       }
-      if (!h.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && (e.status === 'completed' || (e.positionMs || 0) >= 60000))) return;
+      // Les visionnages importés n'étant pas dans l'historique de lecture, ils
+      // doivent aussi déclencher le chargement : sans catalogue, aucune amorce.
+      if (!externalWatches.some(e => e.mediaKind !== 'series') && !h.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && (e.status === 'completed' || (e.positionMs || 0) >= 60000))) return;
       const cached = fullCatalogCache.get(catalogCacheKey);
       if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) { setAllMovies(cached.items); return; }
       try {
@@ -265,16 +275,83 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       } catch { /* recommandations optionnelles */ }
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [account, kind, playlist.id, catalogCacheKey, reload, historyRevision]);
+  }, [account, kind, playlist.id, catalogCacheKey, reload, historyRevision, externalWatches]);
 
   const visibleAllMovies = useMemo(
     () => hideAdult ? allMovies.filter(item => !adultCategoryIds.has(item.categoryId)) : allMovies,
     [hideAdult, allMovies, adultCategoryIds],
   );
-  const recommendations = useMemo(
-    () => (kind === 'movie' ? recommendForHistory(vodHistory, visibleAllMovies, { limit: 12, playlistId: playlist.id }) : []),
-    [kind, vodHistory, visibleAllMovies, playlist.id],
+  // « Vu ailleurs » : rechargés dès que le dialogue ou l'événement dédié les modifie.
+  const reloadExternal = useCallback(async () => {
+    try {
+      const next = await getExternalWatches();
+      // Le dialogue et l'événement « external-watches-updated » déclenchent tous deux
+      // un rechargement : ne pas recréer le tableau quand rien n'a changé évite un
+      // second passage d'enrichissement TMDB.
+      setExternalWatches(previous => previous.length === next.length &&
+        previous.every((entry, index) => entry.channelId === next[index].channelId && entry.ts === next[index].ts)
+        ? previous
+        : next);
+    } catch { /* import facultatif */ }
+  }, []);
+  useEffect(() => {
+    void reloadExternal();
+    const update = () => { void reloadExternal(); };
+    window.addEventListener('external-watches-updated', update);
+    return () => window.removeEventListener('external-watches-updated', update);
+  }, [reloadExternal]);
+  // Films vus ailleurs que le catalogue propose aussi : ils amorcent le classement
+  // local (catégorie + titre) sans réseau. Sans eux, un profil venu de Netflix ne
+  // produirait aucun rail tant qu'aucun film n'a été lancé dans CedPlay.
+  const seeds = useMemo(
+    () => (kind === 'movie' && !tvMode ? externalSeeds(externalWatches, visibleAllMovies, playlist.id) : []),
+    [kind, tvMode, externalWatches, visibleAllMovies, playlist.id],
   );
+  const rankingHistory = useMemo(() => {
+    if (!seeds.length) return vodHistory;
+    const known = new Set(vodHistory.map(entry => entry.channelId));
+    return [...vodHistory, ...seeds.filter(seed => !known.has(seed.channelId))];
+  }, [vodHistory, seeds]);
+  // Classement local immédiat (catégorie + titre). Le pool de 40 laisse au profil de
+  // goût la possibilité de promouvoir un titre qui n'était pas dans les 12 premiers.
+  // En mode télécommande, TvVodScreen n'affiche pas ce rail : aucun calcul.
+  const baseRecommendations = useMemo(
+    () => (kind === 'movie' && !tvMode ? recommendForHistory(rankingHistory, visibleAllMovies, { limit: 40, playlistId: playlist.id }) : []),
+    [kind, tvMode, rankingHistory, visibleAllMovies, playlist.id],
+  );
+  // Résolution TMDB bornée (derniers films vus + meilleurs candidats), en arrière-plan :
+  // le rail reste affiché pendant l'enrichissement et retombe sur le classement local
+  // sans clé TMDB ou hors réseau. Historique et catalogue passent par une référence pour
+  // ne pas relancer les requêtes à chaque tick de progression de lecture.
+  const tasteInputsRef = useRef({ history: vodHistory, movies: visibleAllMovies });
+  // Synchronisation déclarée avant l'effet d'enrichissement : elle s'exécute en premier
+  // dans le même cycle, sans écrire de référence pendant le rendu.
+  useEffect(() => { tasteInputsRef.current = { history: vodHistory, movies: visibleAllMovies }; });
+  const [taste, setTaste] = useState<TasteEnrichment | null>(null);
+  useEffect(() => {
+    const apiKey = tmdbApiKey?.trim();
+    // Le rail « Pour toi » n'existe pas en mode télécommande : aucune requête TMDB.
+    if (tvMode || !apiKey || baseRecommendations.length === 0) { setTaste(null); return; }
+    let cancelled = false;
+    const { history, movies } = tasteInputsRef.current;
+    void enrichRecommendations({
+      history, movies, candidates: baseRecommendations.map(entry => entry.item), playlistId: playlist.id, apiKey,
+      external: externalWatches,
+    })
+      .then(result => { if (!cancelled) setTaste(result); })
+      .catch(() => { if (!cancelled) setTaste(null); });
+    return () => { cancelled = true; };
+  }, [baseRecommendations, tmdbApiKey, playlist.id, tvMode, externalWatches]);
+  const recommendations = useMemo(() => {
+    if (kind !== 'movie' || tvMode) return [];
+    const usable = taste && taste.playlistId === playlist.id && taste.profile.sampleSize > 0 ? taste : null;
+    return recommendForHistory(rankingHistory, visibleAllMovies, {
+      limit: 12,
+      pool: 40,
+      playlistId: playlist.id,
+      ...(usable ? { profile: usable.profile, detailsByItemId: usable.detailsByItemId } : {}),
+    });
+  }, [kind, tvMode, rankingHistory, visibleAllMovies, playlist.id, taste]);
 
   useEffect(() => {
     if (!account) return;
@@ -743,14 +820,27 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   </section>;
   return <section className="text-white space-y-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-semibold">{kind === 'movie' ? 'Films' : 'Séries'}</h2><Button variant="secondary" size="sm" onClick={handleRefresh} disabled={loading}>Actualiser</Button></div>
-    {kind === 'movie' && recommendations.length > 0 && <div className="space-y-2">
-      <h3 className="text-[17px] font-semibold tracking-tight text-foreground">Pour toi, d'après tes visionnages</h3>
-      <div className="rail flex snap-x gap-3 overflow-x-auto pb-1">
-        {recommendations.map(({ item }) => <button key={item.id} onClick={() => setSelected(item)} className="poster press w-28 shrink-0 snap-start text-left rounded-xl overflow-hidden bg-card border border-neutral-900" title={item.name}>
-          <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center"><VodPoster src={item.poster} kind="movie" /></div>
-          <div className="p-1.5"><p className="text-[11px] leading-tight line-clamp-2">{item.name}</p>{item.rating && <p className="text-[10px] text-neutral-400">★ {item.rating}</p>}</div>
-        </button>)}
+    {kind === 'movie' && !tvMode && <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[17px] font-semibold tracking-tight text-foreground">Pour toi, d'après tes visionnages</h3>
+        <ExternalWatchDialog watches={externalWatches} onChanged={reloadExternal} />
       </div>
+      {externalWatches.length > 0 && <p className="text-[11px] leading-tight text-neutral-500">
+        {externalSummary(externalWatches)}
+        {taste && taste.playlistId === playlist.id && taste.externalSampleSize > 0
+          ? ` · ${taste.externalSampleSize} fiche(s) TMDB ajoutée(s) au profil`
+          : ''}
+      </p>}
+      {recommendations.length > 0
+        ? <div className="rail flex snap-x gap-3 overflow-x-auto pb-1">
+          {recommendations.map(({ item, reasons }) => <button key={item.id} onClick={() => setSelected(item)} className="poster press w-28 shrink-0 snap-start text-left rounded-xl overflow-hidden bg-card border border-neutral-900" title={reasons.length ? `${item.name} — ${reasons.join(' · ')}` : item.name}>
+            <div className="relative aspect-[2/3] overflow-hidden bg-neutral-900 flex items-center justify-center"><VodPoster src={item.poster} kind="movie" /></div>
+            <div className="p-1.5"><p className="text-[11px] leading-tight line-clamp-2">{item.name}</p>{item.rating && <p className="text-[10px] text-neutral-400">★ {item.rating}</p>}{reasons[0] && <p className="text-[10px] leading-tight text-neutral-500 line-clamp-1">{reasons[0]}</p>}</div>
+          </button>)}
+        </div>
+        : <p className="text-xs text-neutral-400">{externalWatches.length > 0
+          ? 'Aucun titre du catalogue ne correspond encore à ces visionnages. Importe l’historique d’une autre plateforme ou lance un film ici.'
+          : 'Aucun film vu pour l’instant : lance un film ici ou importe ton historique Netflix, Prime Video, YouTube…'}</p>}
     </div>}
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
       <div className="flex-1 min-w-0">

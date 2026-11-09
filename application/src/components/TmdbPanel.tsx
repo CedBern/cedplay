@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { fetchTmdbDetails, pickBestMatch, searchTmdb, tmdbImageUrl, tmdbPageUrl, TmdbAuthenticationError, type TmdbDetails, type TmdbKind } from '@/utils/tmdb';
+import { WatchProviders } from '@/components/WatchProviders';
 import { normalizeForCompare, normalizeTitle } from '@/utils/titleNormalize';
 import type { CatalogItem } from '@/utils/xtreamCatalog';
 
@@ -121,6 +122,8 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
             </div>
           </div>
           {details.overview && <p className="text-sm text-neutral-200 whitespace-pre-line">{details.overview}</p>}
+
+          <WatchProviders tmdbId={details.id} kind={kind} title={details.title || name} apiKey={apiKey} />
 
           {details.similar.length > 0 && (
             <div className="space-y-2">
