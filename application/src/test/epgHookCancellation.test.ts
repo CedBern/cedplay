@@ -8,6 +8,7 @@ vi.mock('@/utils/epg', () => ({
   fetchEPGSource: async () => ({ xml: '<tv/>', fetchedAt: 1, url: 'https://example.test/guide' }),
   getSecondaryEPGUrls: () => [], fetchSecondaryEPGSources: async () => [],
   getParsedEPGCache: async () => null, saveParsedEPGCache: vi.fn(),
+  getEPGUrl: () => null, isEPGCacheFresh: async () => false, peekParsedEPGCache: async () => null,
 }));
 vi.mock('@/utils/epgConfig', () => ({
   getEpgConfig: async () => ({ channels: {}, extraUrls: [], offsetHours: 0 }),

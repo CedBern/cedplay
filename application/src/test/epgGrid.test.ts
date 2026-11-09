@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dayBounds, layoutProgram, buildHourTicks, nowOffsetInDay, normalizePrograms, guideRange, PX_PER_MINUTE } from '@/utils/epgGrid';
+import { dayBounds, layoutProgram, buildHourTicks, nowOffsetInDay, normalizePrograms, hasProgramInRange, guideRange, PX_PER_MINUTE } from '@/utils/epgGrid';
 import type { EPGProgram } from '@/types/epg';
 
 const program = (start: Date, end: Date): EPGProgram => ({
@@ -90,6 +90,30 @@ describe('normalizePrograms', () => {
     expect(out.map(p => p.id)).toEqual(['a', 'b', 'c']);
     expect(out[0].endTime.getTime()).toBe(at(10).getTime());
     expect(out[1].endTime.getTime()).toBe(at(11).getTime());
+  });
+
+  it('renvoie la liste déjà propre sans la copier', () => {
+    const clean = [prog('a', at(9), at(10)), prog('b', at(10), at(11))];
+    expect(normalizePrograms(clean)).toBe(clean);
+  });
+});
+
+describe('hasProgramInRange', () => {
+  const at = (h: number, m = 0) => new Date(2026, 10, 3, h, m);
+  const prog = (id: string, start: Date, end: Date): EPGProgram => ({ id, channelId: 'c', title: id, startTime: start, endTime: end });
+  const list = [prog('a', at(9), at(10)), prog('b', at(10), at(11)), prog('c', at(11), at(12))];
+
+  it('voit une émission à cheval sur le début de la plage', () => {
+    expect(hasProgramInRange(list, at(9, 30), at(9, 45))).toBe(true);
+  });
+
+  it('écarte une plage entièrement avant ou après', () => {
+    expect(hasProgramInRange(list, at(7), at(8))).toBe(false);
+    expect(hasProgramInRange(list, at(13), at(14))).toBe(false);
+  });
+
+  it('accepte une plage vide de programmes', () => {
+    expect(hasProgramInRange([], at(9), at(10))).toBe(false);
   });
 });
 

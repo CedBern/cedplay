@@ -7,7 +7,7 @@ import { Channel } from '@/types/channel';
 import type { EPGState } from '@/hooks/useEPG';
 import { EPGData, EPGProgram } from '@/types/epg';
 import { formatTime } from '@/utils/epgXmltv';
-import { CHANNEL_COL_WIDTH, PX_PER_MINUTE, buildHourTicks, guideRange, layoutProgram, normalizePrograms, nowOffsetInDay, rangeWidth } from '@/utils/epgGrid';
+import { CHANNEL_COL_WIDTH, PX_PER_MINUTE, buildHourTicks, guideRange, hasProgramInRange, layoutProgram, normalizePrograms, nowOffsetInDay, rangeWidth } from '@/utils/epgGrid';
 import { getReminders, addReminder, removeReminder, REMINDERS_EVENT, type EpgReminder } from '@/utils/reminders';
 import { toast } from 'sonner';
 import { NativePlayerBridge, RecordingsBridge, type PreviewState, type ScheduledRecording } from '@/utils/nativePlayer';
@@ -49,7 +49,7 @@ const PREVIEW_DELAY = 700;
 const isActivationKey = (key: string) => key === 'Enter' || key === ' ';
 
 const TIME_AXIS_HEIGHT = 44;
-const ROW_HEIGHT = 64;
+const ROW_HEIGHT = 56;
 /** Colonne des chaînes plus étroite sur téléphone : plus d'heures visibles. */
 const NARROW_COL_WIDTH = 112;
 /** Marge (px) de programmes rendus de part et d'autre de la zone visible. */
@@ -171,8 +171,14 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   const [now, setNow] = useState(() => new Date());
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(isNarrowScreen);
-  // Zone visible (px) : seuls les programmes proches sont rendus.
-  const [view, setView] = useState({ left: 0, width: Number.POSITIVE_INFINITY });
+  // Zone visible (px) : seuls les programmes proches sont rendus. La largeur est bornée
+  // dès la première peinture (sinon Infinity rendait les 7 jours de chaque ligne visible,
+  // soit plusieurs secondes de DOM avant que l'effet de défilement ne corrige la mesure).
+  // jsdom n'a pas matchMedia : Infinity y laisse tous les programmes rendus aux tests.
+  const [view, setView] = useState(() => ({
+    left: 0,
+    width: typeof (window as unknown as { matchMedia?: unknown }).matchMedia === 'function' ? window.innerWidth : Number.POSITIVE_INFINITY,
+  }));
 
   // Rappels EPG (cloche sur un programme). Callback mémoïsé : les cellules sont mémoïsées,
   // un handler recréé à chaque rendu les ferait toutes se re-rendre au défilement.
@@ -317,9 +323,9 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   const rows = useMemo(() => guideChannels
     .map((channel) => ({
       channel,
-      programs: normalizePrograms(epgData![channel.id]).filter((p) => p.startTime < range.end && p.endTime > range.start),
+      programs: normalizePrograms(epgData![channel.id]),
     }))
-    .filter((r) => r.programs.length > 0), [guideChannels, epgData, range]);
+    .filter((r) => hasProgramInRange(r.programs, range.start, range.end)), [guideChannels, epgData, range]);
 
   // Virtualisation des lignes : un guide de 1000+ chaînes ne doit pas créer des
   // milliers de nœuds DOM (ni les re-rendre chaque minute).
@@ -399,32 +405,22 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     </div>;
   }
 
-  const banner = focused ?? (currentChannel ? { channel: currentChannel, program: getCurrentProgram(currentChannel.id, epgData) } : null);
   return (
-    <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} className="h-full flex flex-col min-h-0 text-white">
-      {tvMode && <div className="mb-2 flex h-[168px] shrink-0 gap-3" data-guide-banner>
-        <div className="min-w-0 flex-1 overflow-hidden rounded-xl border border-neutral-900 bg-neutral-950 p-3">
-          {banner ? <>
-            <p className="truncate text-xs uppercase tracking-wide text-primary">{banner.channel.name}</p>
-            <p className="truncate text-lg font-semibold leading-tight">{banner.program?.title ?? 'Pas d’information de programme'}</p>
-            {banner.program && <p className="font-mono text-xs text-neutral-400">{formatTime(banner.program.startTime)} – {formatTime(banner.program.endTime)}{banner.program.category ? ` · ${banner.program.category}` : ''}</p>}
-            {banner.program?.description && <p className="mt-1 line-clamp-3 text-sm text-neutral-300">{banner.program.description}</p>}
-          </> : <p className="text-sm text-neutral-400">Choisis une émission avec les flèches.</p>}
-          <p className="mt-1 truncate text-[11px] text-neutral-500">OK : regarder ou fiche · OK maintenu : fiche de l’émission</p>
-        </div>
-        {previewActive && <div ref={previewRef} data-guide-preview={previewState} className="relative flex aspect-video h-full shrink-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl bg-black text-xs text-neutral-400">
-          {previewState === 'error' ? 'Aperçu indisponible'
-            : previewState === 'playing' ? ''
-            : previewMode === 'manual' && !manualPreview ? (focused ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button> : 'Aperçu')
-            : previewState === 'idle' ? '' : 'Aperçu…'}
-        </div>}
+    <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} className="relative h-full flex flex-col min-h-0 text-white">
+      {/* Aperçu en superposition : sur un écran TV de 540 px de haut, une bande de
+         168 px ne laissait qu'une ligne de guide visible. */}
+      {tvMode && previewActive && <div ref={previewRef} data-guide-preview={previewState} className="absolute right-3 top-3 z-40 flex aspect-video w-40 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-xs text-neutral-400 shadow-lg">
+        {previewState === 'error' ? 'Aperçu indisponible'
+          : previewState === 'playing' ? ''
+          : previewMode === 'manual' && !manualPreview ? (focused ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button> : 'Aperçu')
+          : previewState === 'idle' ? '' : 'Aperçu…'}
       </div>}
-      {guideState?.fetchedAt && <div className="flex flex-wrap items-center justify-between gap-2 mb-2 flex-wrap text-xs text-neutral-400">
-        <span>{guideState.status === 'stale' ? 'Guide enregistré — actualisation impossible' : 'Guide actualisé'} · {new Date(guideState.fetchedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+      {guideState?.fetchedAt && <div className={`flex items-center justify-between gap-2 text-xs text-neutral-400 ${tvMode ? 'mb-1 flex-nowrap' : 'mb-2 flex-wrap'}`}>
+        <span className="truncate">{guideState.status === 'stale' ? 'Guide enregistré — actualisation impossible' : 'Guide actualisé'} · {new Date(guideState.fetchedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
         <Button size="sm" variant="ghost" onClick={onRetry}>Actualiser</Button>
       </div>}
       {/* Navigation jour : fait défiler la frise continue jusqu'au jour voulu. */}
-      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+      <div className={`flex items-center justify-between gap-2 ${tvMode ? 'mb-1' : 'mb-2 flex-wrap'}`}>
         <div className="flex items-center gap-1">
           <Button
             variant="outline"
@@ -455,7 +451,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
             </Button>
           )}
           <Button variant="outline" size="sm" className="h-9 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
-            <Search className="h-4 w-4 sm:mr-1.5" aria-hidden="true" /><span className="hidden sm:inline">Rechercher</span>
+            <Search className="h-4 w-4 sm:mr-1.5" aria-hidden="true" /><span className={tvMode ? 'sr-only' : 'hidden sm:inline'}>Rechercher</span>
           </Button>
           {onGuideSettings && <Button variant="outline" size="sm" className="h-9 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
             <Settings2 className="h-4 w-4" aria-hidden="true" />

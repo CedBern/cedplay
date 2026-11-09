@@ -11,6 +11,9 @@ vi.mock('@/utils/epg', () => ({
   getSecondaryEPGUrls: () => [],
   fetchSecondaryEPGSources: async () => [],
   getParsedEPGCache: async () => null,
+  getEPGUrl: () => null,
+  isEPGCacheFresh: async () => false,
+  peekParsedEPGCache: async () => null,
   saveParsedEPGCache: async () => {},
 }));
 const playlist: PlaylistInfo = { id: 'p', name: 'Test', channels: [], groups: [] };

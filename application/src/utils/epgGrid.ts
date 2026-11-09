@@ -54,6 +54,17 @@ export function buildHourTicks(range: DayBounds): Date[] {
  * que les cadres se suivent sans se superposer.
  */
 export function normalizePrograms(programs: EPGProgram[]): EPGProgram[] {
+  // Le parseur livre déjà chaque chaîne triée par début : sans doublon ni chevauchement,
+  // renvoyer la liste telle quelle évite une copie et un tri O(n log n) par chaîne
+  // (des milliers de chaînes à l'ouverture du guide sur la box).
+  let clean = true;
+  for (let i = 1; i < programs.length; i++) {
+    const prev = programs[i - 1];
+    const cur = programs[i];
+    if (cur.startTime.getTime() <= prev.startTime.getTime()
+      || prev.endTime.getTime() > cur.startTime.getTime()) { clean = false; break; }
+  }
+  if (clean) return programs;
   const sorted = [...programs].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
   const out: EPGProgram[] = [];
   for (const p of sorted) {
@@ -67,6 +78,21 @@ export function normalizePrograms(programs: EPGProgram[]): EPGProgram[] {
     out.push(p);
   }
   return out;
+}
+
+/** Vrai si au moins une émission chevauche [start, end] (liste triée par début). */
+export function hasProgramInRange(programs: EPGProgram[], start: Date, end: Date): boolean {
+  let lo = 0;
+  let hi = programs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (programs[mid].startTime.getTime() <= start.getTime()) lo = mid + 1;
+    else hi = mid;
+  }
+  const after = programs[lo];
+  if (after && after.startTime < end) return true;
+  const before = programs[lo - 1];
+  return !!before && before.endTime > start;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

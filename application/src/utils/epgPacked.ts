@@ -69,17 +69,23 @@ export function unpackEPGData(value: unknown): EPGData {
     if (!ArrayBuffer.isView(rows) || Object.prototype.toString.call(rows) !== '[object Float64Array]'
         || rows.length % STRIDE !== 0) throw invalid();
     const programmes = new Array<EPGProgram>(rows.length / STRIDE);
-    for (let offset = 0; offset < rows.length; offset += STRIDE) {
-      programmes[offset / STRIDE] = {
+    for (let offset = 0, i = 0; offset < rows.length; offset += STRIDE, i++) {
+      // Pas de spread conditionnel : un million d'émissions sur la box, trois objets
+      // temporaires par émission coûtaient des secondes au démarrage du guide.
+      const program: EPGProgram = {
         id: rows[offset + 5] === -1 ? `${channelId}_${rows[offset]}` : text(rows[offset + 5]),
         channelId: rows[offset + 6] === -1 ? channelId : text(rows[offset + 6]),
         title: text(rows[offset + 2]),
         startTime: date(rows[offset]),
         endTime: date(rows[offset + 1]),
-        ...(rows[offset + 3] === -1 ? {} : { description: text(rows[offset + 3]) }),
-        ...(rows[offset + 4] === -1 ? {} : { category: text(rows[offset + 4]) }),
-        ...(rows[offset + 7] === -1 ? {} : { rating: text(rows[offset + 7]) }),
       };
+      const description = rows[offset + 3];
+      if (description !== -1) program.description = text(description);
+      const category = rows[offset + 4];
+      if (category !== -1) program.category = text(category);
+      const rating = rows[offset + 7];
+      if (rating !== -1) program.rating = text(rating);
+      programmes[i] = program;
     }
     Object.defineProperty(data, channelId, { value: programmes, enumerable: true, writable: true, configurable: true });
   }

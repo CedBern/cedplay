@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { EPGData } from '@/types/epg';
 import { PlaylistInfo } from '@/types/channel';
 import { AppSettings } from '@/utils/storage';
-import { fetchEPGSource, fetchSecondaryEPGSources, getParsedEPGCache, getSecondaryEPGUrls, saveParsedEPGCache, type EPGSource } from '@/utils/epg';
+import { fetchEPGSource, fetchSecondaryEPGSources, getEPGUrl, getParsedEPGCache, getSecondaryEPGUrls, isEPGCacheFresh, peekParsedEPGCache, rememberParsedEPGMeta, saveParsedEPGCache, type EPGSource } from '@/utils/epg';
 import { parseEPGInWorker } from '@/utils/epgWorker';
 import { EPG_CONFIG_EVENT, epgConfigSignature, getEpgConfig } from '@/utils/epgConfig';
 
@@ -45,10 +45,22 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
     void (async () => {
       try {
         let primaryError: unknown = null;
-        const [config, primary] = await Promise.all([
-          getEpgConfig(playlist.id),
-          fetchEPGSource(playlist, settings, forced).catch((e: unknown) => { primaryError = e; return null; }),
-        ]);
+        const config = await getEpgConfig(playlist.id);
+        // Chemin chaud : l'analyse en cache suffit. Sans lui, il fallait relire les
+        // 45 Mo de XML (2 s sur la box) uniquement pour calculer la clé du cache.
+        const quickUrl = getEPGUrl(playlist, settings);
+        const canPeek = !!quickUrl && !forced && !getSecondaryEPGUrls(playlist, settings, config.extraUrls).length
+          && !Object.keys(config.channels).length && !config.offsetHours
+          && await isEPGCacheFresh(playlist.id);
+        if (canPeek) {
+          const cached = await peekParsedEPGCache(playlist.id, quickUrl!);
+          if (cancelled) return;
+          if (cached) {
+            setState({ data: cached.data, status: 'ready', fetchedAt: cached.fetchedAt, sourceCount: 1 });
+            return;
+          }
+        }
+        const primary = await fetchEPGSource(playlist, settings, forced).catch((e: unknown) => { primaryError = e; return null; });
         if (cancelled) return;
         const secondaryUrls = getSecondaryEPGUrls(playlist, settings, config.extraUrls);
         const secondary = secondaryUrls.length ? await fetchSecondaryEPGSources(playlist.id, secondaryUrls, forced) : [];
@@ -71,6 +83,8 @@ export function useEPG(playlist: PlaylistInfo | null, settings: AppSettings): EP
         const cachedParsed = await getParsedEPGCache(playlist.id, cacheUrl, fetchedAt);
         if (cancelled) return;
         if (cachedParsed) {
+          // Fiche d'index pour les prochains démarrages : le chemin chaud évite de relire le XML.
+          void rememberParsedEPGMeta(playlist.id, cacheUrl, fetchedAt);
           setState({ data: cachedParsed, status, fetchedAt, sourceCount: sources.length });
           return;
         }

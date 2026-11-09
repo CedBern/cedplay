@@ -10,6 +10,9 @@ vi.mock('@/utils/epg', () => ({
   getSecondaryEPGUrls: () => ['https://s/x.xml'],
   fetchSecondaryEPGSources: mocks.secondary,
   getParsedEPGCache: async () => null,
+  getEPGUrl: () => null,
+  isEPGCacheFresh: async () => false,
+  peekParsedEPGCache: async () => null,
   saveParsedEPGCache: async () => {},
 }));
 

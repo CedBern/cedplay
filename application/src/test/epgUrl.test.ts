@@ -84,6 +84,29 @@ describe('fetchEPGSource', () => {
     expect(saved?.xml).toBe(XMLTV);
   });
 
+  it('garde l’horodatage du contenu quand le guide retéléchargé est identique', async () => {
+    const playlist = makePlaylist('same-content');
+    const epgUrl = 'https://epg.test/guide.xml';
+    const oldFetchedAt = Date.now() - 13 * 3600_000;
+    await setMeta(`epgCache_${playlist.id}`, { xml: XMLTV, fetchedAt: oldFetchedAt, source: epgUrl });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(XMLTV)));
+    const result = await fetchEPGSource(playlist, { ...baseSettings, epgUrl });
+    // Même contenu : l'analyse en cache (indexée par fetchedAt) reste réutilisable.
+    expect(result?.fetchedAt).toBe(oldFetchedAt);
+  });
+
+  it('ne retélécharge pas dans les 12 h qui suivent une vérification sans changement', async () => {
+    const playlist = makePlaylist('same-content-ttl');
+    const epgUrl = 'https://epg.test/guide.xml';
+    await setMeta(`epgCache_${playlist.id}`, { xml: XMLTV, fetchedAt: Date.now() - 13 * 3600_000, source: epgUrl });
+    const fetcher = vi.fn().mockResolvedValue(new Response(XMLTV));
+    vi.stubGlobal('fetch', fetcher);
+    await fetchEPGSource(playlist, { ...baseSettings, epgUrl });
+    const second = await fetchEPGSource(playlist, { ...baseSettings, epgUrl });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(second?.xml).toBe(XMLTV);
+  });
+
   it('ignore un cache rattaché à une autre source', async () => {
     const playlist = makePlaylist('other-source');
     await setMeta(`epgCache_${playlist.id}`, { xml: '<tv>autre</tv>', fetchedAt: Date.now(), source: 'https://ancien.test/epg' });

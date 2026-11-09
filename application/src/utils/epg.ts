@@ -85,15 +85,21 @@ async function downloadXmltv(rawUrl: string): Promise<string> {
   }
 }
 
-/** Au-delà, le guide est servi sans être mis en cache : un XML de cette taille suffit à
- *  saturer le quota du WebView, partagé avec les favoris, les réglages et l'historique. */
-const MAX_CACHED_XML_CHARS = 12_000_000;
+/** Un guide Xtream courant pèse 40-50 M caractères : le plafond de 12 M le laissait
+ *  hors cache, donc chaque démarrage retéléchargeait et réanalysait tout le XML.
+ *  Le cache vit en IndexedDB (quota disque), pas en localStorage. */
+const MAX_CACHED_XML_CHARS = 64_000_000;
+
+/** Horodatage de la dernière vérification réseau, séparé du XML : réutiliser le
+ *  contenu identique ne doit pas réécrire 45 M caractères ni relancer l'analyse. */
+const checkedKey = (cacheKey: string) => `${cacheKey}_checked`;
 
 /** Cache XML d'une source : la source principale garde la clé historique de la liste. */
 async function fetchCachedXmltv(cacheKey: string, url: string, force: boolean): Promise<EPGSource> {
   const saved = await getMeta<EPGCache>(cacheKey).catch(() => undefined);
   const cached = saved?.source === url ? saved : undefined;
-  if (!force && cached?.xml && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return { ...cached, stale: false, url };
+  const checkedAt = (await getMeta<number>(checkedKey(cacheKey)).catch(() => undefined)) ?? cached?.fetchedAt ?? 0;
+  if (!force && cached?.xml && Date.now() - checkedAt < CACHE_TTL_MS) return { ...cached, stale: false, url };
   let xml: string;
   try {
     xml = await downloadXmltv(url);
@@ -107,6 +113,10 @@ async function fetchCachedXmltv(cacheKey: string, url: string, force: boolean): 
     throw new Error('Guide indisponible. Vérifie la connexion et la source EPG.');
   }
   const fetchedAt = Date.now();
+  await setMeta(checkedKey(cacheKey), fetchedAt).catch(() => undefined);
+  // Contenu identique : conserver l'horodatage précédent pour que le cache analysé
+  // (indexé par source + fetchedAt) reste valide, et ne pas réécrire le gros XML.
+  if (cached?.xml === xml) return { xml, fetchedAt: cached.fetchedAt, stale: false, url };
   // Un échec d'écriture (quota plein) ne doit pas être présenté comme une panne réseau :
   // le guide téléchargé reste utilisable pour la session, seul son cache est perdu.
   if (xml.length <= MAX_CACHED_XML_CHARS) {
@@ -168,6 +178,9 @@ interface EPGParsedCache { fetchedAt: number; url: string; data: PackedEPGData }
 
 // Ne pas lire l'ancien cache : son clonage suffit à épuiser la mémoire de petites box.
 const parsedKey = (playlistId: string) => `epgParsed_v2_${playlistId}`;
+// Petite fiche à côté du gros objet : permet de savoir qu'une analyse est disponible
+// sans relire le XML de 45 Mo (2 s sur la box) juste pour calculer sa clé.
+const parsedMetaKey = (playlistId: string) => `epgParsedMeta_${playlistId}`;
 
 export async function getParsedEPGCache(playlistId: string, url: string, fetchedAt: number): Promise<EPGData | null> {
   try {
@@ -177,9 +190,31 @@ export async function getParsedEPGCache(playlistId: string, url: string, fetched
   return null;
 }
 
+/** Analyse déjà en cache pour cette source, sans télécharger ni relire le XML. */
+export async function peekParsedEPGCache(playlistId: string, url: string): Promise<{ data: EPGData; fetchedAt: number } | null> {
+  try {
+    const meta = await getMeta<{ url: string; fetchedAt: number }>(parsedMetaKey(playlistId));
+    if (!meta || meta.url !== url) return null;
+    const data = await getParsedEPGCache(playlistId, meta.url, meta.fetchedAt);
+    return data ? { data, fetchedAt: meta.fetchedAt } : null;
+  } catch { return null; }
+}
+
+/** Vrai si la source a été vérifiée il y a moins de 12 h (le XML peut rester sur disque). */
+export async function isEPGCacheFresh(playlistId: string): Promise<boolean> {
+  const checked = await getMeta<number>(checkedKey(`epgCache_${playlistId}`)).catch(() => undefined);
+  return typeof checked === 'number' && Date.now() - checked < CACHE_TTL_MS;
+}
+
+/** Met à jour la petite fiche d'index quand l'analyse existait déjà (cache hérité). */
+export async function rememberParsedEPGMeta(playlistId: string, url: string, fetchedAt: number): Promise<void> {
+  try { await setMeta(parsedMetaKey(playlistId), { url, fetchedAt }); } catch { /* non bloquant */ }
+}
+
 export async function saveParsedEPGCache(playlistId: string, url: string, fetchedAt: number, data: EPGData): Promise<void> {
   try {
     await setMeta(parsedKey(playlistId), { fetchedAt, url, data: packEPGData(data) } satisfies EPGParsedCache);
+    await setMeta(parsedMetaKey(playlistId), { url, fetchedAt });
   } catch { /* stockage plein : non bloquant */ }
 }
 

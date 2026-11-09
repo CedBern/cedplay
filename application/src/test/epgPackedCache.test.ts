@@ -32,10 +32,11 @@ const sample = (): EPGData => ({
 it('ne sérialise qu’une seule fois le long résumé partagé dans le cache du guide', async () => {
   const write = vi.spyOn(idb, 'setMeta');
   await saveParsedEPGCache('packed-cache-text', 'https://example.test/guide', 42, sample());
-  const payload = write.mock.calls.at(-1)?.[1];
+  const packedCall = write.mock.calls.find(([key]) => key === 'epgParsed_v2_packed-cache-text');
+  const payload = packedCall?.[1];
   const serialized = JSON.stringify(payload);
   expect(serialized.split(repeatedDescription).length - 1).toBe(1);
-  expect(write.mock.calls.at(-1)?.[0]).toBe('epgParsed_v2_packed-cache-text');
+  expect(packedCall?.[0]).toBe('epgParsed_v2_packed-cache-text');
 });
 
 it('restaure dates, ordre, champs absents, chaînes vides et identités personnalisées sans perte', async () => {
