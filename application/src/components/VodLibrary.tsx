@@ -17,6 +17,7 @@ import { enrichRecommendations, type TasteEnrichment } from '@/utils/tasteEnrich
 import { externalSeeds, externalSummary } from '@/utils/externalWatch';
 import { ExternalWatchDialog } from '@/components/ExternalWatchDialog';
 import { normalizeTitle, normalizeForCompare } from '@/utils/titleNormalize';
+import { normalizeWatchRegion } from '@/data/watchRegions';
 import { TmdbPanel } from '@/components/TmdbPanel';
 import { SubtitleSelector, type ReadySubtitle } from '@/components/SubtitleSelector';
 import { PlatformLogo } from '@/components/PlatformLogo';
@@ -140,6 +141,11 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const [selected, setSelected] = useState<CatalogItem | null>(null);
   const [details, setDetails] = useState<CatalogDetails | null>(null);
   const [detailError, setDetailError] = useState('');
+  // Titre TMDB ouvert depuis une rangée (absent du catalogue) : il remplace la fiche
+  // du titre sélectionné, dont le synopsis fournisseur et les actions ne le concernent pas.
+  const [tmdbTitle, setTmdbTitle] = useState<{ filmKey: string; title: string; year: string } | null>(null);
+  useEffect(() => { setTmdbTitle(null); }, [selected]);
+  const shownTitle = selected && tmdbTitle?.filmKey === selected.id ? tmdbTitle : null;
   const [season, setSeason] = useState('');
   const [subtitleEpisodeId, setSubtitleEpisodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -730,8 +736,8 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     }}
     // grid-cols-1 = minmax(0, 1fr) : sans lui, la rangée « Films similaires » (cartes
     // non rétrécissables) élargit la colonne implicite et pousse toute la fiche hors écran.
-    className="grid-cols-1 bg-neutral-950 text-white border-neutral-900 max-h-[90dvh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 sm:max-w-2xl"><DialogHeader><DialogTitle className="flex items-center gap-2">{selected && matchStreamingPlatformOrNetwork(selected.name) && <PlatformLogo platformId={matchStreamingPlatformOrNetwork(selected.name)} size="sm" className="h-5 w-5 rounded" />}<span className="truncate">{selected?.name}</span></DialogTitle><DialogDescription>{kind === 'movie' ? 'Fiche du film et lecture' : 'Saisons et épisodes'}</DialogDescription></DialogHeader>
-    {selected && (
+    className="grid-cols-1 bg-neutral-950 text-white border-neutral-900 max-h-[90dvh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 sm:max-w-2xl"><DialogHeader><DialogTitle className="flex items-center gap-2">{selected && !shownTitle && matchStreamingPlatformOrNetwork(selected.name) && <PlatformLogo platformId={matchStreamingPlatformOrNetwork(selected.name)} size="sm" className="h-5 w-5 rounded" />}<span className="truncate">{shownTitle ? shownTitle.title : selected?.name}</span></DialogTitle><DialogDescription>{shownTitle ? 'Titre recommandé, absent de ta playlist' : kind === 'movie' ? 'Fiche du film et lecture' : 'Saisons et épisodes'}</DialogDescription></DialogHeader>
+    {selected && !shownTitle && (
       <div className="flex items-center gap-2 pt-1 pb-1">
         <Button
           variant="outline"
@@ -765,16 +771,20 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         </Button>
       </div>
     )}
-    {!details && !detailError && <p role="status">Chargement de la fiche…</p>}
-    {detailError && <p role="alert" className="text-amber-300">{detailError}</p>}
-    {details && <div className="space-y-3 text-sm text-neutral-300"><p>{[details.releaseDate, details.duration].filter(Boolean).join(' · ')}</p>{details.plot?.trim() ? <p className="whitespace-pre-line">{details.plot}</p> : !tmdbApiKey?.trim() && <p>Synopsis non fourni.</p>}{details.director && <p>Réalisation : {details.director}</p>}{details.cast && <p>Avec : {details.cast}</p>}</div>}
+    {!details && !detailError && !shownTitle && <p role="status">Chargement de la fiche…</p>}
+    {detailError && !shownTitle && <p role="alert" className="text-amber-300">{detailError}</p>}
+    {details && !shownTitle && <div className="space-y-3 text-sm text-neutral-300"><p>{[details.releaseDate, details.duration].filter(Boolean).join(' · ')}</p>{details.plot?.trim() ? <p className="whitespace-pre-line">{details.plot}</p> : !tmdbApiKey?.trim() && <p>Synopsis non fourni.</p>}{details.director && <p>Réalisation : {details.director}</p>}{details.cast && <p>Avec : {details.cast}</p>}</div>}
     {selected && (
       <TmdbPanel
         name={selected.name}
         year={details?.releaseDate.match(/\d{4}/)?.[0] || normalizeTitle(selected.name).year}
         tmdbId={details?.tmdbId || selected.tmdbId}
+        sheetKey={selected.id}
+        onActiveChange={setTmdbTitle}
         kind={kind}
         apiKey={tmdbApiKey}
+        region={normalizeWatchRegion(settings.watchRegion)}
+        providerIds={settings.watchProviderIds ?? []}
         catalogItems={kind === 'movie' && allMovies.length > 0 ? allMovies : items}
         onOpenItem={setSelected}
         // Tant que la fiche du fournisseur n'est pas arrivée, on la suppose complète :
@@ -784,7 +794,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           : { overview: true, director: true, cast: true }}
       />
     )}
-    {selected && settings.subtitlesEnabled !== false && (kind === 'movie' || subtitleEpisodeId) && (
+    {selected && !shownTitle && settings.subtitlesEnabled !== false && (kind === 'movie' || subtitleEpisodeId) && (
       <SubtitleSelector
         key={`${selected.id}:${subtitleEpisodeId || 'movie'}`}
         mediaTitle={selected.name}
@@ -803,9 +813,9 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         onSubtitleReady={setCurrentSub}
       />
     )}
-    {kind === 'movie' && selected && <div className="flex flex-wrap gap-2"><Button data-remote-start disabled={busy || !(details?.extension || selected.extension)} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name)}>{progressLabel(selected.id)}</Button>{cachedProgress(selected.id).saved && <Button variant="secondary" disabled={busy} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name, true)}>Depuis le début</Button>}</div>}
-    {kind === 'movie' && details && !details.extension && !selected?.extension && <p className="text-amber-300">Le fournisseur n’a pas indiqué de format de lecture.</p>}
-    {kind === 'series' && details && <div className="space-y-3">
+    {kind === 'movie' && selected && !shownTitle && <div className="flex flex-wrap gap-2"><Button data-remote-start disabled={busy || !(details?.extension || selected.extension)} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name)}>{progressLabel(selected.id)}</Button>{cachedProgress(selected.id).saved && <Button variant="secondary" disabled={busy} onClick={() => void play(selected.id, details?.extension || selected.extension, selected.name, true)}>Depuis le début</Button>}</div>}
+    {kind === 'movie' && details && !shownTitle && !details.extension && !selected?.extension && <p className="text-amber-300">Le fournisseur n’a pas indiqué de format de lecture.</p>}
+    {kind === 'series' && details && !shownTitle && <div className="space-y-3">
       {details.episodes.length === 0 ? <p>Aucun épisode fourni pour cette série.</p> : <><select aria-label="Saison" className="w-full bg-neutral-900 p-3 rounded-md" value={season} onChange={e => setSeason(e.target.value)}>{[...new Set(details.episodes.map(e => e.season))].map(s => <option key={s} value={s}>Saison {s}</option>)}</select><div className="space-y-2">{details.episodes.filter(e => e.season === season).map((e, idx) => <div key={e.id} className="bg-white/5 rounded-lg p-3 space-y-2"><p>{e.number}. {e.name}</p>{e.plot && <p className="text-xs text-neutral-400 line-clamp-3">{e.plot}</p>}<div className="flex flex-wrap gap-2">{settings.subtitlesEnabled !== false && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setCurrentSub(null); setSubtitleEpisodeId(e.id); }}>Sous-titres épisode {e.number}</Button>}<Button size="sm" disabled={busy || !e.extension} {...(idx === 0 ? { 'data-remote-start': true } : {})} onClick={() => void play(e.id, e.extension, e.name)}>{progressLabel(e.id)}</Button>{cachedProgress(e.id).saved && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void play(e.id, e.extension, e.name, true)}>Depuis le début</Button>}</div>{!e.extension && <p className="text-xs text-amber-300">Format non fourni.</p>}</div>)}</div></>}
     </div>}
   </DialogContent></Dialog>;

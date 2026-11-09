@@ -8,6 +8,8 @@ import { redactChangeLog } from '@/utils/redact';
 import { isValidPin } from '@/utils/parentalControl';
 import { toast } from 'sonner';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
+import { WatchSubscriptions } from '@/components/WatchSubscriptions';
+import { WATCH_REGIONS, normalizeWatchRegion } from '@/data/watchRegions';
 import { getLoadedEpg } from '@/utils/nativePlayer';
 import { epgMemoryStats, jsHeap, megabytes } from '@/utils/epgStats';
 
@@ -24,6 +26,7 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
   const [details, setDetails] = useState('');
   const [pinOpen, setPinOpen] = useState(false);
   const [parentalEditAuthorized, setParentalEditAuthorized] = useState(false);
+  const watchRegion = normalizeWatchRegion(draft.watchRegion);
   useEffect(() => { if (open) setParentalEditAuthorized(false); else setPinOpen(false); }, [open]);
   // Code PIN haché : le champ démarre vide, « vide = code inchangé ».
   useEffect(() => { if (open) setDraft(isHashedPin(currentSettings.parentalPin) ? { ...currentSettings, parentalPin: '' } : currentSettings); }, [open, currentSettings]);
@@ -135,11 +138,42 @@ export function SettingsPanel({ open, onOpenChange, currentSettings, onSettingsC
           </label>
         </>)}
 
-        {section('Films et séries', <label className="block py-3">
-          <span className="text-sm text-foreground">Clé ou jeton TMDB (fiches films enrichies)</span>
-          <input className={field} type="text" placeholder="Clé API v3 ou API Read Access Token (facultatif)" value={draft.tmdbApiKey ?? ''} onChange={e => setDraft({ ...draft, tmdbApiKey: e.target.value })} />
-          <span className="mt-1 block text-xs text-muted-foreground">Compte gratuit sur themoviedb.org › Paramètres › API. Clé courte ou long jeton de lecture acceptés. Synopsis, casting, notes et films similaires ; les sous-titres utilisent OpenSubtitles.</span>
-        </label>)}
+        {section('Films et séries', <>
+          <label className="block py-3">
+            <span className="text-sm text-foreground">Clé ou jeton TMDB (fiches films enrichies)</span>
+            <input className={field} type="text" placeholder="Clé API v3 ou API Read Access Token (facultatif)" value={draft.tmdbApiKey ?? ''} onChange={e => setDraft({ ...draft, tmdbApiKey: e.target.value })} />
+            <span className="mt-1 block text-xs text-muted-foreground">Compte gratuit sur themoviedb.org › Paramètres › API. Clé courte ou long jeton de lecture acceptés. Synopsis, casting, notes et films similaires ; les sous-titres utilisent OpenSubtitles.</span>
+          </label>
+          <div className="py-3">
+            <span className="block text-sm text-foreground">Pays des offres légales</span>
+            <span className="block text-xs text-muted-foreground">Les catalogues diffèrent d’un pays à l’autre : « où regarder » affiche les plateformes qui diffusent le film dans le pays choisi. Changer de pays remet à zéro la sélection d’abonnements.</span>
+            <div role="group" aria-label="Pays des offres légales" className="mt-2 flex flex-wrap gap-2">
+              {WATCH_REGIONS.map(region => (
+                <Button
+                  key={region.code}
+                  type="button"
+                  size="sm"
+                  variant={watchRegion === region.code ? 'default' : 'outline'}
+                  aria-pressed={watchRegion === region.code}
+                  className="min-h-10 px-3"
+                  onClick={() => {
+                    // Recliquer le pays déjà choisi ne doit pas effacer les abonnements cochés.
+                    if (watchRegion === region.code) return;
+                    setDraft({ ...draft, watchRegion: region.code, watchProviderIds: [] });
+                  }}
+                >
+                  {region.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <WatchSubscriptions
+            apiKey={draft.tmdbApiKey ?? ''}
+            region={watchRegion}
+            selected={draft.watchProviderIds ?? []}
+            onChange={ids => setDraft({ ...draft, watchProviderIds: ids })}
+          />
+        </>)}
 
         {section('Sous-titres', <>
           {check(draft.subtitlesEnabled ?? true, v => setDraft({ ...draft, subtitlesEnabled: v }), 'Recherche automatique des sous-titres', 'Français d’abord, puis anglais ou espagnol.')}

@@ -1,5 +1,6 @@
 import { getSettingsFromDB, saveSettingsToDB, PersistedSettings, pushSettingsChangeLogEntry, updateSettingsMigrationStats, type SettingsChangeLogEntry } from '@/utils/idb';
 import { redactSetting } from '@/utils/redact';
+import { DEFAULT_WATCH_REGION, normalizeWatchRegion, normalizeWatchSubscriptions } from '@/data/watchRegions';
 import { z } from 'zod';
 
 const STORAGE_KEYS = {
@@ -36,6 +37,8 @@ export interface AppSettings {
   autoNextEpisode?: boolean; // web VOD : lancer l'épisode suivant à la fin de la lecture
   epgUrl?: string; // custom XMLTV URL for lists without a linked Xtream account
   tmdbApiKey?: string; // TMDB API key or read access token (enriched VOD info)
+  watchRegion?: string; // pays des offres légales TMDB (code à deux lettres, Mexique par défaut)
+  watchProviderIds?: number[]; // fournisseurs TMDB de ce pays retenus comme abonnements
   subtitlesEnabled?: boolean; // active la recherche et l'affichage des sous-titres
   subtitleAutoTranslate?: boolean; // traduit automatiquement les sous-titres vers le français si absent
   subtitlePreferredLang?: 'fr' | 'en' | 'es'; // langue préférée des sous-titres
@@ -73,6 +76,8 @@ const appSettingsSchema = z.object({
   epgUrl: z.string().max(500).optional(),
   // Les jetons de lecture v4 TMDB font ~220 caractères : 200 les tronquait.
   tmdbApiKey: z.string().max(MAX_TMDB_CREDENTIAL_LENGTH).optional(),
+  watchRegion: z.string().length(2).optional(),
+  watchProviderIds: z.array(z.number().int().positive()).max(30).optional(),
   subtitlesEnabled: z.boolean().optional(),
   subtitleAutoTranslate: z.boolean().optional(),
   subtitlePreferredLang: z.enum(['fr', 'en', 'es']).optional(),
@@ -100,6 +105,18 @@ const appSettingsSchema = z.object({
 const SETTINGS_LOAD_TIMEOUT_MS = 8_000;
 
 class SettingsLoadTimeoutError extends Error {}
+
+/**
+ * Égalité de valeur pour la comparaison « les réglages ont-ils changé ? ».
+ * Les tableaux (identifiants d'abonnements) sont neufs à chaque validation :
+ * une comparaison par référence les ferait passer pour modifiés et déclencherait
+ * une écriture à chaque démarrage.
+ */
+function sameSettingValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((value, index) => value === b[index]);
+  return false;
+}
 
 export class StorageManager {
   // In-memory cache to avoid repeated IndexedDB reads within a session
@@ -170,6 +187,8 @@ export class StorageManager {
   autoNextEpisode: true,
   epgUrl: '',
   tmdbApiKey: '',
+  watchRegion: DEFAULT_WATCH_REGION,
+  watchProviderIds: [],
   subtitlesEnabled: true,
   subtitleAutoTranslate: true,
   subtitlePreferredLang: 'fr',
@@ -216,7 +235,7 @@ export class StorageManager {
       const differs = (() => {
         const keys = new Set<keyof AppSettings>([...Object.keys(repaired), ...Object.keys(dbSettings)] as (keyof AppSettings)[]);
         for (const k of keys) {
-          if ((dbSettings as Partial<AppSettings>)[k] !== repaired[k]) return true;
+          if (!sameSettingValue((dbSettings as Partial<AppSettings>)[k], repaired[k])) return true;
         }
         return false;
       })();
@@ -377,6 +396,9 @@ export class StorageManager {
   ...(p.autoNextEpisode !== undefined ? { autoNextEpisode: p.autoNextEpisode } : {}),
   ...(p.epgUrl !== undefined ? { epgUrl: p.epgUrl } : {}),
   ...(p.tmdbApiKey !== undefined ? { tmdbApiKey: p.tmdbApiKey } : {}),
+  // Toujours présents : les installations antérieures n'ont pas ces clés.
+  watchRegion: normalizeWatchRegion(p.watchRegion),
+  watchProviderIds: normalizeWatchSubscriptions(p.watchProviderIds),
   ...(p.subtitlesEnabled !== undefined ? { subtitlesEnabled: p.subtitlesEnabled } : {}),
   ...(p.subtitleAutoTranslate !== undefined ? { subtitleAutoTranslate: p.subtitleAutoTranslate } : {}),
   ...(p.subtitlePreferredLang !== undefined ? { subtitlePreferredLang: p.subtitlePreferredLang } : {}),
@@ -416,6 +438,8 @@ export class StorageManager {
       epgUrl: typeof s.epgUrl === 'string' ? String(s.epgUrl).slice(0, 500) : (base.epgUrl as string),
       // Large marge : les jetons de lecture v4 TMDB dépassent 200 caractères.
       tmdbApiKey: typeof s.tmdbApiKey === 'string' ? String(s.tmdbApiKey).slice(0, MAX_TMDB_CREDENTIAL_LENGTH) : (base.tmdbApiKey as string),
+      watchRegion: normalizeWatchRegion(s.watchRegion),
+      watchProviderIds: normalizeWatchSubscriptions(s.watchProviderIds),
       subtitlesEnabled: coerceBool(s.subtitlesEnabled, base.subtitlesEnabled as boolean),
       subtitleAutoTranslate: coerceBool(s.subtitleAutoTranslate, base.subtitleAutoTranslate as boolean),
       subtitlePreferredLang: s.subtitlePreferredLang === 'en' || s.subtitlePreferredLang === 'es' ? s.subtitlePreferredLang : 'fr',

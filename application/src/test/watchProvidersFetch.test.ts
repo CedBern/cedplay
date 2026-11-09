@@ -37,18 +37,29 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('fetchWatchProviders', () => {
   it('interroge le point TMDB du pays puis sert le cache 12 h', async () => {
-    const first = await fetchWatchProviders(27205, 'movie', 'cle-test');
+    const first = await fetchWatchProviders(27205, 'movie', 'cle-test', 'FR');
     expect(first?.offers[0]).toMatchObject({ name: 'Netflix', platformId: 'netflix' });
     expect(new URL(fetcher.mock.calls[0]![0] as string).pathname).toBe('/3/movie/27205/watch/providers');
 
-    const second = await fetchWatchProviders(27205, 'movie', 'cle-test');
+    const second = await fetchWatchProviders(27205, 'movie', 'cle-test', 'FR');
     expect(second).toEqual(first);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it('met le pays dans la clé de cache : le Mexique ne relit pas les offres françaises', async () => {
+    await fetchWatchProviders(27205, 'movie', 'cle-test', 'FR');
+    const mexico = await fetchWatchProviders(27205, 'movie', 'cle-test', 'MX');
+    expect(mexico).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect([...meta.store.keys()]).toEqual(expect.arrayContaining([
+      'tmdb_providers_movie_27205_FR',
+      'tmdb_providers_movie_27205_MX',
+    ]));
+  });
+
   it('passe par CapacitorHttp sur Android et distingue films et séries', async () => {
     http.native = true;
-    const availability = await fetchWatchProviders(42, 'tv', 'cle-test');
+    const availability = await fetchWatchProviders(42, 'tv', 'cle-test', 'FR');
     expect(availability?.region).toBe('FR');
     expect((http.get.mock.calls[0]![0] as { url: string }).url).toContain('/3/tv/42/watch/providers');
     expect(fetcher).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickBestMatch, tmdbImageUrl, tmdbPageUrl, type TmdbSearchResult } from '@/utils/tmdb';
+import { pickBestMatch, tmdbImageUrl, type TmdbSearchResult } from '@/utils/tmdb';
 
 const result = (id: number, title: string): TmdbSearchResult => ({
   id, title, releaseDate: '2020-01-01', posterPath: null, voteAverage: 7, voteCount: 100,
@@ -28,10 +28,9 @@ describe('pickBestMatch', () => {
 });
 
 describe('helpers TMDB', () => {
-  it('construit l’URL d’image et la page TMDB', () => {
+  it('construit l’URL d’image', () => {
     expect(tmdbImageUrl('/abc.jpg', 'w200')).toBe('https://image.tmdb.org/t/p/w200/abc.jpg');
     expect(tmdbImageUrl(null)).toBe('');
-    expect(tmdbPageUrl('movie', 42)).toBe('https://www.themoviedb.org/movie/42');
   });
 });
 

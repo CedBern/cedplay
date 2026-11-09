@@ -6,7 +6,7 @@ import type { WatchAvailability } from '@/utils/watchAvailability';
 
 const mocks = vi.hoisted(() => ({
   available: true,
-  fetch: vi.fn<(id: number, kind: string, apiKey: string) => Promise<WatchAvailability | null>>(),
+  fetch: vi.fn<(id: number, kind: string, apiKey: string, region?: string) => Promise<WatchAvailability | null>>(),
   openWeb: vi.fn(async () => {}),
 }));
 
@@ -32,12 +32,12 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-const renderPanel = () => render(<WatchProviders tmdbId={27205} kind="movie" title="Inception" apiKey="clé" />);
+const renderPanel = () => render(<WatchProviders tmdbId={27205} kind="movie" title="Inception" apiKey="clé" region="FR" />);
 
 it('affiche les offres et ouvre l’app officielle sur la recherche du titre', async () => {
   renderPanel();
   expect(await screen.findByTestId('watch-providers')).toBeTruthy();
-  expect(mocks.fetch).toHaveBeenCalledWith(27205, 'movie', 'clé');
+  expect(mocks.fetch).toHaveBeenCalledWith(27205, 'movie', 'clé', 'FR');
 
   await userEvent.click(screen.getByRole('button', { name: /Netflix/ }));
   expect(mocks.openWeb).toHaveBeenCalledWith(
@@ -100,7 +100,7 @@ it('retombe sur le navigateur hors Android', async () => {
 });
 
 it('ne demande rien sans clé TMDB', async () => {
-  render(<WatchProviders tmdbId={27205} kind="movie" title="Inception" apiKey="" />);
+  render(<WatchProviders tmdbId={27205} kind="movie" title="Inception" apiKey="" region="MX" />);
   await waitFor(() => expect(mocks.fetch).not.toHaveBeenCalled());
   expect(screen.queryByTestId('watch-providers')).toBeNull();
 });
@@ -110,6 +110,23 @@ it('annonce l’absence d’offre légale en France', async () => {
   renderPanel();
   expect(await screen.findByText(/Aucune offre légale répertoriée en France/)).toBeTruthy();
   expect(screen.getByText(/JustWatch via TMDB/)).toBeTruthy();
+});
+
+it('affiche les offres du Mexique quand le pays est réglé sur MX', async () => {
+  mocks.fetch.mockResolvedValue({
+    region: 'MX',
+    link: 'https://www.themoviedb.org/movie/27205/watch?locale=MX',
+    offers: [{
+      providerId: 457, name: 'VIX', displayName: 'ViX', logoPath: null,
+      kind: 'flatrate', displayPriority: 1, platformId: 'vix', distributedBy: null,
+    }],
+  });
+  render(<WatchProviders tmdbId={27205} kind="movie" title="Inception" apiKey="clé" region="MX" />);
+  expect(await screen.findByText('Où regarder au Mexique')).toBeTruthy();
+  expect(mocks.fetch).toHaveBeenCalledWith(27205, 'movie', 'clé', 'MX');
+
+  await userEvent.click(screen.getByRole('button', { name: /ViX/ }));
+  expect(mocks.openWeb).toHaveBeenCalledWith('https://vix.com', 'ViX', undefined, true);
 });
 
 it('reste silencieux si TMDB ne répond pas', async () => {

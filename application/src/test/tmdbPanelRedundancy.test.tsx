@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { TmdbPanel } from '@/components/TmdbPanel';
 import type { TmdbDetails } from '@/utils/tmdb';
+import type { CatalogItem } from '@/utils/xtreamCatalog';
 
 const details: TmdbDetails = {
   id: 1, title: 'Film fictif', overview: 'Synopsis TMDB', releaseDate: '2026-03-09', runtime: 84, genres: ['Documentaire'],
@@ -17,8 +19,23 @@ vi.mock('@/components/WatchProviders', () => ({ WatchProviders: () => null }));
 beforeEach(() => { mocks.fetchTmdbDetails.mockResolvedValue(details); });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-const panel = (provided?: { overview?: boolean; director?: boolean; cast?: boolean }) => render(
-  <TmdbPanel name="Film fictif" year="2026" kind="movie" apiKey="cle" tmdbId={1} catalogItems={[]} onOpenItem={() => {}} provided={provided} />,
+const panel = (
+  provided?: { overview?: boolean; director?: boolean; cast?: boolean },
+  catalogItems: CatalogItem[] = [],
+  onOpenItem: (item: CatalogItem) => void = () => {},
+) => render(
+  <TmdbPanel
+    name="Film fictif"
+    year="2026"
+    kind="movie"
+    apiKey="cle"
+    tmdbId={1}
+    region="MX"
+    providerIds={[]}
+    catalogItems={catalogItems}
+    onOpenItem={onOpenItem}
+    provided={provided}
+  />,
 );
 
 it('ne répète pas synopsis, réalisation et casting déjà fournis par le service IPTV', async () => {
@@ -59,4 +76,30 @@ it('ne signale rien tant que la fiche du fournisseur est supposée complète', a
   panel({ overview: true });
   await screen.findByText('Fiche TMDB indisponible (réseau ou clé invalide).');
   expect(screen.queryByText('Synopsis non fourni.')).toBeNull();
+});
+
+it('ouvre un film similaire dans la fiche, sans quitter l’application', async () => {
+  const open = vi.spyOn(window, 'open').mockReturnValue(null);
+  mocks.fetchTmdbDetails.mockImplementation(async (id: number) => (id === 2
+    ? { ...details, id: 2, title: 'Recommandé fictif', overview: 'Synopsis du recommandé', similar: [] }
+    : details));
+  panel({ overview: true, director: true, cast: true });
+  await screen.findByText('Recommandé fictif');
+  await userEvent.click(screen.getByRole('button', { name: /Recommandé fictif/ }));
+
+  expect(await screen.findByText('Synopsis du recommandé')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Revenir à Film fictif/ })).toBeInTheDocument();
+  expect(open).not.toHaveBeenCalled();
+  open.mockRestore();
+});
+
+it('ouvre directement le film similaire déjà présent dans la playlist', async () => {
+  const opened: CatalogItem[] = [];
+  const item: CatalogItem = {
+    id: '42', name: 'Recommandé fictif (2010)', poster: '', categoryId: 'cat', extension: 'mp4', rating: '7',
+  };
+  panel({}, [item], (found) => { opened.push(found); });
+  expect(await screen.findByText('Dans ta playlist')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /Recommandé fictif/ }));
+  expect(opened).toEqual([item]);
 });

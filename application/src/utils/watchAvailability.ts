@@ -3,11 +3,19 @@
  * officielle de la plateforme qui le propose.
  *
  * Aucun flux tiers n'est manipulé : on affiche seulement où un film est diffusé
- * légalement en France, puis on délègue à l'application officielle (ou au site)
- * exactement comme les tuiles « Plateformes » du Direct.
+ * légalement dans le pays choisi (Mexique par défaut), puis on délègue à
+ * l'application officielle (ou au site) exactement comme les tuiles
+ * « Plateformes » du Direct.
  */
 
 import { streamingPlatforms } from '@/data/streamingPlatforms';
+import { DEFAULT_WATCH_REGION } from '@/data/watchRegions';
+
+export type { WatchRegion } from '@/data/watchRegions';
+export {
+  DEFAULT_WATCH_REGION, MAX_WATCH_SUBSCRIPTIONS, WATCH_REGIONS,
+  normalizeWatchRegion, normalizeWatchSubscriptions, watchRegionLabel, watchRegionPhrase,
+} from '@/data/watchRegions';
 
 export type WatchOfferKind = 'flatrate' | 'free' | 'ads' | 'rent' | 'buy';
 
@@ -34,8 +42,6 @@ export interface WatchAvailability {
   offers: WatchOffer[];
 }
 
-/** L'application est francophone : les offres affichées sont celles de la France. */
-export const WATCH_REGION = 'FR';
 export const MAX_WATCH_OFFERS = 8;
 
 const KIND_ORDER: WatchOfferKind[] = ['flatrate', 'free', 'ads', 'rent', 'buy'];
@@ -100,6 +106,27 @@ const TMDB_PROVIDER_PLATFORMS: Record<string, string> = {
   'dazn': 'dazn',
   'ocs': 'ocs',
   'cine plus ocs': 'ocs',
+  // Mexique et Amérique latine : noms renvoyés par TMDB dans la région MX.
+  'vix': 'vix',
+  'vix premium': 'vix',
+  'claro video': 'clarovideo',
+  'tubi': 'tubi',
+  'directv go': 'directvgo',
+  'apple tv store': 'appletv',
+  'paramount plus premium': 'paramountplus',
+  'netflix standard with ads': 'netflix',
+};
+
+/**
+ * Plateformes régionales sans tuile dans le Direct : elles ne servent ici qu'à
+ * recevoir une offre TMDB et à ouvrir leur application ou leur site. Une entrée
+ * de `streamingPlatforms` l'emporte toujours, d'où l'absence de doublon.
+ */
+const REGIONAL_PLATFORMS: Record<string, { name: string; url: string; androidPackages?: string[] }> = {
+  vix: { name: 'ViX', url: 'https://vix.com' },
+  clarovideo: { name: 'Claro video', url: 'https://www.clarovideo.com' },
+  tubi: { name: 'Tubi', url: 'https://tubitv.com' },
+  directvgo: { name: 'DIRECTV GO', url: 'https://www.directvgo.com' },
 };
 
 /**
@@ -111,6 +138,12 @@ const DISTRIBUTED_OFFERS: Array<{ suffix: RegExp; platformId: string }> = [
   { suffix: / amazon channel$/, platformId: 'primevideo' },
   { suffix: / apple tv channel$/, platformId: 'appletv' },
 ];
+
+/** Plateforme connue (tuile du Direct ou plateforme régionale), sinon `undefined`. */
+function platformInfo(platformId: string | null): { name: string; url: string; androidPackages?: string[] | undefined } | undefined {
+  if (!platformId) return undefined;
+  return streamingPlatforms.find(p => p.id === platformId) ?? REGIONAL_PLATFORMS[platformId];
+}
 
 /** Normalise un nom de fournisseur TMDB : casse, accents, « + » et séparateurs. */
 function providerKey(name: string): string {
@@ -127,7 +160,7 @@ function resolveProvider(name: string): Pick<WatchOffer, 'platformId' | 'display
   const key = providerKey(name);
   const distributed = DISTRIBUTED_OFFERS.find(entry => entry.suffix.test(key));
   if (distributed) {
-    const distributor = streamingPlatforms.find(p => p.id === distributed.platformId);
+    const distributor = platformInfo(distributed.platformId);
     return {
       platformId: distributed.platformId,
       displayName: name,
@@ -135,9 +168,9 @@ function resolveProvider(name: string): Pick<WatchOffer, 'platformId' | 'display
     };
   }
   const platformId = TMDB_PROVIDER_PLATFORMS[key] ?? null;
-  const platform = platformId ? streamingPlatforms.find(p => p.id === platformId) : undefined;
+  const platform = platformInfo(platformId);
   return {
-    platformId: platform?.id ?? null,
+    platformId: platform ? platformId : null,
     displayName: platform?.name ?? name,
     distributedBy: null,
   };
@@ -154,7 +187,7 @@ export function providerLogoUrl(logoPath: string | null): string {
  * en abonnement **et** en location (Prime Video par exemple). On ne garde que le mode
  * le plus favorable, puis on trie : abonnement, gratuit, pub, location, achat.
  */
-export function parseWatchAvailability(data: unknown, region = WATCH_REGION): WatchAvailability | null {
+export function parseWatchAvailability(data: unknown, region: string = DEFAULT_WATCH_REGION): WatchAvailability | null {
   const results = object(object(data).results);
   const country = object(results[region]);
   const link = str(country.link);
@@ -205,16 +238,15 @@ const SEARCH_URLS: Record<string, (query: string) => string> = {
 
 /** URL à ouvrir pour un fournisseur connu, ou `null` s'il n'a pas d'app/site CedPlay. */
 export function watchUrlFor(platformId: string | null, title: string): string | null {
-  const platform = platformId ? streamingPlatforms.find(p => p.id === platformId) : undefined;
+  const platform = platformInfo(platformId);
   if (!platform) return null;
-  const search = SEARCH_URLS[platform.id];
+  const search = SEARCH_URLS[platformId as string];
   return search ? search(encodeURIComponent(title.trim())) : platform.url;
 }
 
 /** Paquets Android de l'app officielle du fournisseur (vide si la plateforme est inconnue). */
 export function watchPackagesFor(platformId: string | null): string[] | undefined {
-  const platform = platformId ? streamingPlatforms.find(p => p.id === platformId) : undefined;
-  return platform?.androidPackages;
+  return platformInfo(platformId)?.androidPackages;
 }
 
 /**
@@ -224,6 +256,5 @@ export function watchPackagesFor(platformId: string | null): string[] | undefine
  */
 export function watchPlatformName(platformId: string | null, fallback: string): string {
   if (DISTRIBUTED_OFFERS.some(entry => entry.suffix.test(providerKey(fallback)))) return fallback;
-  const platform = platformId ? streamingPlatforms.find(p => p.id === platformId) : undefined;
-  return platform?.name ?? fallback;
+  return platformInfo(platformId)?.name ?? fallback;
 }

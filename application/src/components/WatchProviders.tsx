@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import { fetchWatchProviders, type TmdbKind } from '@/utils/tmdb';
 import {
-  OFFER_KIND_LABELS, providerLogoUrl, watchPackagesFor, watchUrlFor,
+  OFFER_KIND_LABELS, providerLogoUrl, watchPackagesFor, watchRegionPhrase, watchUrlFor,
   type WatchAvailability, type WatchOffer,
 } from '@/utils/watchAvailability';
 
@@ -13,6 +13,8 @@ interface WatchProvidersProps {
   kind: 'movie' | 'series';
   title: string;
   apiKey: string | undefined;
+  /** Pays des offres (code à deux lettres) : TMDB publie une disponibilité par pays. */
+  region: string;
 }
 
 /** Ouvre l'app officielle de la plateforme (ou son site) sur la recherche du titre. */
@@ -28,11 +30,11 @@ function openTarget(url: string, label: string, packages: string[] | undefined) 
 }
 
 /**
- * « Où regarder » : offres légales en France d'après TMDB, chaque pastille ouvrant
- * l'application officielle de la plateforme (Netflix, Prime Video, Arte…).
+ * « Où regarder » : offres légales du pays choisi d'après TMDB, chaque pastille
+ * ouvrant l'application officielle de la plateforme (Netflix, Prime Video, ViX…).
  * Silencieux sans clé TMDB, hors réseau ou si le titre n'a aucune offre connue.
  */
-export function WatchProviders({ tmdbId, kind, title, apiKey }: WatchProvidersProps) {
+export function WatchProviders({ tmdbId, kind, title, apiKey, region }: WatchProvidersProps) {
   const tmdbKind: TmdbKind = kind === 'movie' ? 'movie' : 'tv';
   const [availability, setAvailability] = useState<WatchAvailability | null>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'ready'>('idle');
@@ -42,11 +44,11 @@ export function WatchProviders({ tmdbId, kind, title, apiKey }: WatchProvidersPr
     if (!apiKey?.trim() || !tmdbId) { setState('idle'); return; }
     let cancelled = false;
     setState('loading');
-    void fetchWatchProviders(tmdbId, tmdbKind, apiKey)
+    void fetchWatchProviders(tmdbId, tmdbKind, apiKey, region)
       .then(result => { if (!cancelled) { setAvailability(result); setState('ready'); } })
       .catch(() => { if (!cancelled) setState('idle'); });
     return () => { cancelled = true; };
-  }, [apiKey, tmdbId, tmdbKind]);
+  }, [apiKey, tmdbId, tmdbKind, region]);
 
   const openOffer = useCallback((offer: WatchOffer) => {
     const url = watchUrlFor(offer.platformId, title) ?? availability?.link;
@@ -67,7 +69,7 @@ export function WatchProviders({ tmdbId, kind, title, apiKey }: WatchProvidersPr
       <div className="space-y-1">
         <p className="text-xs uppercase tracking-wide text-neutral-500">Où regarder</p>
         <p className="text-xs text-neutral-400">
-          Aucune offre légale répertoriée en France.
+          Aucune offre légale répertoriée {watchRegionPhrase(region)}.
           {availability.link && <> <button type="button" onClick={openAllOffers} className="text-primary hover:underline">Voir sur TMDB</button></>}
         </p>
         <p className="text-[10px] text-neutral-500">Données de disponibilité : JustWatch via TMDB</p>
@@ -77,7 +79,7 @@ export function WatchProviders({ tmdbId, kind, title, apiKey }: WatchProvidersPr
 
   return (
     <div className="space-y-2" data-testid="watch-providers">
-      <p className="text-xs uppercase tracking-wide text-neutral-500">Où regarder en France</p>
+      <p className="text-xs uppercase tracking-wide text-neutral-500">Où regarder {watchRegionPhrase(region)}</p>
       <div className="flex flex-wrap gap-1.5">
         {availability.offers.map(offer => (
           <button

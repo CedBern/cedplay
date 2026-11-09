@@ -70,3 +70,48 @@ it('un échec réseau TMDB reste limité à la fiche enrichie sur TV', async () 
   fireEvent.click(within(dialog).getByRole('button', { name: 'Regarder' }));
   await waitFor(() => expect(mocks.openVod).toHaveBeenCalled());
 });
+
+it('un titre similaire absent du catalogue isole sa fiche des actions du fournisseur', async () => {
+  const json = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
+  mocks.fetch.mockImplementation(async (input: string) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/3/movie/42') {
+      return json({
+        id: 42, title: 'Film fictif', overview: 'Synopsis TMDB du film fictif', release_date: '2026-03-09',
+        runtime: 84, genres: [{ id: 28, name: 'Action' }], vote_average: 7, vote_count: 10,
+        credits: { cast: [], crew: [] }, reviews: { results: [] },
+        recommendations: {
+          results: [{ id: 999, title: 'Recommandé TMDB', release_date: '2010-05-01', poster_path: null, vote_average: 7.5 }],
+        },
+      });
+    }
+    if (url.pathname === '/3/movie/999') {
+      return json({
+        id: 999, title: 'Recommandé TMDB', overview: 'Synopsis TMDB du recommandé', release_date: '2010-05-01',
+        runtime: 90, genres: [], vote_average: 7.5, vote_count: 5,
+        credits: { cast: [], crew: [] }, reviews: { results: [] }, recommendations: { results: [] },
+      });
+    }
+    return json({ id: 0, results: {} });
+  });
+
+  render(<VodLibrary playlist={playlist} kind="movie" tmdbApiKey="cle-fictive" parentalEnabled />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Film fictif' }));
+
+  const dialog = await screen.findByRole('dialog');
+  expect(await within(dialog).findByText('Synopsis du fournisseur')).toBeVisible();
+  fireEvent.click(await within(dialog).findByRole('button', { name: /Recommandé TMDB/ }));
+
+  // La fiche entière suit B : titre, synopsis TMDB, et plus aucune action de A.
+  expect(await within(dialog).findByText('Synopsis TMDB du recommandé')).toBeVisible();
+  expect(within(dialog).getByRole('heading', { name: 'Recommandé TMDB' })).toBeInTheDocument();
+  expect(within(dialog).queryByText('Synopsis du fournisseur')).toBeNull();
+  expect(within(dialog).queryByRole('button', { name: 'Ajouter à ma liste' })).toBeNull();
+  expect(within(dialog).queryByRole('button', { name: 'Regarder' })).toBeNull();
+
+  // Retour : la fiche du fournisseur et ses actions reviennent avec A.
+  fireEvent.click(within(dialog).getByRole('button', { name: /Revenir à Film fictif/ }));
+  expect(await within(dialog).findByText('Synopsis du fournisseur')).toBeVisible();
+  expect(within(dialog).getByRole('heading', { name: 'Film fictif' })).toBeInTheDocument();
+  expect(within(dialog).getByRole('button', { name: 'Regarder' })).toBeInTheDocument();
+});
