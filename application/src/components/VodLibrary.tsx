@@ -728,7 +728,9 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       if (el && !(el instanceof HTMLButtonElement && el.disabled)) { ficheFocusPlaced.current = true; el.focus(); return; }
       dialog?.focus();
     }}
-    className="bg-neutral-950 text-white border-neutral-900 max-h-[90dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle className="flex items-center gap-2">{selected && matchStreamingPlatformOrNetwork(selected.name) && <PlatformLogo platformId={matchStreamingPlatformOrNetwork(selected.name)} size="sm" className="h-5 w-5 rounded" />}<span className="truncate">{selected?.name}</span></DialogTitle><DialogDescription>{kind === 'movie' ? 'Fiche du film et lecture' : 'Saisons et épisodes'}</DialogDescription></DialogHeader>
+    // grid-cols-1 = minmax(0, 1fr) : sans lui, la rangée « Films similaires » (cartes
+    // non rétrécissables) élargit la colonne implicite et pousse toute la fiche hors écran.
+    className="grid-cols-1 bg-neutral-950 text-white border-neutral-900 max-h-[90dvh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 sm:max-w-2xl"><DialogHeader><DialogTitle className="flex items-center gap-2">{selected && matchStreamingPlatformOrNetwork(selected.name) && <PlatformLogo platformId={matchStreamingPlatformOrNetwork(selected.name)} size="sm" className="h-5 w-5 rounded" />}<span className="truncate">{selected?.name}</span></DialogTitle><DialogDescription>{kind === 'movie' ? 'Fiche du film et lecture' : 'Saisons et épisodes'}</DialogDescription></DialogHeader>
     {selected && (
       <div className="flex items-center gap-2 pt-1 pb-1">
         <Button
@@ -765,7 +767,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     )}
     {!details && !detailError && <p role="status">Chargement de la fiche…</p>}
     {detailError && <p role="alert" className="text-amber-300">{detailError}</p>}
-    {details && <div className="space-y-3 text-sm text-neutral-300"><p>{[details.releaseDate, details.duration].filter(Boolean).join(' · ')}</p><p className="whitespace-pre-line">{details.plot || 'Synopsis non fourni.'}</p>{details.director && <p>Réalisation : {details.director}</p>}{details.cast && <p>Avec : {details.cast}</p>}</div>}
+    {details && <div className="space-y-3 text-sm text-neutral-300"><p>{[details.releaseDate, details.duration].filter(Boolean).join(' · ')}</p>{details.plot?.trim() ? <p className="whitespace-pre-line">{details.plot}</p> : !tmdbApiKey?.trim() && <p>Synopsis non fourni.</p>}{details.director && <p>Réalisation : {details.director}</p>}{details.cast && <p>Avec : {details.cast}</p>}</div>}
     {selected && (
       <TmdbPanel
         name={selected.name}
@@ -775,6 +777,11 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         apiKey={tmdbApiKey}
         catalogItems={kind === 'movie' && allMovies.length > 0 ? allMovies : items}
         onOpenItem={setSelected}
+        // Tant que la fiche du fournisseur n'est pas arrivée, on la suppose complète :
+        // évite d'afficher le synopsis TMDB puis de le retirer une fraction de seconde après.
+        provided={details || detailError
+          ? { overview: !!details?.plot?.trim(), director: !!details?.director?.trim(), cast: !!details?.cast?.trim() }
+          : { overview: true, director: true, cast: true }}
       />
     )}
     {selected && settings.subtitlesEnabled !== false && (kind === 'movie' || subtitleEpisodeId) && (

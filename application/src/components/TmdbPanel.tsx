@@ -13,6 +13,11 @@ interface TmdbPanelProps {
   tmdbId?: number | undefined;
   catalogItems: CatalogItem[];
   onOpenItem: (item: CatalogItem) => void;
+  /**
+   * Ce que le fournisseur IPTV donne déjà dans la fiche (souvent repris de TMDB/IMDb) :
+   * ces éléments ne sont alors pas répétés ici, TMDB ne sert que de repli.
+   */
+  provided?: { overview?: boolean; director?: boolean; cast?: boolean } | undefined;
 }
 
 const formatRevenue = (revenue: number): string =>
@@ -40,8 +45,24 @@ function ReviewItem({ author, content, createdAt, rating }: { author: string; co
   );
 }
 
+/** Synopsis replié à 5 lignes sur les textes longs, pour garder Sous-titres et Regarder à portée. */
+function Overview({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = text.length > 280;
+  return (
+    <div className="space-y-1">
+      <p className={`text-sm text-neutral-200 whitespace-pre-line break-words ${long && !expanded ? 'line-clamp-5' : ''}`}>{text}</p>
+      {long && (
+        <button type="button" className="text-xs text-primary hover:underline" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Moins' : 'Lire la suite'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Fiche enrichie TMDB : synopsis français, casting, notes, revenu mondial, films similaires et avis spectateurs. */
-export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, tmdbId }: TmdbPanelProps) {
+export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, tmdbId, provided }: TmdbPanelProps) {
   const tmdbKind: TmdbKind = kind === 'movie' ? 'movie' : 'tv';
   const [details, setDetails] = useState<TmdbDetails | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'notfound' | 'nokey' | 'error'>('loading');
@@ -81,8 +102,14 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
     else window.open(tmdbPageUrl(tmdbKind, tmdbId), '_blank', 'noopener');
   };
 
+  // Ni le fournisseur ni TMDB n'ont de synopsis (TMDB sans texte, titre introuvable ou en échec).
+  const noOverviewAnywhere = !!provided && !provided.overview && (
+    (state === 'ready' && !details?.overview) || state === 'notfound' || state === 'error'
+  );
+  const missingOverview = noOverviewAnywhere && <p className="text-sm text-neutral-300">Synopsis non fourni.</p>;
+
   return (
-    <div className="border-t border-neutral-900 pt-3 space-y-3">
+    <div className="border-t border-neutral-900 pt-3 space-y-3 min-w-0">
       <p className="text-xs uppercase tracking-wide text-neutral-500">Fiche TMDB</p>
       {state === 'nokey' && (
         <p className="text-xs text-neutral-400">
@@ -93,6 +120,7 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
       {state === 'loading' && <p role="status" className="text-xs text-neutral-400">Enrichissement de la fiche…</p>}
       {state === 'notfound' && <p className="text-xs text-neutral-400">Titre introuvable sur TMDB.</p>}
       {state === 'error' && <p role="status" className="text-xs text-neutral-400">{authError ? 'Clé ou jeton TMDB refusé. Vérifie la valeur dans Réglages › Films et séries.' : 'Fiche TMDB indisponible (réseau ou clé invalide).'}</p>}
+      {state !== 'ready' && missingOverview}
 
       {state === 'ready' && details && (
         <>
@@ -117,24 +145,29 @@ export function TmdbPanel({ name, year, kind, apiKey, catalogItems, onOpenItem, 
                 <span className="text-neutral-500"> ({details.voteCount.toLocaleString('fr-FR')} votes)</span>
               </p>
               {details.revenue > 0 && <p>Revenu mondial : {formatRevenue(details.revenue)}</p>}
-              {details.director && <p>Réalisation : {details.director}</p>}
-              {details.cast.length > 0 && <p>Avec : {details.cast.map((c) => c.name).join(', ')}</p>}
+              {details.director && !provided?.director && <p>Réalisation : {details.director}</p>}
+              {details.cast.length > 0 && !provided?.cast && <p>Avec : {details.cast.map((c) => c.name).join(', ')}</p>}
             </div>
           </div>
-          {details.overview && <p className="text-sm text-neutral-200 whitespace-pre-line">{details.overview}</p>}
+          {details.overview && !provided?.overview && <Overview text={details.overview} />}
+          {missingOverview}
 
           <WatchProviders tmdbId={details.id} kind={kind} title={details.title || name} apiKey={apiKey} />
 
           {details.similar.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-white">Films similaires</p>
-              <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="space-y-2 min-w-0">
+              <p className="text-sm font-medium text-white">
+                {kind === 'movie' ? 'Films similaires' : 'Séries similaires'}
+                <span className="ml-2 text-xs font-normal text-neutral-500">{details.similar.length} · faire défiler →</span>
+              </p>
+              {/* Rangée défilante qui va jusqu'aux bords de la fiche : la carte coupée à droite signale la suite. */}
+              <div className="rail -mx-4 px-4 sm:-mx-6 sm:px-6 scroll-px-4 sm:scroll-px-6 flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1">
                 {details.similar.map((s) => (
                   <button
                     key={s.id}
                     type="button"
                     onClick={() => openSimilar(s.title, s.id, s.releaseDate)}
-                    className="w-24 shrink-0 text-left rounded-md overflow-hidden bg-white/5 border border-neutral-800 hover:border-primary"
+                    className="w-24 shrink-0 snap-start text-left rounded-md overflow-hidden bg-white/5 border border-neutral-800 hover:border-primary focus-visible:outline-none focus-visible:ring-2 ring-primary"
                     title={s.releaseDate ? `${s.title} (${s.releaseDate.slice(0, 4)})` : s.title}
                   >
                     <div className="aspect-[2/3] bg-neutral-900 flex items-center justify-center">
