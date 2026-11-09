@@ -337,3 +337,22 @@ it('série : une navigation déjà commencée garde la main à l’arrivée des 
   await screen.findByRole('button', { name: 'Regarder' });
   expect(document.activeElement).toBe(screen.getByRole('button', { name: /Ajouter à ma liste/ }));
 });
+
+it('propose « Pour toi » après Ma Liste et affiche la raison de la suggestion surlignée', () => {
+  const onToggleForYou = vi.fn();
+  setup({ onToggleForYou });
+  const nav = screen.getByRole('navigation', { name: 'Catégories' });
+  expect(within(nav).getAllByRole('button').map(button => button.textContent).slice(0, 3)).toEqual(['Toutes les catégories', 'Ma Liste2', 'Pour toi']);
+  fireEvent.click(within(nav).getByRole('button', { name: 'Pour toi' }));
+  expect(onToggleForYou).toHaveBeenCalledTimes(1);
+  cleanup();
+  setup({ onToggleForYou, showForYou: true, forYouReasons: new Map([['id-1', 'Parce que tu as vu Dune']]) });
+  expect(screen.getByRole('button', { name: 'Pour toi' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('heading', { name: /Pour toi/ })).toBeVisible();
+  expect(within(screen.getByRole('complementary', { name: 'Titre sélectionné' })).getByText('Parce que tu as vu Dune')).toBeVisible();
+});
+
+it('« Pour toi » vide explique pourquoi', () => {
+  setup({ onToggleForYou: vi.fn(), showForYou: true, items: [], hasMore: false, forYouEmptyText: 'Aucun film vu pour l’instant.' });
+  expect(screen.getByText('Aucun film vu pour l’instant.')).toBeVisible();
+});

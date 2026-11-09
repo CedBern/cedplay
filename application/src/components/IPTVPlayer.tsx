@@ -64,6 +64,8 @@ export function IPTVPlayer() {
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   // L'application s'ouvre sur l'Accueil : reprise, favoris en direct, Ma liste.
   const [activeTab, setActiveTab] = useState('continue');
+  // Mobile : Films · Séries · USB/SD sur une seule ligne (USB/SD = bibliothèque locale des films).
+  const [movieSource, setMovieSource] = useState<'catalog' | 'local'>('catalog');
   const [channelView, setChannelView] = useState<'list' | 'grid'>('list');
   const [tabBeforeLists, setTabBeforeLists] = useState('channels');
   const [lastVodTab, setLastVodTab] = useState<'movies' | 'series'>('movies');
@@ -89,8 +91,11 @@ export function IPTVPlayer() {
   const [guideSettings, setGuideSettings] = useState<{ channel: Channel | null } | null>(null);
   // Demande de reprise depuis « Continuer » (voir VodLibrary).
   const [vodResumeRequest, setVodResumeRequest] = useState<VodResumeRequest | null>(null);
+  // Une reprise de film vise le catalogue, même si USB/SD était ouvert.
+  useEffect(() => { if (vodResumeRequest?.kind === 'movie') setMovieSource('catalog'); }, [vodResumeRequest]);
   const openSavedVod = (kind: 'movie' | 'series', item?: VodWatchlistItem) => {
     setActiveTab(kind === 'movie' ? 'movies' : 'series');
+    if (kind === 'movie') setMovieSource('catalog');
     setVodResumeRequest(item ? { nonce: Date.now(), kind, id: item.id, name: item.name, item, mode: 'details' } : null);
   };
   const [searchOpen, setSearchOpen] = useState(false);
@@ -971,15 +976,18 @@ export function IPTVPlayer() {
           <TabsContent value="podcasts" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyPodcastsPanel tvMode={tvMode} /></Suspense></TabsContent>
           <TabsContent value={tvMode ? (activeTab === 'series' ? 'series' : 'movies') : 'vod'} className="screen-enter space-y-4">
             {!tvMode && <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
-              {(['movies', 'series'] as const).map(kind => <button
-                key={kind}
-                type="button"
-                aria-pressed={activeTab === kind}
-                onClick={() => setActiveTab(kind)}
-                className={`min-h-10 rounded-full px-5 text-sm font-medium transition-colors ${activeTab === kind ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
-              >{kind === 'movies' ? 'Films' : 'Séries'}</button>)}
+              {([['movies', 'catalog', 'Films'], ['series', 'catalog', 'Séries'], ['movies', 'local', 'USB/SD']] as const).map(([tab, source, label]) => {
+                const active = activeTab === tab && (tab === 'series' || movieSource === source);
+                return <button
+                  key={label}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => { setActiveTab(tab); if (tab === 'movies') setMovieSource(source); }}
+                  className={`min-h-10 rounded-full px-4 text-sm font-medium transition-colors ${active ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'}`}
+                >{label}</button>;
+              })}
             </div>}
-            {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} /></Suspense></div>}
+            {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} source={tvMode ? undefined : movieSource} /></Suspense></div>}
             {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} /></Suspense></div>}
           </TabsContent>
           <TabsContent value="more" className="screen-enter space-y-4">

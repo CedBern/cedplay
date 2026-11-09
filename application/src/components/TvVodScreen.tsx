@@ -1,12 +1,12 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Bookmark, BookmarkCheck, ChevronDown, HardDrive, Info, Play, RefreshCw, Search } from 'lucide-react';
+import { Bookmark, BookmarkCheck, ChevronDown, HardDrive, Info, Play, RefreshCw, Search, Sparkles } from 'lucide-react';
 import type { CatalogCategory, CatalogItem } from '@/utils/xtreamCatalog';
 import { VodPoster } from '@/components/VodPoster';
 import { prefetchPosters } from '@/utils/vodPosterCache';
 
 type Column = 'cat' | 'grid' | 'info';
 type CatItem =
-  | { kind: 'action'; id: 'search' | 'watchlist' | 'refresh' | 'local'; label: string }
+  | { kind: 'action'; id: 'search' | 'watchlist' | 'foryou' | 'refresh' | 'local'; label: string }
   | { kind: 'category'; id: string; label: string };
 type Cell = { kind: 'poster'; item: CatalogItem } | { kind: 'more' };
 type InfoAction = { id: string; label: string; icon: React.ReactNode; run: () => void };
@@ -48,6 +48,12 @@ export interface TvVodScreenProps {
   onLoadMore: () => void;
   showWatchlistOnly: boolean;
   onToggleWatchlistOnly: () => void;
+  /** Films : suggestions « Pour toi », proposées comme Ma Liste dans la colonne de gauche. */
+  showForYou?: boolean | undefined;
+  onToggleForYou?: (() => void) | undefined;
+  /** Première justification de chaque suggestion (id du titre → « Parce que tu as vu… »). */
+  forYouReasons?: ReadonlyMap<string, string> | undefined;
+  forYouEmptyText?: string | undefined;
   watchlistCount: number;
   watchlistIds: Set<string>;
   onToggleWatchlistItem: (item: CatalogItem) => void;
@@ -108,6 +114,7 @@ const CategoryButton = memo(function CategoryButton({ item, index, selected, wat
   const icon = item.kind === 'action'
     ? (item.id === 'search' ? <Search className="h-4 w-4" aria-hidden="true" />
       : item.id === 'watchlist' ? (watchlistActive ? <BookmarkCheck className="h-4 w-4 text-primary" aria-hidden="true" /> : <Bookmark className="h-4 w-4" aria-hidden="true" />)
+      : item.id === 'foryou' ? <Sparkles className={`h-4 w-4 ${watchlistActive ? 'text-primary' : ''}`} aria-hidden="true" />
       : item.id === 'local' ? <HardDrive className="h-4 w-4" aria-hidden="true" />
       : <RefreshCw className="h-4 w-4" aria-hidden="true" />)
     : null;
@@ -115,7 +122,7 @@ const CategoryButton = memo(function CategoryButton({ item, index, selected, wat
     <button
       type="button"
       aria-current={selected ? 'true' : undefined}
-      aria-pressed={item.kind === 'action' && item.id === 'watchlist' ? watchlistActive : undefined}
+      aria-pressed={item.kind === 'action' && (item.id === 'watchlist' || item.id === 'foryou') ? watchlistActive : undefined}
       data-tv-item
       data-tv-cat={index}
       tabIndex={focused ? 0 : -1}
@@ -129,8 +136,9 @@ const CategoryButton = memo(function CategoryButton({ item, index, selected, wat
 });
 
 /** Fiche éclair : mémoïsée — un déplacement de catégories ne la re-rend plus. */
-const InfoPanel = memo(function InfoPanel({ highlighted, kind, hasCells, infoActions, infoIndex, focused, progressLabel, actionsRef, onFocusInfo, onRunInfo }: {
+const InfoPanel = memo(function InfoPanel({ highlighted, reason, kind, hasCells, infoActions, infoIndex, focused, progressLabel, actionsRef, onFocusInfo, onRunInfo }: {
   highlighted: CatalogItem | null;
+  reason?: string | undefined;
   kind: 'movie' | 'series';
   hasCells: boolean;
   infoActions: InfoAction[];
@@ -152,6 +160,7 @@ const InfoPanel = memo(function InfoPanel({ highlighted, kind, hasCells, infoAct
             <h3 className="line-clamp-3 text-lg font-semibold leading-6">{highlighted.name}</h3>
             {highlighted.rating && <p className="mt-1 font-mono text-xs text-muted-foreground">★ {highlighted.rating}</p>}
             <p className="mt-1 text-xs text-muted-foreground">{progressLabel(highlighted.id)}</p>
+            {reason && <p className="mt-1.5 line-clamp-2 text-xs text-primary">{reason}</p>}
           </div>
         </div>
         <div
@@ -187,7 +196,8 @@ const InfoPanel = memo(function InfoPanel({ highlighted, kind, hasCells, infoAct
  */
 export function TvVodScreen({
   kind, playlistId, categories, category, onSelectCategory, items, loading, error, onRetry,
-  hasMore, onLoadMore, showWatchlistOnly, onToggleWatchlistOnly, watchlistCount, watchlistIds,
+  hasMore, onLoadMore, showWatchlistOnly, onToggleWatchlistOnly, showForYou = false, onToggleForYou, forYouReasons, forYouEmptyText,
+  watchlistCount, watchlistIds,
   onToggleWatchlistItem, onOpen, onPlay, onRefresh, onSearch, onShowLocal, progressLabel,
 }: TvVodScreenProps) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -205,12 +215,13 @@ export function TvVodScreen({
       { kind: 'category', id: '', label: 'Toutes les catégories' },
       { kind: 'action', id: 'watchlist', label: 'Ma Liste' },
     ];
+    if (onToggleForYou) list.push({ kind: 'action', id: 'foryou', label: 'Pour toi' });
     for (const c of categories) list.push({ kind: 'category', id: c.id, label: c.name });
     if (onSearch) list.push({ kind: 'action', id: 'search', label: 'Rechercher' });
     list.push({ kind: 'action', id: 'refresh', label: 'Actualiser' });
     if (onShowLocal) list.push({ kind: 'action', id: 'local', label: 'USB / SD' });
     return list;
-  }, [onSearch, onShowLocal, categories]);
+  }, [onSearch, onShowLocal, onToggleForYou, categories]);
 
   const cells = useMemo<Cell[]>(() => {
     const list: Cell[] = items.map(item => ({ kind: 'poster' as const, item }));
@@ -225,7 +236,7 @@ export function TvVodScreen({
 
   const highlighted = row < items.length ? items[row] ?? null : null;
   const selectedCat = catItems.find((i): i is Extract<CatItem, { kind: 'category' }> => i.kind === 'category' && i.id === category);
-  const listTitle = showWatchlistOnly ? 'Ma Liste' : selectedCat?.label ?? (kind === 'movie' ? 'Films' : 'Séries');
+  const listTitle = showForYou ? 'Pour toi, d’après tes visionnages' : showWatchlistOnly ? 'Ma Liste' : selectedCat?.label ?? (kind === 'movie' ? 'Films' : 'Séries');
 
   // Catégorie changée ailleurs (chargement, reprise du stockage) : la colonne de gauche suit.
   useEffect(() => {
@@ -492,6 +503,7 @@ export function TvVodScreen({
     if (item.kind === 'action') {
       if (item.id === 'search') onSearch?.();
       else if (item.id === 'watchlist') onToggleWatchlistOnly();
+      else if (item.id === 'foryou') onToggleForYou?.();
       else if (item.id === 'local') onShowLocal?.();
       else onRefresh();
       return;
@@ -499,7 +511,7 @@ export function TvVodScreen({
     setCatIndex(index);
     if (item.id !== category) { movedRef.current = true; onSelectCategory(item.id); setRow(0); }
     requestFocus(); setColumn('grid');
-  }, [catItems, category, onSearch, onToggleWatchlistOnly, onRefresh, onShowLocal, onSelectCategory, requestFocus]);
+  }, [catItems, category, onSearch, onToggleWatchlistOnly, onToggleForYou, onRefresh, onShowLocal, onSelectCategory, requestFocus]);
 
   return (
     <div
@@ -521,8 +533,8 @@ export function TvVodScreen({
               <CategoryButton
                 item={item}
                 index={index}
-                selected={item.kind === 'category' && item.id === category}
-                watchlistActive={item.kind === 'action' && item.id === 'watchlist' && showWatchlistOnly}
+                selected={item.kind === 'category' && item.id === category && !showForYou}
+                watchlistActive={item.kind === 'action' && ((item.id === 'watchlist' && showWatchlistOnly) || (item.id === 'foryou' && showForYou))}
                 focused={column === 'cat' && index === catIndex}
                 watchlistCount={watchlistCount}
               />
@@ -540,7 +552,7 @@ export function TvVodScreen({
         <div ref={gridRef} className="tv-scroll min-h-0 flex-1 overflow-y-auto px-3 pb-3" onFocus={onGridFocus} onClick={onGridClick}>
           {loading ? <p className="px-3 py-6 text-sm text-muted-foreground" role="status">Chargement du catalogue…</p>
             : error ? <div className="space-y-2 px-3 py-6 text-amber-300" role="alert"><p>{error}</p><button type="button" onClick={onRetry} className="tv-action flex min-h-10 items-center gap-2 rounded-xl px-3 text-[15px]">Réessayer</button></div>
-            : cells.length === 0 ? <p className="px-3 py-6 text-sm text-muted-foreground">{showWatchlistOnly ? 'Ma Liste est vide ici : ajoute des titres depuis leur fiche.' : 'Aucun titre dans cette sélection.'}</p>
+            : cells.length === 0 ? <p className="px-3 py-6 text-sm text-muted-foreground">{showForYou ? (forYouEmptyText ?? 'Aucune suggestion pour l’instant.') : showWatchlistOnly ? 'Ma Liste est vide ici : ajoute des titres depuis leur fiche.' : 'Aucun titre dans cette sélection.'}</p>
             : <div className="grid grid-cols-5 gap-3">
               {cells.map((cell, index) => cell.kind === 'more' ? (
                 <MoreCell key="more" index={index} focusable={column === 'grid' && index === row} />
@@ -563,6 +575,7 @@ export function TvVodScreen({
       <aside aria-label="Titre sélectionné" data-tv-col="info" className={`tv-col flex min-h-0 flex-col rounded-2xl border border-neutral-900 bg-neutral-950 p-4 ${column === 'info' ? 'is-active' : ''}`}>
         <InfoPanel
           highlighted={highlighted}
+          reason={showForYou && highlighted ? forYouReasons?.get(highlighted.id) : undefined}
           kind={kind}
           hasCells={cells.length > 0}
           infoActions={infoActions}

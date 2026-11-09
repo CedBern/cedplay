@@ -221,3 +221,24 @@ it('charge le catalogue complet quand des films vus ailleurs peuvent amorcer le 
   expect(screen.queryByText(/Aucun titre du catalogue ne correspond/)).toBeNull();
   expect(await screen.findByRole('button', { name: 'Interstellar' })).toBeVisible();
 });
+
+it('TV : « Pour toi » remplit la grille avec les suggestions du catalogue', async () => {
+  mocks.getExternalWatches.mockResolvedValue([{
+    channelId: 'elsewhere:netflix:movie:inception', ts: Date.now(), kind: 'vod', mediaKind: 'movie',
+    name: 'Inception', tmdbId: 27205, platform: 'netflix', status: 'completed',
+  }]);
+  mocks.request.mockImplementation((_a, action, params) => Promise.resolve(action === 'get_vod_categories'
+    ? [{ category_id: '1', category_name: 'Films' }, { category_id: '2', category_name: 'Docs' }]
+    : params?.category_id === '2' ? [{ stream_id: 3, name: 'Océans', category_id: '2', container_extension: 'mp4' }]
+      : [{ stream_id: 1, name: 'Inception', category_id: '1', tmdb_id: 27205, container_extension: 'mp4' },
+         { stream_id: 2, name: 'Interstellar', category_id: '1', tmdb_id: 157336, container_extension: 'mp4' },
+         { stream_id: 3, name: 'Océans', category_id: '2', container_extension: 'mp4' }]));
+  render(<VodLibrary playlist={playlist} kind="movie" tvMode />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Docs' }));
+  await screen.findByRole('heading', { name: 'Docs' });
+  await userEvent.click(screen.getByRole('button', { name: 'Pour toi' }));
+  await screen.findByRole('heading', { name: /Pour toi/ });
+  const grid = screen.getByRole('region', { name: /Titres : Pour toi/ });
+  await waitFor(() => expect(grid).toHaveTextContent('Interstellar'));
+  expect(grid).not.toHaveTextContent('Océans');
+});

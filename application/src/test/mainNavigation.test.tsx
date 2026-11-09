@@ -60,6 +60,15 @@ it('ouvre sur Accueil, garde Direct actif dans son lecteur et retrouve Plus apr�
   await user.click(within(navigation).getByRole('tab', { name: 'Films & séries' }));
   // Écrans chargés à la demande : attendre le montage du catalogue.
   await screen.findByText('Catalogue movie');
+  // Films · Séries · USB/SD sur une seule ligne : pas de second sélecteur de source.
+  const kinds = screen.getByRole('group', { name: 'Type de contenu' });
+  expect(within(kinds).getAllByRole('button').map(b => b.textContent)).toEqual(['Films', 'Séries', 'USB/SD']);
+  expect(screen.queryByRole('group', { name: 'Source des films' })).toBeNull();
+  await user.click(within(kinds).getByRole('button', { name: 'USB/SD' }));
+  await screen.findByText('Bibliothèque locale test');
+  expect(within(kinds).getByRole('button', { name: 'Films' })).toHaveAttribute('aria-pressed', 'false');
+  await user.click(within(kinds).getByRole('button', { name: 'Films' }));
+  await screen.findByText('Catalogue movie');
   await user.click(screen.getByRole('button', { name: 'Séries' }));
   await screen.findByText('Catalogue series');
   await user.click(within(navigation).getByRole('tab', { name: 'Plus' }));

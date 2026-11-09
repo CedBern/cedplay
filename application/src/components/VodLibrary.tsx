@@ -1,4 +1,4 @@
-import { Bookmark, BookmarkCheck } from 'lucide-react';
+import { Bookmark, BookmarkCheck, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebounce } from '@/hooks/useDebounce';
 import { Button } from '@/components/ui/button';
@@ -185,6 +185,11 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const [allMovies, setAllMovies] = useState<CatalogItem[]>([]);
   const [watchlist, setWatchlist] = useState<VodWatchlistItem[]>([]);
   const [showWatchlistOnly, setShowWatchlistOnly] = useState(false);
+  // TV : « Pour toi » est une entrée de la colonne de gauche, comme Ma Liste.
+  const [showForYou, setShowForYou] = useState(false);
+  // Mobile : rail toujours affiché. TV : calcul seulement quand l'entrée est ouverte
+  // (le classement parcourt tout le catalogue et l'enrichissement interroge TMDB).
+  const recsWanted = kind === 'movie' && (!tvMode || showForYou);
   const handledRequest = useRef<number | null>(null);
   const pendingResume = useRef<string | null>(null);
 
@@ -304,8 +309,8 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   // local (catégorie + titre) sans réseau. Sans eux, un profil venu de Netflix ne
   // produirait aucun rail tant qu'aucun film n'a été lancé dans CedPlay.
   const seeds = useMemo(
-    () => (kind === 'movie' && !tvMode ? externalSeeds(externalWatches, visibleAllMovies, playlist.id) : []),
-    [kind, tvMode, externalWatches, visibleAllMovies, playlist.id],
+    () => (recsWanted ? externalSeeds(externalWatches, visibleAllMovies, playlist.id) : []),
+    [recsWanted, externalWatches, visibleAllMovies, playlist.id],
   );
   const rankingHistory = useMemo(() => {
     if (!seeds.length) return vodHistory;
@@ -314,10 +319,9 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, [vodHistory, seeds]);
   // Classement local immédiat (catégorie + titre). Le pool de 40 laisse au profil de
   // goût la possibilité de promouvoir un titre qui n'était pas dans les 12 premiers.
-  // En mode télécommande, TvVodScreen n'affiche pas ce rail : aucun calcul.
   const baseRecommendations = useMemo(
-    () => (kind === 'movie' && !tvMode ? recommendForHistory(rankingHistory, visibleAllMovies, { limit: 40, playlistId: playlist.id }) : []),
-    [kind, tvMode, rankingHistory, visibleAllMovies, playlist.id],
+    () => (recsWanted ? recommendForHistory(rankingHistory, visibleAllMovies, { limit: 40, playlistId: playlist.id }) : []),
+    [recsWanted, rankingHistory, visibleAllMovies, playlist.id],
   );
   // Résolution TMDB bornée (derniers films vus + meilleurs candidats), en arrière-plan :
   // le rail reste affiché pendant l'enrichissement et retombe sur le classement local
@@ -330,8 +334,8 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const [taste, setTaste] = useState<TasteEnrichment | null>(null);
   useEffect(() => {
     const apiKey = tmdbApiKey?.trim();
-    // Le rail « Pour toi » n'existe pas en mode télécommande : aucune requête TMDB.
-    if (tvMode || !apiKey || baseRecommendations.length === 0) { setTaste(null); return; }
+    // TV : aucune requête TMDB tant que « Pour toi » n'est pas ouvert.
+    if (!recsWanted || !apiKey || baseRecommendations.length === 0) { setTaste(null); return; }
     let cancelled = false;
     const { history, movies } = tasteInputsRef.current;
     void enrichRecommendations({
@@ -341,17 +345,33 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       .then(result => { if (!cancelled) setTaste(result); })
       .catch(() => { if (!cancelled) setTaste(null); });
     return () => { cancelled = true; };
-  }, [baseRecommendations, tmdbApiKey, playlist.id, tvMode, externalWatches]);
+  }, [baseRecommendations, tmdbApiKey, playlist.id, recsWanted, externalWatches]);
   const recommendations = useMemo(() => {
-    if (kind !== 'movie' || tvMode) return [];
+    if (!recsWanted) return [];
     const usable = taste && taste.playlistId === playlist.id && taste.profile.sampleSize > 0 ? taste : null;
     return recommendForHistory(rankingHistory, visibleAllMovies, {
-      limit: 12,
+      // TV : quatre rangées de cinq affiches.
+      limit: tvMode ? 20 : 12,
       pool: 40,
       playlistId: playlist.id,
       ...(usable ? { profile: usable.profile, detailsByItemId: usable.detailsByItemId } : {}),
     });
-  }, [kind, tvMode, rankingHistory, visibleAllMovies, playlist.id, taste]);
+  }, [recsWanted, tvMode, rankingHistory, visibleAllMovies, playlist.id, taste]);
+  // TV : première justification affichée dans la fiche éclair de l'affiche surlignée.
+  const forYouReasons = useMemo(
+    () => new Map(recommendations.flatMap(({ item, reasons }) => (reasons[0] ? [[item.id, reasons[0]] as const] : []))),
+    [recommendations],
+  );
+  // Films vus ici (au moins une minute ou terminés) ou importés : sans eux, rien à suggérer.
+  const hasTasteSeed = useMemo(
+    () => externalWatches.some(e => e.mediaKind !== 'series') || vodHistory.map(historyScope).some(e => e.kind === 'vod' && e.playlistId === playlist.id && e.mediaKind === 'movie' && (e.status === 'completed' || (e.positionMs || 0) >= 60000)),
+    [externalWatches, vodHistory, playlist.id],
+  );
+  const forYouEmptyText = !hasTasteSeed
+    ? 'Aucun film vu pour l’instant : lance un film, les suggestions apparaîtront ici.'
+    : visibleAllMovies.length === 0
+      ? 'Préparation des suggestions…'
+      : 'Aucun titre du catalogue ne correspond encore à tes visionnages.';
 
   useEffect(() => {
     if (!account) return;
@@ -437,6 +457,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, [tvMode, selected, details]);
 
   const baseItems = useMemo(() => {
+    if (tvMode && showForYou) return recommendations.map(r => r.item);
     if (!showWatchlistOnly) return visibleItems;
     return visibleWatchlist.map(w => ({
       id: w.id,
@@ -446,7 +467,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       categoryId: w.categoryId ?? '',
       extension: w.extension ?? '',
     }));
-  }, [showWatchlistOnly, visibleItems, visibleWatchlist]);
+  }, [tvMode, showForYou, recommendations, showWatchlistOnly, visibleItems, visibleWatchlist]);
   // TV : l'affiche mémorisée peut se trouver au-delà de la première page (60 titres) ;
   // la limite est étendue dès ce rendu — synchronisée avec le catalogue — pour que la
   // demande de restauration de TvVodScreen trouve sa cible au premier affichage.
@@ -672,7 +693,9 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   }, []);
 
   // Mode TV : actions de l'écran télécommande (TvVodScreen) ; fiches et lecture restent partagées.
-  const handleSelectCategory = useCallback((id: string) => { setCategory(id); setShowWatchlistOnly(false); }, []);
+  const handleSelectCategory = useCallback((id: string) => { setCategory(id); setShowWatchlistOnly(false); setShowForYou(false); }, []);
+  const toggleWatchlistOnly = useCallback(() => { setShowForYou(false); setShowWatchlistOnly(v => !v); }, []);
+  const toggleForYou = useCallback(() => { setShowWatchlistOnly(false); setShowForYou(v => !v); }, []);
   const handleRefresh = useCallback(() => { fullCatalogCache.delete(catalogCacheKey); categoryCatalogCache.clear(); setAllMovies([]); setReload(v => v + 1); }, [catalogCacheKey]);
   // « Afficher davantage » étend la limite EFFECTIVE : après une restauration au-delà
   // de 60 titres (affiche mémorisée au titre 85 ⇒ 120 affichés), la limite de base est
@@ -798,13 +821,17 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       category={category}
       onSelectCategory={handleSelectCategory}
       items={baseItems.slice(0, tvLimit)}
-      loading={loading}
-      error={error}
+      loading={showForYou ? false : loading}
+      error={showForYou ? '' : error}
       onRetry={handleRefresh}
       hasMore={baseItems.length > tvLimit}
       onLoadMore={handleLoadMore}
       showWatchlistOnly={showWatchlistOnly}
-      onToggleWatchlistOnly={() => setShowWatchlistOnly(v => !v)}
+      onToggleWatchlistOnly={toggleWatchlistOnly}
+      showForYou={showForYou}
+      onToggleForYou={kind === 'movie' ? toggleForYou : undefined}
+      forYouReasons={forYouReasons}
+      forYouEmptyText={forYouEmptyText}
       watchlistCount={visibleWatchlist.length}
       watchlistIds={watchlistIds}
       onToggleWatchlistItem={toggleWatchlistItem}
@@ -819,7 +846,6 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     {playingDialog}
   </section>;
   return <section className="text-white space-y-4">
-    <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-semibold">{kind === 'movie' ? 'Films' : 'Séries'}</h2><Button variant="secondary" size="sm" onClick={handleRefresh} disabled={loading}>Actualiser</Button></div>
     {kind === 'movie' && !tvMode && <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[17px] font-semibold tracking-tight text-foreground">Pour toi, d'après tes visionnages</h3>
@@ -842,19 +868,24 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           ? 'Aucun titre du catalogue ne correspond encore à ces visionnages. Importe l’historique d’une autre plateforme ou lance un film ici.'
           : 'Aucun film vu pour l’instant : lance un film ici ou importe ton historique Netflix, Prime Video, YouTube…'}</p>}
     </div>}
-    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+    {/* Une seule ligne, même sur téléphone : catégorie, Ma Liste, Actualiser. */}
+    <div className="flex items-center gap-2">
       <div className="flex-1 min-w-0">
         <select aria-label="Catégorie VOD" className="bg-neutral-900 p-3 rounded-md w-full" value={category || ''} onChange={e => { setCategory(e.target.value); setShowWatchlistOnly(false); }}><option value="">Toutes les catégories</option>{visibleCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
       </div>
       <Button
         variant={showWatchlistOnly ? 'default' : 'outline'}
-        onClick={() => setShowWatchlistOnly(v => !v)}
-        className={`min-h-11 shrink-0 ${showWatchlistOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground' : 'border-neutral-800 text-white hover:bg-neutral-900'}`}
+        onClick={toggleWatchlistOnly}
+        aria-label={`Ma Liste (${visibleWatchlist.length})`}
+        className={`min-h-11 shrink-0 px-3 ${showWatchlistOnly ? 'bg-primary hover:bg-primary/90 text-primary-foreground' : 'border-neutral-800 text-white hover:bg-neutral-900'}`}
         aria-pressed={showWatchlistOnly}
         title="Afficher uniquement les titres de Ma Liste"
       >
-        {showWatchlistOnly ? <BookmarkCheck className="h-4 w-4 mr-1.5 text-primary" /> : <Bookmark className="h-4 w-4 mr-1.5" />}
-        Ma Liste ({visibleWatchlist.length})
+        {showWatchlistOnly ? <BookmarkCheck className="h-4 w-4 sm:mr-1.5 text-primary" /> : <Bookmark className="h-4 w-4 sm:mr-1.5" />}
+        <span className="hidden sm:inline">Ma Liste&nbsp;</span><span className="ml-1 sm:ml-0 tabular-nums">{visibleWatchlist.length}</span>
+      </Button>
+      <Button variant="outline" size="icon" onClick={handleRefresh} disabled={loading} aria-label="Actualiser le catalogue" title="Actualiser le catalogue" className="h-11 w-11 shrink-0 border-neutral-800 text-white hover:bg-neutral-900">
+        <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
       </Button>
     </div>
     {category && (() => {

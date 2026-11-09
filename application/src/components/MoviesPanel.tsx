@@ -16,14 +16,17 @@ interface MoviesPanelProps {
   /** Contrôle parental actif : catégories adultes masquées dans le catalogue. */
   parentalEnabled?: boolean | undefined;
   parentalUnlocked?: boolean | undefined;
+  /** Source pilotée par le parent (mobile : sélecteur Films · Séries · USB/SD sur une ligne). */
+  source?: 'catalog' | 'local' | undefined;
 }
 
 /**
  * Rubrique « Films » : catalogue VOD de la liste + bibliothèque locale (USB/SD).
  * Le choix de source est une sous-catégorie, pas un onglet dédié.
  */
-export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandled, tvMode, onSearch, parentalEnabled, parentalUnlocked }: MoviesPanelProps) {
-  const [source, setSource] = useState<'catalog' | 'local'>('catalog');
+export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandled, tvMode, onSearch, parentalEnabled, parentalUnlocked, source: controlledSource }: MoviesPanelProps) {
+  const [ownSource, setSource] = useState<'catalog' | 'local'>('catalog');
+  const source = controlledSource ?? ownSource;
   const pill = (active: boolean) => tvMode
     ? `tv-chip inline-flex h-10 items-center gap-2 rounded-full px-4 text-[14px] font-medium transition-colors ${active ? 'is-current text-foreground' : 'text-muted-foreground'}`
     : `inline-flex min-h-9 items-center gap-2 rounded-full border px-3.5 text-[13px] font-medium transition-colors ${active ? 'border-foreground bg-foreground text-background' : 'border-neutral-800 text-muted-foreground hover:text-foreground'}`;
@@ -31,7 +34,8 @@ export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandl
   // TV : la source se choisit depuis la colonne de gauche du catalogue (ligne « USB / SD ») ;
   // le sélecteur ne reparaît qu'en bibliothèque locale, pour revenir au catalogue.
   // Sans compte Xtream, pas de catalogue ni de colonne : le sélecteur reste le seul accès à USB/SD.
-  const showSwitch = !tvMode || source === 'local' || !hasCatalog;
+  // Source pilotée par le parent : son sélecteur remplace celui-ci.
+  const showSwitch = controlledSource === undefined && (!tvMode || source === 'local' || !hasCatalog);
   return (
     <div className="space-y-4">
       {showSwitch && <div role="group" aria-label="Source des films" className="flex items-center gap-2">
