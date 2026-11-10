@@ -3817,7 +3817,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (tvBand == null) return;
         if (isBehindLive() && pausedAtMs == 0 && tvBand.focusKey("live")) return;
         if (lastUsedKey != null && tvBand.focusPreferred(lastUsedKey)) return;
-        if (!tvBand.focusKey(vod ? "pause" : "channels")) tvBand.focusKey("pause");
+        if (!tvBand.focusKey("pause")) tvBand.focusKey("channels");
     }
 
     private void seekBy(int direction, int repeat) {
@@ -3858,43 +3858,68 @@ public class NativePlayerActivity extends AppCompatActivity {
         return list;
     }
 
-    /** Rangée Lecture du bandeau TV. */
+    /** Rangée Lecture du bandeau TV : des icônes, le libellé reste dans l'aide et la description. */
     private List<PlayerOption> tvPlaybackOptions() {
         List<PlayerOption> list = new ArrayList<>();
         if (!vod) {
             // En tête de la rangée Lecture : c'est un saut dans le programme, pas un réglage.
             // Il cède sa place à « Revenir au direct » dès que le différé est lancé.
             list.add(PlayerOption.action("restart", "Depuis le début", this::restartLiveFromStart)
-                .icon(() -> R.drawable.ic_player_replay)
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_start)
                 .visible(this::canRestartArchive).build());
             list.add(PlayerOption.action("live", "Revenir au direct", this::backToLive)
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_next)
                 .visible(() -> isBehindLive() && pausedAtMs == 0).build());
         }
+        // Pause en tête : ouvrir le bandeau doit mener au geste le plus courant.
         list.add(PlayerOption.action("pause", "Pause", this::togglePause)
+            .iconOnly()
             .label(() -> isPaused() ? "Lecture" : "Pause")
             .icon(() -> isPaused() ? R.drawable.ic_player_play : R.drawable.ic_player_pause).build());
         if (!vod) {
+            // Zapping, liste, favori, enregistrement, relance : une barre d'icônes, sans texte
+            // qui déborde à droite. L'étoile et le rond rouge restent côte à côte.
+            list.add(PlayerOption.action("previousChannel", "Chaîne précédente", () -> switchChannel(-1))
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_prev)
+                .visible(() -> channelUrls != null && channelUrls.size() > 1).build());
+            list.add(PlayerOption.action("nextChannel", "Chaîne suivante", () -> switchChannel(1))
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_next_channel)
+                .visible(() -> channelUrls != null && channelUrls.size() > 1).build());
             list.add(PlayerOption.action("channels", "Chaînes", this::openChannelPanel)
+                .iconOnly()
                 .icon(() -> R.drawable.ic_player_list)
                 .visible(() -> channelPanel != null).build());
-            list.add(PlayerOption.action("previous", "Revenir à", () -> { if (previousIndex >= 0) switchTo(previousIndex); })
-                .value(() -> previousIndex >= 0 && channelTitles != null && previousIndex < channelTitles.size() ? channelTitles.get(previousIndex) : null)
-                .visible(() -> previousIndex >= 0 && previousIndex != channelIndex && channelTitles != null && previousIndex < channelTitles.size()).build());
-            list.add(PlayerOption.action("reload", "Relancer le flux", this::reloadCurrentLive)
-                .visible(() -> !archive).build());
             list.add(PlayerOption.action("favorite", "Ajouter aux favoris", this::toggleCurrentFavorite)
-                .label(() -> favoriteStore.isFavorite(streamUrl) ? "Retirer des favoris" : "Ajouter aux favoris").build());
+                .iconOnly()
+                .label(() -> favoriteStore.isFavorite(streamUrl) ? "Retirer des favoris" : "Ajouter aux favoris")
+                .icon(() -> favoriteStore.isFavorite(streamUrl) ? R.drawable.ic_player_star_filled : R.drawable.ic_player_star)
+                .iconTint(() -> favoriteStore.isFavorite(streamUrl) ? C_ACCENT : 0)
+                .build());
             list.add(recordOption("Enregistrer"));
+            list.add(PlayerOption.action("reload", "Relancer le flux", this::reloadCurrentLive)
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_refresh)
+                .visible(() -> !archive).build());
         } else {
             list.add(PlayerOption.action("episodes", "Épisodes", this::openChannelPanel)
+                .iconOnly()
                 .icon(() -> R.drawable.ic_player_list)
                 .visible(() -> channelPanel != null).build());
-            list.add(PlayerOption.action("next", "Suivant", () -> switchChannel(1))
-                .value(() -> hasNextEpisode() ? "É" + (channelIndex + 2) : null)
+            list.add(PlayerOption.action("next", "Épisode suivant", () -> switchChannel(1))
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_next_channel)
                 .visible(this::hasNextEpisode).build());
-            list.add(PlayerOption.action("restart", "Depuis le début", this::restartFromBeginning).build());
+            list.add(PlayerOption.action("restart", "Depuis le début", this::restartFromBeginning)
+                .iconOnly()
+                .icon(() -> R.drawable.ic_player_start).build());
         }
-        list.add(PlayerOption.action("openWith", "Ouvrir avec…", this::openInVlc).build());
+        list.add(PlayerOption.action("openWith", "Ouvrir avec… (VLC)", this::openInVlc)
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_external).build());
         return list;
     }
 
@@ -3937,6 +3962,11 @@ public class NativePlayerActivity extends AppCompatActivity {
         return PlayerOption.action("record", label, this::toggleRecording)
             .label(() -> recording ? "Arrêter l'enregistrement" : label)
             .dot(C_LIVE)
+            .iconOnly()
+            .icon(() -> recording ? R.drawable.ic_player_stop : R.drawable.ic_player_record)
+            // Rouge franc : le rond d'enregistrement ne se confond ni avec l'orange du direct
+            // ni avec l'étoile des favoris.
+            .iconTint(() -> PlayerOption.C_ERROR)
             // En différé on regarde le programme, on ne capture pas le direct : pas d'ambiguïté.
             .visible(() -> isHttpUrl(streamUrl) && !archive).build();
     }
@@ -3948,6 +3978,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private PlayerOption speedOption() {
         return PlayerOption.list("speed", "Vitesse")
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_speed)
             .value(() -> formatSpeed(playbackSpeed))
             .choices(() -> {
                 List<PlayerOption.Choice> out = new ArrayList<>();
@@ -4030,6 +4062,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private PlayerOption audioOption() {
         return PlayerOption.list("audio", "Audio")
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_audio)
             .value(() -> { String name = selectedTrackName(C.TRACK_TYPE_AUDIO); return name != null ? name : "Auto"; })
             .choices(() -> {
                 List<PlayerOption.Choice> out = new ArrayList<>();
@@ -4051,7 +4085,9 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private PlayerOption subtitleOption() {
         return PlayerOption.list("subtitles", "Sous-titres")
-            .value(() -> subtitlesOff() ? "Désactivés" : selectedTrackName(C.TRACK_TYPE_TEXT))
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_subtitles)
+            .value(() -> subtitlesOff() ? "Aucun" : selectedTrackName(C.TRACK_TYPE_TEXT))
             .choices(() -> {
                 List<PlayerOption.Choice> out = new ArrayList<>();
                 out.add(new PlayerOption.Choice("Désactivés", subtitlesOff(), () -> {
@@ -4066,6 +4102,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private PlayerOption formatOption() {
         return PlayerOption.list("format", "Format")
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_aspect)
             .value(() -> currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM ? "Zoom"
                 : currentResizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL ? "Étiré" : "Ajusté")
             .choices(() -> {
@@ -4105,6 +4143,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private PlayerOption qualityOption() {
         return PlayerOption.list("quality", "Qualité")
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_quality)
             .visible(() -> videoHeights().size() > 1)
             .value(() -> {
                 if (!hasOverride(C.TRACK_TYPE_VIDEO)) return "Auto";
@@ -4158,6 +4198,8 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private PlayerOption sleepOption() {
         return PlayerOption.list("sleep", "Veille")
+            .iconOnly()
+            .icon(() -> R.drawable.ic_player_sleep)
             .value(() -> {
                 if (sleepOnEnd) return "Fin de la vidéo";
                 if (sleepTargetTimeMs <= 0) return "Non";

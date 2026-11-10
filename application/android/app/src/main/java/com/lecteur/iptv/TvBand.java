@@ -11,6 +11,7 @@ import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
+import android.text.style.ImageSpan;
 import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.View;
@@ -23,7 +24,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
-import androidx.core.widget.TextViewCompat;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -173,10 +173,9 @@ final class TvBand {
             new int[][] { new int[] { android.R.attr.state_focused }, new int[] {} },
             new int[] { C_BG, C_TEXT });
         b.setTextColor(fg);
-        TextViewCompat.setCompoundDrawableTintList(b, fg);
         b.setOnFocusChangeListener((v, has) -> { render(b); if (has) updateHint(); });
         b.setOnClickListener(v -> activate(b));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(option.iconOnly ? dp(48) : ViewGroup.LayoutParams.WRAP_CONTENT, dp(48));
         lp.setMargins(0, 0, dp(10), 0);
         b.setLayoutParams(lp);
         pills.put(option.key, b);
@@ -195,25 +194,59 @@ final class TvBand {
         PlayerOption o = optionOf.get(b);
         if (o == null) return;
         boolean focused = b.isFocused();
-        SpannableStringBuilder text = new SpannableStringBuilder();
-        if (o.dot != 0) {
-            text.append("●  ");
-            text.setSpan(new ForegroundColorSpan(o.dot), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        text.append(o.label.get());
-        String value = o.valueText();
-        if (value != null && !value.isEmpty()) {
-            int start = text.length();
-            text.append("  ").append(value);
-            text.setSpan(new ForegroundColorSpan(focused ? C_PILL_VALUE_FOCUSED : C_MUTED), start, text.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-            text.setSpan(new StyleSpan(Typeface.NORMAL), start, text.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        }
-        b.setText(text);
         int icon = o.iconRes();
-        Drawable d = icon != 0 ? ContextCompat.getDrawable(context, icon) : null;
-        if (d != null) d.setBounds(0, 0, dp(20), dp(20));
-        b.setCompoundDrawablesRelative(d, null, null, null);
-        b.setContentDescription(value == null || value.isEmpty() ? o.label.get() : o.label.get() + " : " + value);
+        String value = o.valueText();
+        boolean hasValue = value != null && !value.isEmpty();
+        int tint = o.iconTintColor() != 0 ? o.iconTintColor() : (focused ? C_BG : C_TEXT);
+
+        // Icône seule sans valeur (favori, enregistrer, zapping) : pastille carrée ;
+        // avec une valeur (réglages), la pastille s'élargit et n'affiche que l'icône + la valeur.
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) b.getLayoutParams();
+        int width = o.iconOnly && !hasValue ? dp(48) : ViewGroup.LayoutParams.WRAP_CONTENT;
+        if (lp != null && lp.width != width) {
+            lp.width = width;
+            b.setLayoutParams(lp);
+        }
+        int hpad = o.iconOnly ? (hasValue ? 12 : 0) : 20;
+        b.setPadding(dp(hpad), 0, dp(hpad), 0);
+
+        if (o.iconOnly && !hasValue) {
+            // ImageSpan : l'icône est centrée par la gravité du bouton, sa couleur ne suit pas
+            // celle du texte (un rond d'enregistrement reste rouge même sur la pastille blanche).
+            SpannableStringBuilder glyph = new SpannableStringBuilder(" ");
+            Drawable g = icon != 0 ? ContextCompat.getDrawable(context, icon) : null;
+            if (g != null) {
+                g = g.mutate();
+                g.setBounds(0, 0, dp(26), dp(26));
+                g.setTint(tint);
+                glyph.setSpan(new ImageSpan(g, ImageSpan.ALIGN_BOTTOM), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            b.setText(glyph);
+            b.setCompoundDrawablesRelative(null, null, null, null);
+        } else {
+            SpannableStringBuilder text = new SpannableStringBuilder();
+            if (!o.iconOnly && o.dot != 0) {
+                text.append("●  ");
+                text.setSpan(new ForegroundColorSpan(o.dot), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            if (!o.iconOnly) text.append(o.label.get());
+            if (hasValue) {
+                int start = text.length();
+                if (text.length() > 0) text.append("  ");
+                text.append(value);
+                text.setSpan(new ForegroundColorSpan(focused ? C_PILL_VALUE_FOCUSED : C_MUTED), start, text.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                text.setSpan(new StyleSpan(Typeface.NORMAL), start, text.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            b.setText(text);
+            Drawable d = icon != 0 ? ContextCompat.getDrawable(context, icon) : null;
+            if (d != null) {
+                d = d.mutate();
+                d.setBounds(0, 0, dp(20), dp(20));
+                d.setTint(tint);
+            }
+            b.setCompoundDrawablesRelative(d, null, null, null);
+        }
+        b.setContentDescription(hasValue ? o.label.get() + " : " + value : o.label.get());
     }
 
     /** Relit libellés, valeurs et visibilité ; garde un focus valide si une pastille disparaît. */

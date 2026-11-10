@@ -59,10 +59,16 @@ final class PlayerOption {
     final Icon icon;
     /** Pastille de couleur avant le libellé (0 : aucune), ex. le point d'enregistrement. */
     final int dot;
+    /** Bandeau TV : l'icône remplace le libellé (la valeur reste, ex. « Français »). */
+    final boolean iconOnly;
+    /** Teinte fixe de l'icône (0 : la couleur du texte, inversée au focus). */
+    final Icon iconTint;
 
-    private PlayerOption(String key, Text label, Text value, Choices choices, Runnable action, Flag visible, Icon icon, int dot) {
+    private PlayerOption(String key, Text label, Text value, Choices choices, Runnable action, Flag visible, Icon icon, int dot,
+                         boolean iconOnly, Icon iconTint) {
         this.key = key; this.label = label; this.value = value; this.choices = choices;
         this.action = action; this.visible = visible; this.icon = icon; this.dot = dot;
+        this.iconOnly = iconOnly; this.iconTint = iconTint;
     }
 
     static Builder list(String key, String label) { return new Builder(key, label); }
@@ -72,6 +78,7 @@ final class PlayerOption {
     boolean isVisible() { return visible == null || visible.get(); }
     String valueText() { return value == null ? null : value.get(); }
     int iconRes() { return icon == null ? 0 : icon.get(); }
+    int iconTintColor() { return iconTint == null ? 0 : iconTint.get(); }
 
     static final class Builder {
         private final String key;
@@ -82,6 +89,8 @@ final class PlayerOption {
         private Flag visible;
         private Icon icon;
         private int dot;
+        private boolean iconOnly;
+        private Icon iconTint;
 
         Builder(String key, String label) { this.key = key; this.label = () -> label; }
         Builder label(Text label) { this.label = label; return this; }
@@ -90,7 +99,10 @@ final class PlayerOption {
         Builder visible(Flag visible) { this.visible = visible; return this; }
         Builder icon(Icon icon) { this.icon = icon; return this; }
         Builder dot(int color) { this.dot = color; return this; }
-        PlayerOption build() { return new PlayerOption(key, label, value, choices, action, visible, icon, dot); }
+        /** Bandeau TV : pastille carrée à l'icône, le libellé passe en description. */
+        Builder iconOnly() { this.iconOnly = true; return this; }
+        Builder iconTint(Icon color) { this.iconTint = color; return this; }
+        PlayerOption build() { return new PlayerOption(key, label, value, choices, action, visible, icon, dot, iconOnly, iconTint); }
     }
 
     /** Liste visible d'une rangée, dans l'ordre. */

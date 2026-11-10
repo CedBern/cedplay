@@ -9,7 +9,7 @@ Ce fichier définit le cadre technique et les règles de travail pour tout agent
 - **Racine du dépôt** : `C:\Users\C2k\Documents\ChatGPT\Lecteur IPTV`
 - **Code applicatif (Web + Capacitor)** : `application/` (`src/`, `tests/`, `android/`)
 - **Branche consolidée de référence** : `consolidate/v1.11.4`
-- **Version actuelle livrée** : **1.12.46** (`versionCode 94`, du 09/11/2026) — APK de référence à la racine : `CedPlay-1.12.46.apk` (4 434 311 octets, SHA-256 `e7a1701f…`). `CedPlay.apk` en est une copie et doit rester aligné sur la dernière version.
+- **Version actuelle livrée** : **1.12.47** (`versionCode 95`, du 09/11/2026) — APK de référence à la racine : `CedPlay-1.12.47.apk` (4 444 282 octets, SHA-256 `b0d07cdb…`). `CedPlay.apk` en est une copie et doit rester aligné sur la dernière version.
 - **Fiche de suivi transversal (Second Cerveau)** : [CedPlay.md](C:/Users/C2k/Documents/Second%20Cerveau/10%20Projets/CedPlay.md)
 - **Dernier rapport d'audit et preuves** : [AUDIT_INTEGRAL_2026-11-08.md](AUDIT_INTEGRAL_2026-11-08.md) (rapport antérieur : `AUDIT_INTEGRAL_2026-11-07.md`), dossier `preuves/`
 - **Outillage Android** : AGP **8.9.1**, Gradle wrapper **8.11.1**, `compileSdk`/`targetSdk` **35** (`android/variables.gradle`), `minSdk 22`.
