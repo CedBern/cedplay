@@ -76,6 +76,16 @@ it('la flèche gauche ouvre l’émission précédente au lieu du nom de la cha�
   expect(screen.getByTitle('Chaîne test')).toHaveAttribute('tabindex', '-1');
 });
 
+it('garde le titre lisible au bord de la colonne quand l’émission a commencé avant la vue', async () => {
+  const now = Date.now();
+  await act(async () => { render(<EPGGrid channels={[channel]} onSelectChannel={() => {}} epgData={{ a: [
+    { id: 'long', channelId: 'a', title: 'Programmes de la nuit', startTime: new Date(now - 7_200_000), endTime: new Date(now + 7_200_000) },
+  ] }} />); });
+  const label = screen.getByRole('button', { name: /^Programmes de la nuit,/ }).querySelector(':scope > div');
+  expect(label).toHaveClass('sticky');
+  expect((label as HTMLElement).style.left).toBe('208px'); // colonne 200 px + 8 px de padding
+});
+
 it('la flèche gauche sur la première émission reste sur place', async () => {
   const now = Date.now();
   await act(async () => {

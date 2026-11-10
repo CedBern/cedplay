@@ -83,6 +83,8 @@ interface ProgramCellProps {
   replayable: boolean;
   /** Émission d'entrée du guide (celle en cours sur la première ligne visible). */
   entry: boolean;
+  /** Décalage (px) du texte collant au bord droit de la colonne des chaînes. */
+  labelLeft: number;
   onSelectChannel: (channel: Channel) => void;
   onCatchup: ((channel: Channel, program: EPGProgram) => void) | undefined;
   setSheet: Dispatch<SetStateAction<ProgramSheetTarget | null>>;
@@ -96,7 +98,7 @@ interface ProgramCellProps {
  * cellules qui entrent dans la fenêtre — l'état (en cours, passé, rappel, enregistrement)
  * passe en props primitives pour que la comparaison superficielle suffise. */
 const ProgramCell = memo(function ProgramCell({
-  channel, program: p, left, width, isCurrent, isPast, reminded, recording, replayable, entry,
+  channel, program: p, left, width, isCurrent, isPast, reminded, recording, replayable, entry, labelLeft,
   onSelectChannel, onCatchup, setSheet, setFocused, toggleReminder, pressRef,
 }: ProgramCellProps) {
   const openSheet = () => setSheet({ channel, program: p });
@@ -141,18 +143,24 @@ const ProgramCell = memo(function ProgramCell({
       }}
       onBlur={() => { if (pressRef.current) { window.clearTimeout(pressRef.current.timer); pressRef.current = null; } }}
       aria-label={isPast && replayable ? `Revoir « ${p.title} » (${formatTime(p.startTime)})` : `${p.title}, ${formatTime(p.startTime)} – ${formatTime(p.endTime)}${recording ? ', enregistrement programmé' : ''}`}
-      className={`group absolute top-1 bottom-1 overflow-hidden rounded-lg border px-2 text-left cursor-pointer ${tone}`}
+      className={`group absolute top-1 bottom-1 rounded-lg border px-2 text-left cursor-pointer ${tone}`}
       style={{ left: left + 1, width: Math.max(width - 2, 24) }}
       title={`${formatTime(p.startTime)} – ${formatTime(p.endTime)} · ${p.title}${isPast && replayable ? ' · Revoir' : ''}`}
     >
-      <span className="flex items-center gap-1 truncate text-xs font-medium leading-tight pr-5">
-        {isPast && replayable && <RotateCcw aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />}
-        {recording && <CircleDot aria-hidden="true" className="h-3 w-3 shrink-0 text-red-400" />}
-        <span className="truncate">{p.title}</span>
-      </span>
-      <span className="block truncate font-mono text-[10px] text-neutral-400 leading-tight">
-        {formatTime(p.startTime)} – {formatTime(p.endTime)}
-      </span>
+      {/* Le texte colle au bord droit de la colonne quand l'émission a commencé
+          avant la fenêtre : au lieu de « 1 » et « grammes », le titre et l'heure
+          restent lisibles. Il reprend sa place dès que le début de la case entre
+          dans la vue. */}
+      <div className="sticky w-max max-w-full" style={{ left: labelLeft }}>
+        <span className="flex items-center gap-1 truncate text-xs font-medium leading-tight pr-5">
+          {isPast && replayable && <RotateCcw aria-hidden="true" className="h-3 w-3 shrink-0 text-primary" />}
+          {recording && <CircleDot aria-hidden="true" className="h-3 w-3 shrink-0 text-red-400" />}
+          <span className="truncate">{p.title}</span>
+        </span>
+        <span className="block truncate font-mono text-[10px] text-neutral-400 leading-tight">
+          {formatTime(p.startTime)} – {formatTime(p.endTime)}
+        </span>
+      </div>
       {isCurrent && replayable && <button
         type="button"
         aria-label={`Regarder « ${p.title} » depuis le début`}
@@ -662,6 +670,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
                         recording={recording}
                         replayable={replayable}
                         entry={p === entryProgram}
+                        labelLeft={colWidth + 8}
                         onSelectChannel={onSelectChannel}
                         onCatchup={onCatchup}
                         setSheet={setSheet}
