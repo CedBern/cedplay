@@ -589,9 +589,11 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   // lignes qui remplissent toute la largeur — vues + fraîcheur, chaîne/état + date,
   // titre, horaires/progression. Sa hauteur laisse quatre lignes de chaînes entières.
   const band = tvMode ? (
-    <div data-guide-band className="mb-1 flex shrink-0 items-stretch gap-3 rounded-2xl border border-neutral-800 bg-[linear-gradient(180deg,#1b1b1b,#151515)] px-3 py-0.5">
+    <div data-guide-band className="mb-1 flex shrink-0 items-stretch gap-3 rounded-2xl border border-neutral-800 bg-[linear-gradient(180deg,#1b1b1b,#151515)] pr-3">
       {previewActive ? (
-        <div ref={previewRef} data-guide-preview={previewState} style={{ height: PREVIEW_HEIGHT, aspectRatio: '16 / 9' }} className="flex shrink-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-700 bg-black text-[11px] text-neutral-400 shadow-[0_6px_18px_rgba(0,0,0,0.45)]">
+        // L'aperçu touche le bord gauche et les bords haut/bas du cadre : ses angles
+        // reprennent le rayon du bandeau, sans bordure propre (celle du cadre suffit).
+        <div ref={previewRef} data-guide-preview={previewState} style={{ height: PREVIEW_HEIGHT, aspectRatio: '16 / 9' }} className="flex shrink-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-l-2xl rounded-r-xl bg-black text-[11px] text-neutral-400">
           {previewState === 'error' ? 'Aperçu indisponible'
             : bandProgramIsFuture && bandProgram
               ? <span className="flex flex-col items-center gap-0.5 text-center">
@@ -605,10 +607,10 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
               : previewState === 'idle' ? <span className="flex items-center gap-1.5 opacity-60"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</span>
               : 'Aperçu…'}
         </div>
-      ) : toolbar && <div className="flex shrink-0 items-center">{toolbar}</div>}
-      {/* Le sélecteur s'aligne sur le haut de l'aperçu et les horaires sur son bas :
-          l'espace restant sépare la barre de vues du nom du programme. */}
-      <div className="flex min-w-0 flex-1 flex-col justify-between gap-0.5">
+      ) : toolbar && <div className="flex shrink-0 items-center pl-3">{toolbar}</div>}
+      {/* Le sélecteur s'aligne sur le haut de l'aperçu, très légèrement en dessous, et
+          les horaires sur son bas : l'espace restant sépare la barre de vues du nom. */}
+      <div className="flex min-w-0 flex-1 flex-col justify-between gap-0.5 pt-1 pb-0.5">
         <div className="flex min-w-0 items-center gap-2">
           {previewActive && toolbar}
           {refreshTime && (
