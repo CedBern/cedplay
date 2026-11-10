@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dayBounds, layoutProgram, buildHourTicks, nowOffsetInDay, normalizePrograms, hasProgramInRange, guideRange, PX_PER_MINUTE } from '@/utils/epgGrid';
+import { dayBounds, layoutProgram, buildHourTicks, nowOffsetInDay, normalizePrograms, hasProgramInRange, programsInRange, guideRange, PX_PER_MINUTE } from '@/utils/epgGrid';
 import type { EPGProgram } from '@/types/epg';
 
 const program = (start: Date, end: Date): EPGProgram => ({
@@ -114,6 +114,31 @@ describe('hasProgramInRange', () => {
 
   it('accepte une plage vide de programmes', () => {
     expect(hasProgramInRange([], at(9), at(10))).toBe(false);
+  });
+});
+
+describe('programsInRange', () => {
+  const at = (h: number, m = 0) => new Date(2026, 10, 3, h, m);
+  const prog = (id: string, start: Date, end: Date): EPGProgram => ({ id, channelId: 'c', title: id, startTime: start, endTime: end });
+  const list = [prog('a', at(9), at(10)), prog('b', at(10), at(11)), prog('c', at(11), at(12))];
+  const ids = (range: { start: number; end: number }) => list.slice(range.start, range.end).map(p => p.id);
+
+  it('retrouve la tranche qui chevauche la fenêtre', () => {
+    expect(ids(programsInRange(list, at(9, 30).getTime(), at(11, 30).getTime()))).toEqual(['a', 'b', 'c']);
+    expect(ids(programsInRange(list, at(10, 15).getTime(), at(10, 45).getTime()))).toEqual(['b']);
+  });
+
+  it("inclut l'émission en cours au début de la fenêtre", () => {
+    expect(ids(programsInRange(list, at(9, 45).getTime(), at(10, 15).getTime()))).toEqual(['a', 'b']);
+  });
+
+  it('écarte une fenêtre entièrement avant ou après', () => {
+    expect(ids(programsInRange(list, at(7).getTime(), at(8).getTime()))).toEqual([]);
+    expect(ids(programsInRange(list, at(13).getTime(), at(14).getTime()))).toEqual([]);
+  });
+
+  it('accepte une liste vide', () => {
+    expect(programsInRange([], at(9).getTime(), at(10).getTime())).toEqual({ start: 0, end: 0 });
   });
 });
 

@@ -67,6 +67,21 @@ it('relance l’aperçu une seule fois par image, quel que soit le nombre d’é
   expect(bridge.showPreview).toHaveBeenCalledTimes(1);
 });
 
+it('une émission à venir ne lance pas le direct : le cadre annonce son heure', async () => {
+  const now = Date.now();
+  const future = { id: 'f', channelId: 'a', title: 'Film du soir', startTime: new Date(now + 3_600_000), endTime: new Date(now + 5_400_000) };
+  await act(async () => {
+    render(<EPGGrid channels={[channel]} epgData={{ a: [program(), future] }} onSelectChannel={() => {}} tvMode preview />);
+  });
+  const cell = screen.getByRole('button', { name: /^Film du soir,/ });
+  await act(async () => { cell.focus(); });
+  await act(async () => { vi.advanceTimersByTime(800); });
+  // Le flux de la chaîne montrerait un autre programme que celui affiché dans le bandeau.
+  expect(bridge.showPreview).not.toHaveBeenCalled();
+  expect(screen.getByText('Programme à venir')).toBeVisible();
+  expect(screen.getByText(/^À /)).toBeVisible();
+});
+
 it('le défilement ne rappelle pas le pont quand aucun aperçu n’est affiché', async () => {
   await act(async () => {
     render(<EPGGrid channels={[channel]} epgData={{ a: [program()] }} onSelectChannel={() => {}} tvMode preview />);

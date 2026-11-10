@@ -95,6 +95,33 @@ export function hasProgramInRange(programs: EPGProgram[], start: Date, end: Date
   return !!before && before.endTime > start;
 }
 
+/**
+ * Indices [début, fin) des émissions qui chevauchent [startMs, endMs], par dichotomie
+ * (liste triée par début, sans chevauchement — voir normalizePrograms). Remplace le
+ * balayage linéaire de chaque ligne à chaque défilement de la grille : au plus une
+ * émission est en cours à startMs (la précédente du premier début qui le dépasse), puis
+ * on avance jusqu'au premier début >= endMs.
+ */
+export function programsInRange(programs: EPGProgram[], startMs: number, endMs: number): { start: number; end: number } {
+  let lo = 0;
+  let hi = programs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (programs[mid].startTime.getTime() <= startMs) lo = mid + 1;
+    else hi = mid;
+  }
+  // programs[lo - 1] commence à ou avant startMs : il chevauche s'il finit après.
+  const start = lo > 0 && programs[lo - 1].endTime.getTime() > startMs ? lo - 1 : lo;
+  let a = lo;
+  let b = programs.length;
+  while (a < b) {
+    const mid = (a + b) >> 1;
+    if (programs[mid].startTime.getTime() < endMs) a = mid + 1;
+    else b = mid;
+  }
+  return { start, end: a };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**

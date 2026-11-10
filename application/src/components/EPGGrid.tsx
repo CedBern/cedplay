@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
-import { ChevronLeft, ChevronRight, Bell, CircleDot, Eye, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Bell, CircleDot, Clock, Eye, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
 import { isInArchive } from '@/utils/catchup';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Button } from '@/components/ui/button';
@@ -7,11 +7,11 @@ import { Channel } from '@/types/channel';
 import type { EPGState } from '@/hooks/useEPG';
 import { EPGData, EPGProgram } from '@/types/epg';
 import { formatTime } from '@/utils/epgXmltv';
-import { CHANNEL_COL_WIDTH, PX_PER_MINUTE, buildHourTicks, guideRange, hasProgramInRange, layoutProgram, normalizePrograms, nowOffsetInDay, rangeWidth } from '@/utils/epgGrid';
+import { CHANNEL_COL_WIDTH, PX_PER_MINUTE, buildHourTicks, guideRange, hasProgramInRange, layoutProgram, normalizePrograms, nowOffsetInDay, programsInRange, rangeWidth } from '@/utils/epgGrid';
 import { getReminders, addReminder, removeReminder, REMINDERS_EVENT, type EpgReminder } from '@/utils/reminders';
 import { toast } from 'sonner';
 import { NativePlayerBridge, RecordingsBridge, type PreviewState, type ScheduledRecording } from '@/utils/nativePlayer';
-import { findScheduled, RECORDING_RULES_EVENT } from '@/utils/recordingRules';
+import { RECORDING_RULES_EVENT } from '@/utils/recordingRules';
 import { getCurrentProgram } from '@/utils/epgXmltv';
 import { ProgramSheet, type ProgramSheetTarget } from '@/components/ProgramSheet';
 import { GuideSearchDialog } from '@/components/GuideSearchDialog';
@@ -156,7 +156,7 @@ const ProgramCell = memo(function ProgramCell({
           {recording && <CircleDot aria-hidden="true" className="h-3 w-3 shrink-0 text-red-400" />}
           <span className="truncate">{p.title}</span>
         </span>
-        <span className="block truncate font-mono text-[10px] text-neutral-400 leading-tight">
+        <span className="block truncate tabular-nums text-[11px] text-neutral-400 leading-tight">
           {formatTime(p.startTime)} – {formatTime(p.endTime)}
         </span>
       </div>
@@ -234,6 +234,36 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     return () => window.removeEventListener(RECORDING_RULES_EVENT, reloadScheduled);
   }, [reloadScheduled]);
 
+  // Programmations indexées par URL : la pastille rouge est testée pour chaque émission
+  // affichée ; sans index, chaque test reconstruisait un Set d'URLs de la chaîne.
+  const scheduledByUrl = useMemo(() => {
+    const map = new Map<string, ScheduledRecording[]>();
+    for (const s of scheduled) {
+      const list = map.get(s.url);
+      if (list) list.push(s);
+      else map.set(s.url, [s]);
+    }
+    return map;
+  }, [scheduled]);
+  const isScheduled = useCallback((channel: Channel, program: EPGProgram): boolean => {
+    const start = program.startTime.getTime();
+    const end = program.endTime.getTime();
+    // Mêmes bornes que findScheduled : démarrage au plus une heure avant, au plus tard
+    // pendant l'émission, fin après la fin de l'émission.
+    const latestStart = Math.max(start + 60_000, Math.min(Date.now() + 60_000, end - 60_000));
+    const matches = (url: string) => {
+      const list = scheduledByUrl.get(url);
+      if (!list) return false;
+      for (const s of list) {
+        if (s.startTimeMs >= start - 60 * 60_000 && s.startTimeMs <= latestStart && s.startTimeMs + s.durationMs >= end) return true;
+      }
+      return false;
+    };
+    if (matches(channel.url)) return true;
+    for (const v of channel.variants ?? []) if (matches(v.url)) return true;
+    return false;
+  }, [scheduledByUrl]);
+
   // Fiche programme, recherche, émission survolée (bandeau TV).
   const [sheet, setSheet] = useState<ProgramSheetTarget | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -270,9 +300,12 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   // Sans émission ciblée, le bandeau montre la chaîne en cours de lecture.
   const bandChannel = focused?.channel ?? currentChannel ?? null;
   const bandProgram = focused?.program ?? (currentChannel && epgData ? getCurrentProgram(currentChannel.id, epgData) : null);
+  // Une émission à venir n'est pas à l'antenne : lancer le direct de la chaîne donnerait
+  // l'image d'un autre programme sous ce titre. Le cadre annonce alors l'heure.
+  const bandProgramIsFuture = !!bandProgram && bandProgram.startTime.getTime() > now.getTime();
   const focusedUrl = bandChannel?.url ?? null;
   useEffect(() => { setManualPreview(false); }, [focusedUrl]);
-  const previewUrl = previewActive && focusInside && !sheet && !searchOpen && focusedUrl && (previewMode !== 'manual' || manualPreview) ? focusedUrl : null;
+  const previewUrl = previewActive && focusInside && !sheet && !searchOpen && focusedUrl && !bandProgramIsFuture && (previewMode !== 'manual' || manualPreview) ? focusedUrl : null;
   const requested = useRef<string | null>(null);
   const sendPreview = useCallback((url: string) => {
     const box = previewRef.current?.getBoundingClientRect();
@@ -501,6 +534,12 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
       {previewActive && (
         <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9' }} className="flex flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-[11px] text-neutral-400">
           {previewState === 'error' ? 'Aperçu indisponible'
+            : bandProgramIsFuture && bandProgram
+              ? <span className="flex flex-col items-center gap-0.5 text-center">
+                <Clock className="h-4 w-4 opacity-60" aria-hidden="true" />
+                <span className="text-sm font-medium leading-none text-white">À {formatTime(bandProgram.startTime)}</span>
+                <span className="text-[10px] leading-none">Programme à venir</span>
+              </span>
             : previewState === 'playing' ? ''
             : previewMode === 'manual' && !manualPreview
               ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button>
@@ -516,7 +555,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
           </span>
         )}
         <span className="w-full truncate text-sm font-medium leading-tight text-white">{bandProgram ? bandProgram.title : bandChannel?.name ?? ''}</span>
-        {bandProgram && <span className="w-full truncate font-mono text-[11px] leading-tight text-neutral-400">
+        {bandProgram && <span className="w-full truncate tabular-nums text-[11px] leading-tight text-neutral-400">
           {bandChannel ? `${bandChannel.name} · ` : ''}{formatTime(bandProgram.startTime)} – {formatTime(bandProgram.endTime)}
         </span>}
       </div>
@@ -613,7 +652,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
                 const midnight = h.getHours() === 0;
                 return (
                   <div key={h.getTime()} className={`absolute top-0 bottom-0 border-l ${midnight ? 'border-primary/60' : 'border-neutral-800'}`} style={{ left }}>
-                    <span className={`flex h-full items-end px-1.5 pb-1.5 font-mono text-xs ${midnight ? 'font-semibold capitalize text-primary' : 'text-neutral-400'}`}>
+                    <span className={`flex h-full items-end px-1.5 pb-1.5 tabular-nums text-xs ${midnight ? 'font-semibold capitalize text-primary' : 'text-neutral-400'}`}>
                       {midnight ? shortDayOf(h) : formatTime(h)}
                     </span>
                   </div>
@@ -632,6 +671,10 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
               ? programs.find((p) => p.startTime <= now && now < p.endTime)
                 ?? programs.find((p) => p.endTime.getTime() > windowStartMs && p.startTime.getTime() < windowEndMs)
               : undefined;
+            // Tranche visible par dichotomie : le layout n'est calculé que pour les
+            // émissions proches de la fenêtre, sans balayer toute la journée à chaque ligne.
+            const { start: visibleStart, end: visibleEnd } = programsInRange(programs, windowStartMs, windowEndMs);
+            const visiblePrograms = programs.slice(visibleStart, visibleEnd);
             return (
               <div
                 key={channel.id}
@@ -657,17 +700,14 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
                   {playing && <span className="text-[10px] text-primary">En lecture</span>}
                 </button>
                 <div className="relative" style={{ width: timelineWidth }}>
-                  {programs.map((p) => {
-                    // Filtre de fenêtre en temps : le layout n'est calculé que pour les
-                    // programmes proches de la zone visible.
-                    if (p.endTime.getTime() <= windowStartMs || p.startTime.getTime() >= windowEndMs) return null;
+                  {visiblePrograms.map((p) => {
                     const layout = layoutProgram(p, range);
                     if (!layout) return null;
                     const reminded = reminders.some(r => r.channelId === channel.id && r.startTime === p.startTime.getTime());
                     const isPast = p.endTime <= now;
                     const isCurrent = p.startTime <= now && now < p.endTime;
                     const replayable = rowArchiveDays > 0 && isInArchive(p.startTime, rowArchiveDays, now.getTime());
-                    const recording = !isPast && scheduled.length > 0 && !!findScheduled(scheduled, channel, p);
+                    const recording = !isPast && scheduled.length > 0 && isScheduled(channel, p);
                     return (
                       <ProgramCell
                         key={p.startTime.getTime()}
