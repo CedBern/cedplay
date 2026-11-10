@@ -943,7 +943,7 @@ export function IPTVPlayer() {
   // le fond orange marque la vue active), dans l'en-tête de la carte sur téléphone.
   const segmentClass = (active: boolean) => `flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-[13px] transition-colors ${active ? 'bg-primary font-semibold text-neutral-950' : 'text-neutral-300 hover:bg-white/10'}`;
   const viewToolbar = tvMode ? (
-    <div role="group" aria-label="Affichage" className="flex h-11 w-[288px] shrink-0 items-stretch gap-0.5 rounded-xl border border-neutral-800 bg-black/60 p-1">
+    <div role="group" aria-label="Affichage" className="flex h-10 w-[288px] shrink-0 items-stretch gap-0.5 rounded-xl border border-neutral-800 bg-black/60 p-1">
       <button type="button" data-segment aria-pressed={channelView === 'list'} title="Vue liste" onClick={() => setChannelView('list')} className={segmentClass(channelView === 'list')}><List aria-hidden="true" className="h-4 w-4" />Liste</button>
       <button type="button" data-segment aria-pressed={channelView === 'grid'} title="Grille des programmes (guide TV)" onClick={() => setChannelView('grid')} className={segmentClass(channelView === 'grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4" />Grille</button>
       {currentChannel && <button type="button" data-segment title={currentChannel.name} onClick={() => handleChannelSelect(currentChannel)} className={segmentClass(false)}><Play aria-hidden="true" className="h-4 w-4" />Lecteur</button>}

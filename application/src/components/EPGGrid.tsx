@@ -52,8 +52,9 @@ const isActivationKey = (key: string) => key === 'Enter' || key === ' ';
 
 const TIME_AXIS_HEIGHT = 44;
 const ROW_HEIGHT = 56;
-/** Aperçu TV : 176 × 99 (16:9) dans le bandeau, centré avec une marge de 4 px. */
-const PREVIEW_WIDTH = 176;
+/** Aperçu TV : 16:9 à gauche du bandeau. La hauteur est calée pour que le bandeau
+ * (aperçu + quatre lignes de texte + date) laisse **quatre lignes de chaînes** entières. */
+const PREVIEW_HEIGHT = 132;
 /** Colonne des chaînes plus étroite sur téléphone : plus d'heures visibles. */
 const NARROW_COL_WIDTH = 112;
 /** Marge (px) de programmes rendus de part et d'autre de la zone visible. */
@@ -541,14 +542,56 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     : null;
   const bandStatus = !bandProgram ? null : bandProgramCurrent ? 'live' : bandProgramIsFuture ? 'future' : 'past';
 
-  // Bandeau TV : un seul bloc lu de gauche à droite — Liste/Grille/Lecteur, aperçu 16:9,
-  // puis l'émission ciblée (chaîne, direct, titre, horaires, progression). Il occupe
-  // l'espace vide au-dessus de la grille, donc l'aperçu ne masque plus de programme.
+  // Commandes de date : à droite du bandeau sur TV (la grille récupère la ligne entière
+  // au-dessus d'elle), sur leur propre ligne au-dessus de la grille sur téléphone.
+  const dateNav = (
+    <div className="flex items-center gap-0.5">
+      <Button
+        variant="outline"
+        size="sm"
+        className={`${tvMode ? 'h-7 w-7 bg-neutral-900/60' : 'h-9 w-9'} rounded-full p-0 border-neutral-800 text-white hover:bg-neutral-900`}
+        aria-label="Jour précédent"
+        disabled={!canPrev}
+        onClick={() => scrollToOffset(offsetOf(prevStart))}
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <span aria-live="polite" className={`text-center font-semibold capitalize ${tvMode ? 'min-w-[132px] text-[13px]' : 'min-w-[160px] text-[15px]'}`}>{dayLabelOf(viewedDay)}</span>
+      <Button
+        variant="outline"
+        size="sm"
+        className={`${tvMode ? 'h-7 w-7 bg-neutral-900/60' : 'h-9 w-9'} rounded-full p-0 border-neutral-800 text-white hover:bg-neutral-900`}
+        aria-label="Jour suivant"
+        disabled={!canNext}
+        onClick={() => scrollToOffset(offsetOf(nextStart))}
+      >
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+  const dateActions = (
+    <div className="flex items-center gap-1">
+      {nowOffset !== null && (
+        <Button variant="outline" size="sm" className={`${tvMode ? 'h-7 rounded-full bg-neutral-900/60 px-3 text-[13px]' : 'h-9 rounded-full'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={scrollToNow}>
+          {isToday ? 'Maintenant' : "Aujourd'hui"}
+        </Button>
+      )}
+      <Button variant="outline" size="sm" className={`${tvMode ? 'h-7 w-7 bg-neutral-900/60' : 'h-9 w-9'} rounded-full p-0 border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
+        <Search className="h-4 w-4" aria-hidden="true" /><span className={tvMode ? 'sr-only' : 'hidden sm:inline'}>Rechercher</span>
+      </Button>
+      {onGuideSettings && <Button variant="outline" size="sm" className={`${tvMode ? 'h-7 w-7 bg-neutral-900/60' : 'h-9 w-9'} rounded-full p-0 border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
+        <Settings2 className="h-4 w-4" aria-hidden="true" />
+      </Button>}
+    </div>
+  );
+
+  // Bandeau TV : l'aperçu 16:9 à gauche (comme la direction B), et à sa droite quatre
+  // lignes qui remplissent toute la largeur — vues + fraîcheur, chaîne/état + date,
+  // titre, horaires/progression. Sa hauteur laisse quatre lignes de chaînes entières.
   const band = tvMode ? (
-    <div data-guide-band className="mb-1 flex shrink-0 items-center gap-3 rounded-2xl border border-neutral-800 bg-[linear-gradient(180deg,#1b1b1b,#151515)] px-3 py-1">
-      {toolbar && <div className="flex shrink-0 items-center">{toolbar}</div>}
-      {previewActive && (
-        <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9' }} className="flex shrink-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-700 bg-black text-[11px] text-neutral-400 shadow-[0_6px_18px_rgba(0,0,0,0.45)]">
+    <div data-guide-band className="mb-1 flex shrink-0 items-stretch gap-3 rounded-2xl border border-neutral-800 bg-[linear-gradient(180deg,#1b1b1b,#151515)] px-3 py-0.5">
+      {previewActive ? (
+        <div ref={previewRef} data-guide-preview={previewState} style={{ height: PREVIEW_HEIGHT, aspectRatio: '16 / 9' }} className="flex shrink-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-700 bg-black text-[11px] text-neutral-400 shadow-[0_6px_18px_rgba(0,0,0,0.45)]">
           {previewState === 'error' ? 'Aperçu indisponible'
             : bandProgramIsFuture && bandProgram
               ? <span className="flex flex-col items-center gap-0.5 text-center">
@@ -562,13 +605,10 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
               : previewState === 'idle' ? <span className="flex items-center gap-1.5 opacity-60"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</span>
               : 'Aperçu…'}
         </div>
-      )}
+      ) : toolbar && <div className="flex shrink-0 items-center">{toolbar}</div>}
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
-          {bandChannel && <span className="truncate text-[11px] uppercase tracking-[0.07em] text-neutral-400">{bandChannel.name}</span>}
-          {bandStatus === 'live' && <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-primary"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />En direct</span>}
-          {bandStatus === 'future' && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-neutral-300">À venir</span>}
-          {bandStatus === 'past' && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-neutral-400">Terminé</span>}
+          {previewActive && toolbar}
           {refreshTime && (
             <button
               type="button"
@@ -581,11 +621,18 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
             </button>
           )}
         </div>
+        <div className="flex min-w-0 items-center gap-2">
+          {bandChannel && <span className="truncate text-[11px] uppercase tracking-[0.07em] text-neutral-400">{bandChannel.name}</span>}
+          {bandStatus === 'live' && <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-primary"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />En direct</span>}
+          {bandStatus === 'future' && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-neutral-300">À venir</span>}
+          {bandStatus === 'past' && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-neutral-400">Terminé</span>}
+          <span className="ml-auto flex shrink-0 items-center gap-2">{dateNav}{dateActions}</span>
+        </div>
         <span className="line-clamp-2 text-[15px] font-semibold leading-[1.2] text-white">{bandProgram ? bandProgram.title : bandChannel?.name ?? ''}</span>
         {bandProgram && (
           <div className="flex min-w-0 items-center gap-2 text-[11px] tabular-nums text-neutral-400">
             <span className="shrink-0">{formatTime(bandProgram.startTime)} – {formatTime(bandProgram.endTime)}</span>
-            {bandProgress !== null && <span aria-hidden="true" className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-neutral-700"><span className="block h-full rounded-full bg-primary" style={{ width: `${bandProgress}%` }} /></span>}
+            {bandProgress !== null && <span aria-hidden="true" className="h-1 min-w-[96px] max-w-[360px] flex-1 overflow-hidden rounded-full bg-neutral-700"><span className="block h-full rounded-full bg-primary" style={{ width: `${bandProgress}%` }} /></span>}
             {bandRemainingMin !== null && <span className="shrink-0 text-neutral-500">{bandRemainingMin >= 60 ? `reste ${Math.floor(bandRemainingMin / 60)} h ${String(bandRemainingMin % 60).padStart(2, '0')}` : `reste ${bandRemainingMin} min`}</span>}
           </div>
         )}
@@ -621,46 +668,14 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
         <span className="truncate">{guideUpdatedLabel}</span>
         <Button size="sm" variant="ghost" onClick={onRetry}>Actualiser</Button>
       </div>}
-      {/* Navigation jour : fait défiler la frise continue jusqu'au jour voulu.
-          En mode TV, les commandes font 32 px : l'aperçu du bandeau gagne la place. */}
-      <div className={`flex items-center justify-between gap-2 ${tvMode ? 'mb-1' : 'mb-2 flex-wrap'}`}>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
-            aria-label="Jour précédent"
-            disabled={!canPrev}
-            onClick={() => scrollToOffset(offsetOf(prevStart))}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <span aria-live="polite" className="min-w-[160px] text-center text-[15px] font-semibold capitalize">{dayLabelOf(viewedDay)}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
-            aria-label="Jour suivant"
-            disabled={!canNext}
-            onClick={() => scrollToOffset(offsetOf(nextStart))}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+      {/* Navigation jour : sur téléphone elle garde sa propre ligne au-dessus de la
+          grille ; sur TV elle est dans le bandeau, ce qui rend une ligne de guide. */}
+      {!tvMode && (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          {dateNav}
+          {dateActions}
         </div>
-        <div className="flex items-center gap-1">
-          {nowOffset !== null && (
-            <Button variant="outline" size="sm" className={`${tvMode ? 'h-8 rounded-full bg-neutral-900/60 px-4' : 'h-9 rounded-full'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={scrollToNow}>
-              {isToday ? 'Maintenant' : "Aujourd'hui"}
-            </Button>
-          )}
-          <Button variant="outline" size="sm" className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
-            <Search className="h-4 w-4 sm:mr-1.5" aria-hidden="true" /><span className={tvMode ? 'sr-only' : 'hidden sm:inline'}>Rechercher</span>
-          </Button>
-          {onGuideSettings && <Button variant="outline" size="sm" className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
-            <Settings2 className="h-4 w-4" aria-hidden="true" />
-          </Button>}
-        </div>
-      </div>
+      )}
 
       {rows.length === 0 && <p role="status" className="py-6 text-sm text-neutral-300 text-center">Pas de programmes à afficher. Actualise le guide ou vérifie la source EPG.</p>}
       {/* Grille défilante. L'aperçu est dans le bandeau du dessus : aucune case n'est recouverte. */}
