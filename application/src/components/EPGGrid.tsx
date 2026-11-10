@@ -606,7 +606,9 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
               : 'Aperçu…'}
         </div>
       ) : toolbar && <div className="flex shrink-0 items-center">{toolbar}</div>}
-      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+      {/* Le sélecteur s'aligne sur le haut de l'aperçu et les horaires sur son bas :
+          l'espace restant sépare la barre de vues du nom du programme. */}
+      <div className="flex min-w-0 flex-1 flex-col justify-between gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
           {previewActive && toolbar}
           {refreshTime && (
