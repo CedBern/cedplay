@@ -196,7 +196,7 @@ html, body, #root {
   .live-channel-panel { height: calc(100vh - 128px); height: calc(100dvh - 128px); min-height: 400px; }
   .live-view-toolbar { padding: 6px 12px; }
   .live-view-toolbar button { min-height: 34px; height: 34px; }
-  .live-view-content { padding: 0 12px 12px; }
+  .live-view-content { padding: 0 12px 8px; }
   .live-channel-list-panel { height: auto; min-height: 0; }
   .live-channel-panel .channel-browser { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto auto; gap: 6px 12px; }
   .live-channel-panel .channel-count, .live-channel-panel .channel-groups { grid-column: 1 / -1; }

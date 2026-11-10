@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type SetStateAction } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
 import { ChevronLeft, ChevronRight, Bell, CircleDot, Eye, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
 import { isInArchive } from '@/utils/catchup';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -38,6 +38,8 @@ interface EPGGridProps {
   /** Mini-lecteur Android de la chaîne survolée, avec le même mode que l'écran Direct. */
   preview?: boolean | undefined;
   previewMode?: 'auto' | 'manual' | 'off' | undefined;
+  /** Liste / Grille / Lecteur, rendus dans le bandeau TV à côté de l'aperçu. */
+  toolbar?: ReactNode;
   /** Réglages du guide (sources, association d'une chaîne). */
   onGuideSettings?: ((channel?: Channel) => void) | undefined;
 }
@@ -50,11 +52,8 @@ const isActivationKey = (key: string) => key === 'Enter' || key === ' ';
 
 const TIME_AXIS_HEIGHT = 44;
 const ROW_HEIGHT = 56;
-/** Aperçu TV : 16:9, 256 × 144, à 12 px du bord droit et sous l'axe des heures. */
-const PREVIEW_WIDTH = 256;
-const PREVIEW_HEIGHT = (PREVIEW_WIDTH * 9) / 16;
-const PREVIEW_RIGHT = 12;
-const PREVIEW_TOP = 48;
+/** Aperçu TV : 176 × 99 (16:9) dans le bandeau, centré avec une marge de 4 px. */
+const PREVIEW_WIDTH = 176;
 /** Colonne des chaînes plus étroite sur téléphone : plus d'heures visibles. */
 const NARROW_COL_WIDTH = 112;
 /** Marge (px) de programmes rendus de part et d'autre de la zone visible. */
@@ -184,7 +183,7 @@ const ProgramCell = memo(function ProgramCell({
 });
 
 /** Grille des programmes (guide TV) : chaînes en lignes, horaires en colonnes. */
-export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, guideState, onRetry, onConfigure, lockedGroups, unlocked, catchupDays, onCatchup, playlistId = '', tvMode = false, preview = false, previewMode = 'auto', onGuideSettings }: EPGGridProps) {
+export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, guideState, onRetry, onConfigure, lockedGroups, unlocked, catchupDays, onCatchup, playlistId = '', tvMode = false, preview = false, previewMode = 'auto', toolbar, onGuideSettings }: EPGGridProps) {
   const [now, setNow] = useState(() => new Date());
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(isNarrowScreen);
@@ -259,19 +258,21 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   const colWidth = narrow ? NARROW_COL_WIDTH : CHANNEL_COL_WIDTH;
 
   // ── Mini-lecteur (Android) ─────────────────────────────────────────────
-  // Posé par Android au-dessus du cadre réservé ; actif seulement quand le focus est
-  // dans la grille et qu'aucune fenêtre n'est ouverte (il passerait devant).
+  // Le cadre 16:9 vit dans le bandeau du guide, au-dessus de la grille : il ne
+  // recouvre plus aucune émission. Il est posé par Android au-dessus de la WebView ;
+  // on l'arrête dès que le focus quitte le guide (il passerait devant les menus).
   const rootRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const [focusInside, setFocusInside] = useState(false);
   const [manualPreview, setManualPreview] = useState(false);
   const [previewState, setPreviewState] = useState<'idle' | 'waiting' | PreviewState>('idle');
-  // L'aperçu s'efface quand il recouvrirait l'émission ciblée : le guide reste lisible.
-  const [previewCovered, setPreviewCovered] = useState(false);
   const previewActive = tvMode && preview && previewMode !== 'off';
-  const focusedUrl = focused?.channel.url ?? null;
+  // Sans émission ciblée, le bandeau montre la chaîne en cours de lecture.
+  const bandChannel = focused?.channel ?? currentChannel ?? null;
+  const bandProgram = focused?.program ?? (currentChannel && epgData ? getCurrentProgram(currentChannel.id, epgData) : null);
+  const focusedUrl = bandChannel?.url ?? null;
   useEffect(() => { setManualPreview(false); }, [focusedUrl]);
-  const previewUrl = previewActive && focusInside && !sheet && !searchOpen && !previewCovered && focusedUrl && (previewMode !== 'manual' || manualPreview) ? focusedUrl : null;
+  const previewUrl = previewActive && focusInside && !sheet && !searchOpen && focusedUrl && (previewMode !== 'manual' || manualPreview) ? focusedUrl : null;
   const requested = useRef<string | null>(null);
   const sendPreview = useCallback((url: string) => {
     const box = previewRef.current?.getBoundingClientRect();
@@ -312,22 +313,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     const t = window.setTimeout(() => sendPreview(previewUrl), PREVIEW_DELAY);
     return () => window.clearTimeout(t);
   }, [previewActive, previewUrl, sendPreview]);
-  const updatePreviewCoverage = useCallback((el: HTMLElement) => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    const frame = scroller.getBoundingClientRect();
-    const box = el.getBoundingClientRect();
-    const previewLeft = frame.right - PREVIEW_RIGHT - PREVIEW_WIDTH;
-    const previewTop = frame.top + PREVIEW_TOP;
-    setPreviewCovered(box.right > previewLeft && box.left < frame.right - PREVIEW_RIGHT
-      && box.bottom > previewTop && box.top < previewTop + PREVIEW_HEIGHT);
-  }, []);
-  const onFocusIn = (event: ReactFocusEvent<HTMLDivElement>) => {
-    setFocusInside(true);
-    const cell = (event.target as HTMLElement).closest<HTMLElement>('[data-program-start]');
-    // Mesure après l'éventuel défilement déclenché par la prise de focus.
-    if (cell) requestAnimationFrame(() => updatePreviewCoverage(cell));
-  };
+  const onFocusIn = () => setFocusInside(true);
   const onFocusOut = () => { window.setTimeout(() => setFocusInside(!!rootRef.current?.contains(document.activeElement)), 0); };
 
   const todayKey = midnightOf(now).getTime();
@@ -467,17 +453,8 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
   const scrollTopNow = scrollerRef.current?.scrollTop ?? 0;
   const firstVisibleRow = virtualRows.find((v) => v.start + ROW_HEIGHT > scrollTopNow)?.index ?? 0;
 
-  // Les boutons Liste/Grille/Lecteur vivent hors de la grille : ils demandent
-  // l'entrée par un événement au lieu de laisser la géométrie viser 19 h.
-  useEffect(() => {
-    const focusEntry = () => {
-      const entry = scrollerRef.current?.querySelector<HTMLElement>('[data-guide-entry]');
-      if (entry) focusCell(entry);
-    };
-    window.addEventListener('guide-focus-entry', focusEntry);
-    return () => window.removeEventListener('guide-focus-entry', focusEntry);
-  }, [focusCell]);
-
+  // Les boutons Liste/Grille/Lecteur sont dans le bandeau au-dessus de la grille :
+  // Bas entre par l'émission en cours au lieu de viser la case située sous le bouton.
   const onGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (sheet || searchOpen) return;
     const target = event.target as HTMLElement;
@@ -512,34 +489,76 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     setPendingFocus({ channelId: row.channel.id, start: next.startTime.getTime() });
   };
 
+  const guideUpdatedLabel = guideState?.fetchedAt
+    ? `${guideState.status === 'stale' ? 'Guide enregistré — actualisation impossible' : 'Guide actualisé'} · ${new Date(guideState.fetchedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+    : null;
+
+  // Bandeau TV : Liste/Grille/Lecteur, aperçu 16:9 et émission ciblée. Il occupe
+  // l'espace vide au-dessus de la grille, donc l'aperçu ne masque plus de programme.
+  const band = tvMode ? (
+    <div data-guide-band className="mb-1 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 py-1">
+      <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
+      {previewActive && (
+        <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9' }} className="flex flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-[11px] text-neutral-400">
+          {previewState === 'error' ? 'Aperçu indisponible'
+            : previewState === 'playing' ? ''
+            : previewMode === 'manual' && !manualPreview
+              ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button>
+              : previewState === 'idle' ? <span className="flex items-center gap-1.5 opacity-60"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</span>
+              : 'Aperçu…'}
+        </div>
+      )}
+      <div className="flex min-w-0 flex-col items-end gap-0.5 text-right">
+        {guideUpdatedLabel && (
+          <span className="flex max-w-full items-center gap-2 text-[11px] text-neutral-500">
+            <span className="truncate">{guideUpdatedLabel}</span>
+            <Button size="sm" variant="ghost" onClick={onRetry}>Actualiser</Button>
+          </span>
+        )}
+        <span className="w-full truncate text-sm font-medium leading-tight text-white">{bandProgram ? bandProgram.title : bandChannel?.name ?? ''}</span>
+        {bandProgram && <span className="w-full truncate font-mono text-[11px] leading-tight text-neutral-400">
+          {bandChannel ? `${bandChannel.name} · ` : ''}{formatTime(bandProgram.startTime)} – {formatTime(bandProgram.endTime)}
+        </span>}
+      </div>
+    </div>
+  ) : null;
+
   if (!epgData) {
     return (
-      <div className="h-full flex items-center justify-center text-neutral-300 text-sm">
-        Chargement du guide des programmes…
+      <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={onGridKeyDown} data-remote-self className="relative h-full flex flex-col min-h-0 text-white">
+        {band}
+        <div className="flex flex-1 items-center justify-center text-neutral-300 text-sm">
+          Chargement du guide des programmes…
+        </div>
       </div>
     );
   }
 
   if (guideState?.status === 'absent' || guideState?.status === 'error') {
-    return <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
-      <p role="status">{guideState.status === 'absent' ? 'Aucune source de guide configurée.' : 'Guide indisponible. Vérifie la connexion et la source EPG.'}</p>
-      <div className="flex gap-2"><Button onClick={onRetry}>Réessayer</Button><Button variant="secondary" onClick={onGuideSettings ? () => onGuideSettings() : onConfigure}>Configurer le guide</Button></div>
+    return <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={onGridKeyDown} data-remote-self className="relative h-full flex flex-col min-h-0 text-white">
+      {band}
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center px-4">
+        <p role="status">{guideState.status === 'absent' ? 'Aucune source de guide configurée.' : 'Guide indisponible. Vérifie la connexion et la source EPG.'}</p>
+        <div className="flex gap-2"><Button onClick={onRetry}>Réessayer</Button><Button variant="secondary" onClick={onGuideSettings ? () => onGuideSettings() : onConfigure}>Configurer le guide</Button></div>
+      </div>
     </div>;
   }
 
   return (
     <div ref={rootRef} onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={onGridKeyDown} data-remote-self className="relative h-full flex flex-col min-h-0 text-white">
-      {guideState?.fetchedAt && <div className={`flex items-center justify-between gap-2 text-xs text-neutral-400 ${tvMode ? 'mb-1 flex-nowrap' : 'mb-2 flex-wrap'}`}>
-        <span className="truncate">{guideState.status === 'stale' ? 'Guide enregistré — actualisation impossible' : 'Guide actualisé'} · {new Date(guideState.fetchedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+      {band}
+      {!tvMode && guideUpdatedLabel && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-400">
+        <span className="truncate">{guideUpdatedLabel}</span>
         <Button size="sm" variant="ghost" onClick={onRetry}>Actualiser</Button>
       </div>}
-      {/* Navigation jour : fait défiler la frise continue jusqu'au jour voulu. */}
+      {/* Navigation jour : fait défiler la frise continue jusqu'au jour voulu.
+          En mode TV, les commandes font 32 px : l'aperçu du bandeau gagne la place. */}
       <div className={`flex items-center justify-between gap-2 ${tvMode ? 'mb-1' : 'mb-2 flex-wrap'}`}>
         <div className="flex items-center gap-1">
           <Button
             variant="outline"
             size="sm"
-            className="h-9 w-9 p-0 border-neutral-800 text-white hover:bg-neutral-900"
+            className={`${tvMode ? 'h-8 w-8' : 'h-9 w-9'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
             aria-label="Jour précédent"
             disabled={!canPrev}
             onClick={() => scrollToOffset(offsetOf(prevStart))}
@@ -550,7 +569,7 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
           <Button
             variant="outline"
             size="sm"
-            className="h-9 w-9 p-0 border-neutral-800 text-white hover:bg-neutral-900"
+            className={`${tvMode ? 'h-8 w-8' : 'h-9 w-9'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
             aria-label="Jour suivant"
             disabled={!canNext}
             onClick={() => scrollToOffset(offsetOf(nextStart))}
@@ -560,30 +579,22 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
         </div>
         <div className="flex items-center gap-1">
           {nowOffset !== null && (
-            <Button variant="outline" size="sm" className="h-9 border-neutral-800 text-white hover:bg-neutral-900" onClick={scrollToNow}>
+            <Button variant="outline" size="sm" className={`${tvMode ? 'h-8' : 'h-9'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={scrollToNow}>
               {isToday ? 'Maintenant' : "Aujourd'hui"}
             </Button>
           )}
-          <Button variant="outline" size="sm" className="h-9 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
+          <Button variant="outline" size="sm" className={`${tvMode ? 'h-8' : 'h-9'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
             <Search className="h-4 w-4 sm:mr-1.5" aria-hidden="true" /><span className={tvMode ? 'sr-only' : 'hidden sm:inline'}>Rechercher</span>
           </Button>
-          {onGuideSettings && <Button variant="outline" size="sm" className="h-9 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
+          {onGuideSettings && <Button variant="outline" size="sm" className={`${tvMode ? 'h-8' : 'h-9'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
             <Settings2 className="h-4 w-4" aria-hidden="true" />
           </Button>}
         </div>
       </div>
 
       {rows.length === 0 && <p role="status" className="py-6 text-sm text-neutral-300 text-center">Pas de programmes à afficher. Actualise le guide ou vérifie la source EPG.</p>}
-      {/* Grille défilante. L'aperçu est ancré à la zone de grille (sous l'axe des
-          heures et les commandes) : en haut à droite il recouvrait « Actualiser »
-          et n'avait aucune hauteur, faute d'utilitaire `aspect-video` généré. */}
+      {/* Grille défilante. L'aperçu est dans le bandeau du dessus : aucune case n'est recouverte. */}
       <div className="relative flex-1 min-h-0">
-        {tvMode && previewActive && focusInside && focused && !previewCovered && <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9', right: PREVIEW_RIGHT, top: PREVIEW_TOP }} className="absolute z-40 flex flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-xs text-neutral-400 shadow-lg">
-          {previewState === 'error' ? 'Aperçu indisponible'
-            : previewState === 'playing' ? ''
-            : previewMode === 'manual' && !manualPreview ? (focused ? <button type="button" onClick={() => setManualPreview(true)} className="flex items-center gap-1.5 rounded-full border border-neutral-700 px-3 py-1.5 text-white hover:bg-white/10"><Eye className="h-4 w-4" aria-hidden="true" />Aperçu</button> : 'Aperçu')
-            : previewState === 'idle' ? '' : 'Aperçu…'}
-        </div>}
         <div ref={scrollerRef} data-guide-scroller className="h-full overflow-auto overscroll-x-contain rounded-xl border border-neutral-900 bg-neutral-950">
           <div className="relative" style={{ width: colWidth + timelineWidth, height: Math.max(rowVirtualizer.getTotalSize(), TIME_AXIS_HEIGHT) }}>
           {/* Axe des heures (en-tête collant) */}

@@ -50,12 +50,12 @@ it('relance l’aperçu une seule fois par image, quel que soit le nombre d’é
   await act(async () => {
     render(<EPGGrid channels={[channel]} epgData={{ a: [program()] }} onSelectChannel={() => {}} tvMode preview />);
   });
-  // Survol d'une émission : le cadre n'apparaît qu'avec une case ciblée, et le
-  // 16:9 est porté par le style (l'utilitaire `aspect-video` n'existe pas dans
-  // le CSS produit : le cadre s'effondrait sur la hauteur de son texte).
+  // Le cadre est réservé dans le bandeau dès l'ouverture ; le 16:9 est porté par
+  // le style (l'utilitaire `aspect-video` n'existe pas dans le CSS produit).
+  expect(document.querySelector<HTMLElement>('[data-guide-preview]')?.style.aspectRatio).toBe('16 / 9');
+  // Le flux ne démarre qu'avec une émission ciblée.
   const cell = screen.getByRole('button', { name: /^Le journal,/ });
   await act(async () => { cell.focus(); });
-  expect(document.querySelector<HTMLElement>('[data-guide-preview]')?.style.aspectRatio).toBe('16 / 9');
   await act(async () => { vi.advanceTimersByTime(800); });
   expect(bridge.showPreview).toHaveBeenCalledTimes(1);
 

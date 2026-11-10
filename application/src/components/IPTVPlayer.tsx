@@ -939,6 +939,16 @@ export function IPTVPlayer() {
   </DropdownMenu>
   );
 
+  // Liste / Grille / Lecteur : dans le bandeau du guide sur TV (à côté de l'aperçu),
+  // dans l'en-tête de la carte sur téléphone.
+  const viewToolbar = (
+    <div className="flex w-full sm:w-auto items-center gap-1.5 shrink-0">
+      <Button variant={channelView === 'list' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'list' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'list'} title="Vue liste" onClick={() => setChannelView('list')}><List aria-hidden="true" className="h-4 w-4 mr-1.5" />Liste</Button>
+      <Button variant={channelView === 'grid' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'grid' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'grid'} title="Grille des programmes (guide TV)" onClick={() => setChannelView('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4 mr-1.5" />Grille</Button>
+      {currentChannel && <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => handleChannelSelect(currentChannel)} title={currentChannel.name}><Play aria-hidden="true" className="h-4 w-4 mr-2" />Lecteur</Button>}
+    </div>
+  );
+
   // En-tête : sur TV, une seule ligne (logo, rubriques, recherche) — repliable.
   const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${tvMode ? 'bg-background border-white/5' : scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
       <div className={tvMode ? 'tv-header-main min-w-0 flex-1 items-center gap-3' : 'flex items-center gap-2 min-w-0 flex-1'}>
@@ -1052,25 +1062,10 @@ export function IPTVPlayer() {
             {activeTab === 'channels' && !(tvMode && channelView === 'list') &&
             <Card
               className={`live-channel-panel ${channelView === 'list' ? 'live-channel-list-panel' : ''} bg-neutral-950 border-neutral-900 rounded-[20px] flex flex-col min-h-0`}
-              data-remote-self
-              onKeyDown={(event) => {
-                // En vue Grille, Bas depuis Liste/Grille/Lecteur entre par l'émission
-                // en cours ; sans cela la géométrie visait la case sous le bouton.
-                if (channelView !== 'grid' || event.key !== 'ArrowDown') return;
-                if (!(event.target as HTMLElement).closest('.live-view-toolbar')) return;
-                if (!document.querySelector('[data-guide-entry]')) return;
-                event.preventDefault();
-                event.stopPropagation();
-                window.dispatchEvent(new Event('guide-focus-entry'));
-              }}
             >
-              <CardHeader className="live-view-toolbar shrink-0 flex-row flex-wrap items-center justify-end gap-3 px-4 py-3 space-y-0">
-                <div className="flex w-full sm:w-auto items-center gap-1.5 shrink-0">
-                  <Button variant={channelView === 'list' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'list' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'list'} title="Vue liste" onClick={() => setChannelView('list')}><List aria-hidden="true" className="h-4 w-4 mr-1.5" />Liste</Button>
-                  <Button variant={channelView === 'grid' ? 'default' : 'outline'} size="sm" className={`min-h-11 ${channelView === 'grid' ? '' : 'border-neutral-800 text-white hover:bg-neutral-900'}`} aria-pressed={channelView === 'grid'} title="Grille des programmes (guide TV)" onClick={() => setChannelView('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4 mr-1.5" />Grille</Button>
-                  {currentChannel && <Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => handleChannelSelect(currentChannel)} title={currentChannel.name}><Play aria-hidden="true" className="h-4 w-4 mr-2" />Lecteur</Button>}
-                </div>
-              </CardHeader>
+              {!tvMode && <CardHeader className="live-view-toolbar shrink-0 flex-row flex-wrap items-center justify-end gap-3 px-4 py-3 space-y-0">
+                {viewToolbar}
+              </CardHeader>}
               <CardContent className="live-view-content flex-1 min-h-0 pb-6">
                 <ErrorBoundary>
                   {channelView === 'list' ? (
@@ -1110,6 +1105,7 @@ export function IPTVPlayer() {
                       tvMode={tvMode}
                       preview={previewEnabled}
                       previewMode={previewMode}
+                      {...(tvMode ? { toolbar: viewToolbar } : {})}
                       onGuideSettings={channel => setGuideSettings({ channel: channel ?? null })}
                     /></Suspense>
                   )}

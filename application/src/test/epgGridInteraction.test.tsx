@@ -86,6 +86,39 @@ it('garde le titre lisible au bord de la colonne quand l’émission a commencé
   expect((label as HTMLElement).style.left).toBe('208px'); // colonne 200 px + 8 px de padding
 });
 
+it('le bandeau TV réunit Liste/Grille/Lecteur, l’aperçu et l’émission ciblée au-dessus de la grille', async () => {
+  const now = Date.now();
+  const epgData = { a: [
+    { id: 'encours', channelId: 'a', title: 'Émission en cours', startTime: new Date(now - 60_000), endTime: new Date(now + 600_000) },
+  ] };
+  await act(async () => {
+    render(<EPGGrid channels={[channel]} currentChannel={channel} epgData={epgData} guideState={{ data: epgData, status: 'ready', fetchedAt: now }} onSelectChannel={() => {}} tvMode preview toolbar={<button type="button">Liste</button>} />);
+  });
+  const band = document.querySelector<HTMLElement>('[data-guide-band]');
+  expect(band).not.toBeNull();
+  expect(within(band!).getByRole('button', { name: 'Liste' })).toBeVisible();
+  expect(within(band!).getByRole('button', { name: 'Actualiser' })).toBeVisible();
+  // L'aperçu vit dans le bandeau, pas au-dessus des programmes.
+  expect(band).toContainElement(document.querySelector<HTMLElement>('[data-guide-preview]'));
+  // Même sans cibler une case, la chaîne en cours et son émission sont annoncées à droite.
+  expect(within(band!).getByText('Émission en cours')).toBeVisible();
+  expect(within(band!).getByText(/Chaîne test · /)).toBeVisible();
+});
+
+it('la flèche bas depuis Liste dans le bandeau entre par l’émission en cours', async () => {
+  const now = Date.now();
+  await act(async () => {
+    render(<EPGGrid channels={[channel]} onSelectChannel={() => {}} tvMode toolbar={<button type="button">Liste</button>} epgData={{ a: [
+      { id: 'avant', channelId: 'a', title: 'Émission précédente', startTime: new Date(now - 3_600_000), endTime: new Date(now - 1_800_000) },
+      { id: 'encours', channelId: 'a', title: 'Émission en cours', startTime: new Date(now - 1_800_000), endTime: new Date(now + 1_800_000) },
+    ] }} />);
+  });
+  const liste = screen.getByRole('button', { name: 'Liste' });
+  act(() => { liste.focus(); });
+  fireEvent.keyDown(liste, { key: 'ArrowDown' });
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: /^Émission en cours,/ }));
+});
+
 it('la flèche gauche sur la première émission reste sur place', async () => {
   const now = Date.now();
   await act(async () => {
