@@ -45,6 +45,17 @@ it('trouve films et séries hors Ma liste, sans accents, par catégorie, et ouvr
   expect(full).toHaveLength(0);
 });
 
+it('laisse les résultats en place quand la fiche d’un film s’ouvre par-dessus', async () => {
+  provider();
+  render(<GlobalSearchDialog {...props} />);
+  await userEvent.type(screen.getByRole('textbox'), 'miserables');
+  await userEvent.click(await screen.findByRole('button', { name: /Les Misérables \(2019\)/ }));
+  // La fiche remplace l'écran, pas la recherche : la refermer doit ramener aux résultats.
+  expect(props.onSelectVod).toHaveBeenCalled();
+  expect(props.onOpenChange).not.toHaveBeenCalled();
+  expect(screen.getByRole('textbox')).toHaveValue('miserables');
+});
+
 it('conserve les films accessibles si les séries échouent, sans masquer les résultats', async () => {
   provider({ movieName: 'Film trouvé', failSeries: true });
   render(<GlobalSearchDialog {...props} />);

@@ -14,8 +14,9 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { useAdultVodCategories } from '@/hooks/useAdultVodCategories';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import { channelQuality } from '@/utils/channelQuality';
+import { clearSearchHistory, forgetSearch, readSearchHistory, rememberSearch } from '@/utils/searchHistory';
 import type { Channel, PlaylistInfo } from '@/types/channel';
-import { Search, Tv, Film, MonitorPlay, ExternalLink, Play, Lock } from 'lucide-react';
+import { Search, Tv, Film, MonitorPlay, ExternalLink, Play, Lock, History, X } from 'lucide-react';
 
 export interface GlobalSearchDialogProps {
   open: boolean;
@@ -48,6 +49,7 @@ export function GlobalSearchDialog({
   onLockedChannelSelect,
 }: GlobalSearchDialogProps) {
   const [query, setQuery] = useState('');
+  const [recent, setRecent] = useState<string[]>([]);
   const [watchlist, setWatchlist] = useState<VodWatchlistItem[]>([]);
   const [catalog, setCatalog] = useState<VodWatchlistItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -112,9 +114,18 @@ export function GlobalSearchDialog({
   useEffect(() => {
     if (open) {
       setQuery('');
+      setRecent(readSearchHistory());
       void getVodWatchlistFromDB().then(setWatchlist).catch(() => {});
     }
   }, [open]);
+
+  // Une recherche menée jusqu'à un résultat rejoint l'historique de l'appareil :
+  // la rouvrir ne demande plus de la retaper.
+  const rememberQuery = () => setRecent(rememberSearch(query));
+  const handleOpenChange = (next: boolean) => {
+    if (!next) rememberQuery();
+    onOpenChange(next);
+  };
 
   const cleanQuery = query.trim().toLowerCase();
 
@@ -178,7 +189,7 @@ export function GlobalSearchDialog({
   const handleOpenPlatform = (platform: (typeof streamingPlatforms)[number]) => {
     // Application officielle d'abord (accueil si la page n'est pas un App Link), sinon navigateur.
     void NativePlayerBridge.openWeb(platform.url, undefined, platform.androidPackages, true);
-    onOpenChange(false);
+    handleOpenChange(false);
   };
 
   // Page d'un programme de replay : l'app officielle seulement si elle gère l'URL exacte,
@@ -186,11 +197,11 @@ export function GlobalSearchDialog({
   const handleOpenReplay = (url: string, platformId: string) => {
     const packages = replayPlatforms.find(rp => rp.id === platformId)?.androidPackages;
     void NativePlayerBridge.openWeb(url, undefined, packages);
-    onOpenChange(false);
+    handleOpenChange(false);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent onEscapeKeyDown={event => {
         // Radix écoute Retour/Escape en capture, avant le champ : le premier
         // appui quitte la saisie, le suivant peut fermer la recherche.
@@ -233,6 +244,45 @@ export function GlobalSearchDialog({
         {/* Suggestions initiales si vide */}
         {cleanQuery.length === 0 && (
           <div className="space-y-4 py-2">
+            {/* Historique de l'appareil d'abord : c'est la recherche qu'on veut refaire. */}
+            {recent.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-xs text-neutral-400">
+                    <History className="h-3.5 w-3.5" aria-hidden="true" />Recherches récentes
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setRecent(clearSearchHistory())}
+                    className="rounded-full px-2 py-1 text-xs text-neutral-500 hover:bg-white/10 hover:text-white"
+                  >
+                    Effacer
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {recent.map(entry => (
+                    <span key={entry} className="inline-flex items-center overflow-hidden rounded-full border border-neutral-800 bg-white/5">
+                      <button
+                        type="button"
+                        onClick={() => setQuery(entry)}
+                        title={entry}
+                        className="block max-w-[240px] truncate px-2.5 py-1.5 text-xs text-neutral-200 hover:text-white"
+                      >
+                        {entry}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Retirer « ${entry} » de l'historique`}
+                        onClick={() => setRecent(forgetSearch(entry))}
+                        className="px-1.5 py-1.5 text-neutral-500 hover:text-white"
+                      >
+                        <X className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="text-xs text-neutral-400">Recherches populaires :</p>
             <div className="flex flex-wrap gap-2">
               {['TF1', 'France 2', 'M6', 'Canal+', 'Arte', 'Netflix', 'YouTube', 'Disney+'].map(tag => (
@@ -261,8 +311,9 @@ export function GlobalSearchDialog({
                   key={channel.id}
                   type="button"
                   onClick={() => {
+                    rememberQuery();
                     onSelectChannel(channel);
-                    onOpenChange(false);
+                    handleOpenChange(false);
                   }}
                   className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
                 >
@@ -294,7 +345,7 @@ export function GlobalSearchDialog({
                 <button
                   key={channel.id}
                   type="button"
-                  onClick={() => onLockedChannelSelect?.()}
+                  onClick={() => { rememberQuery(); onLockedChannelSelect?.(); }}
                   className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-amber-500/30 text-left transition-colors"
                   title="Contenu protégé par le code parental"
                 >
@@ -382,9 +433,12 @@ export function GlobalSearchDialog({
                   key={`${item.kind}:${item.id}`}
                   type="button"
                   onClick={() => {
-                    if (onSelectVod) onSelectVod(item);
-                    else onSelectTab(item.kind === 'series' ? 'series' : 'movies');
-                    onOpenChange(false);
+                    rememberQuery();
+                    // La fiche s'ouvre par-dessus la recherche : la refermer ramène aux
+                    // résultats, sans retaper la requête ni perdre la position.
+                    if (onSelectVod) { onSelectVod(item); return; }
+                    onSelectTab(item.kind === 'series' ? 'series' : 'movies');
+                    handleOpenChange(false);
                   }}
                   className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
                 >

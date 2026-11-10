@@ -1,11 +1,12 @@
 import 'fake-indexeddb/auto';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GlobalSearchDialog } from '@/components/GlobalSearchDialog';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import type { Channel, PlaylistInfo } from '@/types/channel';
 
+beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
 const channels: Channel[] = [
@@ -108,4 +109,68 @@ it('affiche un message quand aucun résultat ne correspond', async () => {
   await user.type(input, 'xyzintrouvable123');
 
   expect(await screen.findByText(/Aucun résultat pour « xyzintrouvable123 »/)).toBeTruthy();
+});
+
+it('affiche les recherches récentes et les remet dans le champ', async () => {
+  localStorage.setItem('cedplay_search_history', JSON.stringify(['miserables', 'Netflix']));
+  const user = userEvent.setup();
+
+  render(
+    <GlobalSearchDialog
+      open={true}
+      onOpenChange={() => {}}
+      playlist={testPlaylist}
+      onSelectChannel={() => {}}
+      onSelectTab={() => {}}
+    />
+  );
+
+  expect(await screen.findByText('Recherches récentes')).toBeTruthy();
+  // Les suggestions populaires restent proposées sous l'historique.
+  expect(screen.getByText('Recherches populaires :')).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'miserables' }));
+  expect(screen.getByRole('textbox', { name: 'Rechercher' })).toHaveValue('miserables');
+});
+
+it('garde une recherche en mémoire après l’ouverture d’un résultat', async () => {
+  const user = userEvent.setup();
+
+  render(
+    <GlobalSearchDialog
+      open={true}
+      onOpenChange={() => {}}
+      playlist={testPlaylist}
+      onSelectChannel={() => {}}
+      onSelectTab={() => {}}
+    />
+  );
+
+  await user.type(screen.getByRole('textbox', { name: 'Rechercher' }), 'France 2');
+  await user.click(await screen.findByRole('button', { name: /France 2 FHD/ }));
+
+  // La requête est gardée sur l'appareil : la rouvrir ne demande pas de la retaper.
+  expect(JSON.parse(localStorage.getItem('cedplay_search_history') || '[]')).toEqual(['France 2']);
+});
+
+it('retire une recherche récente et peut effacer tout l’historique', async () => {
+  localStorage.setItem('cedplay_search_history', JSON.stringify(['arte', 'canal']));
+  const user = userEvent.setup();
+
+  render(
+    <GlobalSearchDialog
+      open={true}
+      onOpenChange={() => {}}
+      playlist={testPlaylist}
+      onSelectChannel={() => {}}
+      onSelectTab={() => {}}
+    />
+  );
+
+  await user.click(await screen.findByRole('button', { name: /Retirer « arte »/ }));
+  expect(screen.queryByRole('button', { name: 'arte' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'canal' })).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Effacer' }));
+  expect(screen.queryByText('Recherches récentes')).toBeNull();
 });
