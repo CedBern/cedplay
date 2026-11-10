@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
-import { ChevronLeft, ChevronRight, Bell, CircleDot, Clock, Eye, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Bell, CircleDot, Clock, Eye, RefreshCw, RotateCcw, Search, Settings2, SkipBack } from 'lucide-react';
 import { isInArchive } from '@/utils/catchup';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Button } from '@/components/ui/button';
@@ -526,13 +526,29 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
     ? `${guideState.status === 'stale' ? 'Guide enregistré — actualisation impossible' : 'Guide actualisé'} · ${new Date(guideState.fetchedAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
     : null;
 
-  // Bandeau TV : Liste/Grille/Lecteur, aperçu 16:9 et émission ciblée. Il occupe
+  const bandProgramCurrent = !!bandProgram && bandProgram.startTime <= now && now < bandProgram.endTime;
+  // Progression et temps restant : lus d'un coup d'œil, sans ouvrir la fiche.
+  const bandProgress = bandProgram && bandProgramCurrent
+    ? Math.min(100, Math.max(0, ((now.getTime() - bandProgram.startTime.getTime()) / Math.max(60_000, bandProgram.endTime.getTime() - bandProgram.startTime.getTime())) * 100))
+    : null;
+  const bandRemainingMin = bandProgram && bandProgramCurrent
+    ? Math.max(1, Math.ceil((bandProgram.endTime.getTime() - now.getTime()) / 60_000))
+    : null;
+  // Heure de la dernière actualisation du guide : seule information de fraîcheur utile
+  // à la télécommande ; le détail complet reste dans l'infobulle du bouton.
+  const refreshTime = guideState?.fetchedAt
+    ? new Date(guideState.fetchedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+    : null;
+  const bandStatus = !bandProgram ? null : bandProgramCurrent ? 'live' : bandProgramIsFuture ? 'future' : 'past';
+
+  // Bandeau TV : un seul bloc lu de gauche à droite — Liste/Grille/Lecteur, aperçu 16:9,
+  // puis l'émission ciblée (chaîne, direct, titre, horaires, progression). Il occupe
   // l'espace vide au-dessus de la grille, donc l'aperçu ne masque plus de programme.
   const band = tvMode ? (
-    <div data-guide-band className="mb-1 grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 py-1">
-      <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
+    <div data-guide-band className="mb-1 flex shrink-0 items-center gap-3 rounded-2xl border border-neutral-800 bg-[linear-gradient(180deg,#1b1b1b,#151515)] px-3 py-1">
+      {toolbar && <div className="flex shrink-0 items-center">{toolbar}</div>}
       {previewActive && (
-        <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9' }} className="flex flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-800 bg-black text-[11px] text-neutral-400">
+        <div ref={previewRef} data-guide-preview={previewState} style={{ width: PREVIEW_WIDTH, aspectRatio: '16 / 9' }} className="flex shrink-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl border border-neutral-700 bg-black text-[11px] text-neutral-400 shadow-[0_6px_18px_rgba(0,0,0,0.45)]">
           {previewState === 'error' ? 'Aperçu indisponible'
             : bandProgramIsFuture && bandProgram
               ? <span className="flex flex-col items-center gap-0.5 text-center">
@@ -547,17 +563,32 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
               : 'Aperçu…'}
         </div>
       )}
-      <div className="flex min-w-0 flex-col items-end gap-0.5 text-right">
-        {guideUpdatedLabel && (
-          <span className="flex max-w-full items-center gap-2 text-[11px] text-neutral-500">
-            <span className="truncate">{guideUpdatedLabel}</span>
-            <Button size="sm" variant="ghost" onClick={onRetry}>Actualiser</Button>
-          </span>
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        <div className="flex min-w-0 items-center gap-2">
+          {bandChannel && <span className="truncate text-[11px] uppercase tracking-[0.07em] text-neutral-400">{bandChannel.name}</span>}
+          {bandStatus === 'live' && <span className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-primary"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-primary" />En direct</span>}
+          {bandStatus === 'future' && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-neutral-300">À venir</span>}
+          {bandStatus === 'past' && <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.05em] text-neutral-400">Terminé</span>}
+          {refreshTime && (
+            <button
+              type="button"
+              onClick={onRetry}
+              aria-label="Actualiser"
+              title={guideUpdatedLabel ?? 'Actualiser le guide'}
+              className={`ml-auto flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[11px] tabular-nums hover:bg-white/10 ${guideState?.status === 'stale' ? 'text-amber-300' : 'text-neutral-500'}`}
+            >
+              <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />{refreshTime}
+            </button>
+          )}
+        </div>
+        <span className="line-clamp-2 text-[15px] font-semibold leading-[1.2] text-white">{bandProgram ? bandProgram.title : bandChannel?.name ?? ''}</span>
+        {bandProgram && (
+          <div className="flex min-w-0 items-center gap-2 text-[11px] tabular-nums text-neutral-400">
+            <span className="shrink-0">{formatTime(bandProgram.startTime)} – {formatTime(bandProgram.endTime)}</span>
+            {bandProgress !== null && <span aria-hidden="true" className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-neutral-700"><span className="block h-full rounded-full bg-primary" style={{ width: `${bandProgress}%` }} /></span>}
+            {bandRemainingMin !== null && <span className="shrink-0 text-neutral-500">{bandRemainingMin >= 60 ? `reste ${Math.floor(bandRemainingMin / 60)} h ${String(bandRemainingMin % 60).padStart(2, '0')}` : `reste ${bandRemainingMin} min`}</span>}
+          </div>
         )}
-        <span className="w-full truncate text-sm font-medium leading-tight text-white">{bandProgram ? bandProgram.title : bandChannel?.name ?? ''}</span>
-        {bandProgram && <span className="w-full truncate tabular-nums text-[11px] leading-tight text-neutral-400">
-          {bandChannel ? `${bandChannel.name} · ` : ''}{formatTime(bandProgram.startTime)} – {formatTime(bandProgram.endTime)}
-        </span>}
       </div>
     </div>
   ) : null;
@@ -597,18 +628,18 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
           <Button
             variant="outline"
             size="sm"
-            className={`${tvMode ? 'h-8 w-8' : 'h-9 w-9'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
+            className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
             aria-label="Jour précédent"
             disabled={!canPrev}
             onClick={() => scrollToOffset(offsetOf(prevStart))}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <span aria-live="polite" className="min-w-[150px] text-center text-sm font-medium capitalize">{dayLabelOf(viewedDay)}</span>
+          <span aria-live="polite" className="min-w-[160px] text-center text-[15px] font-semibold capitalize">{dayLabelOf(viewedDay)}</span>
           <Button
             variant="outline"
             size="sm"
-            className={`${tvMode ? 'h-8 w-8' : 'h-9 w-9'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
+            className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`}
             aria-label="Jour suivant"
             disabled={!canNext}
             onClick={() => scrollToOffset(offsetOf(nextStart))}
@@ -618,14 +649,14 @@ export function EPGGrid({ channels, epgData, currentChannel, onSelectChannel, gu
         </div>
         <div className="flex items-center gap-1">
           {nowOffset !== null && (
-            <Button variant="outline" size="sm" className={`${tvMode ? 'h-8' : 'h-9'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={scrollToNow}>
+            <Button variant="outline" size="sm" className={`${tvMode ? 'h-8 rounded-full bg-neutral-900/60 px-4' : 'h-9 rounded-full'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={scrollToNow}>
               {isToday ? 'Maintenant' : "Aujourd'hui"}
             </Button>
           )}
-          <Button variant="outline" size="sm" className={`${tvMode ? 'h-8' : 'h-9'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
+          <Button variant="outline" size="sm" className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => setSearchOpen(true)} aria-label="Rechercher une émission" title="Rechercher une émission">
             <Search className="h-4 w-4 sm:mr-1.5" aria-hidden="true" /><span className={tvMode ? 'sr-only' : 'hidden sm:inline'}>Rechercher</span>
           </Button>
-          {onGuideSettings && <Button variant="outline" size="sm" className={`${tvMode ? 'h-8' : 'h-9'} border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
+          {onGuideSettings && <Button variant="outline" size="sm" className={`${tvMode ? 'h-8 w-8 rounded-full bg-neutral-900/60' : 'h-9 w-9 rounded-full'} p-0 border-neutral-800 text-white hover:bg-neutral-900`} onClick={() => onGuideSettings()} aria-label="Réglages du guide" title="Sources, association des chaînes, décalage">
             <Settings2 className="h-4 w-4" aria-hidden="true" />
           </Button>}
         </div>

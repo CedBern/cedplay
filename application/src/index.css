@@ -178,6 +178,10 @@ html, body, #root {
 .remote-navigation [data-program-start]:focus {
   outline-color: #fff !important;
 }
+/* Segment actif du bandeau : fond orange, le focus doit rester lisible dessus. */
+.remote-navigation [data-segment][aria-pressed="true"]:focus {
+  outline-color: #fff !important;
+}
 /* Un seul repère à la télécommande : le focus réel, pas l'ancien index clavier resté à zéro. */
 .remote-navigation .legacy-channel-selection:not(:focus-within) { background-color: transparent; box-shadow: none; }
 .remote-navigation [data-channel-id]:focus-within { background-color: hsl(var(--accent) / 0.6); border-radius: 1rem; }

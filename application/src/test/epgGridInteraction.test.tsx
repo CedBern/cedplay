@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { EPGGrid } from '@/components/EPGGrid';
+import { formatTime } from '@/utils/epgXmltv';
 
 vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: () => ({ getTotalSize: () => 108, getVirtualItems: () => [{ index: 0, start: 44 }] }) }));
 vi.mock('@/utils/reminders', () => ({ getReminders: async () => [], addReminder: vi.fn(), removeReminder: vi.fn(), REMINDERS_EVENT: 'reminders-updated' }));
@@ -100,9 +101,13 @@ it('le bandeau TV réunit Liste/Grille/Lecteur, l’aperçu et l’émission cib
   expect(within(band!).getByRole('button', { name: 'Actualiser' })).toBeVisible();
   // L'aperçu vit dans le bandeau, pas au-dessus des programmes.
   expect(band).toContainElement(document.querySelector<HTMLElement>('[data-guide-preview]'));
-  // Même sans cibler une case, la chaîne en cours et son émission sont annoncées à droite.
+  // Même sans cibler une case, le bandeau annonce la chaîne, le direct et l'émission,
+  // avec ses horaires, sa progression et le temps restant.
   expect(within(band!).getByText('Émission en cours')).toBeVisible();
-  expect(within(band!).getByText(/Chaîne test · /)).toBeVisible();
+  expect(within(band!).getByText('Chaîne test')).toBeVisible();
+  expect(within(band!).getByText('En direct')).toBeVisible();
+  expect(within(band!).getByText(`${formatTime(new Date(now - 60_000))} – ${formatTime(new Date(now + 600_000))}`)).toBeVisible();
+  expect(within(band!).getByText(/^reste \d+ min$/)).toBeVisible();
 });
 
 it('la flèche bas depuis Liste dans le bandeau entre par l’émission en cours', async () => {

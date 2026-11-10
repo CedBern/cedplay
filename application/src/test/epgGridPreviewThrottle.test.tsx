@@ -79,7 +79,10 @@ it('une émission à venir ne lance pas le direct : le cadre annonce son heure',
   // Le flux de la chaîne montrerait un autre programme que celui affiché dans le bandeau.
   expect(bridge.showPreview).not.toHaveBeenCalled();
   expect(screen.getByText('Programme à venir')).toBeVisible();
-  expect(screen.getByText(/^À /)).toBeVisible();
+  expect(screen.getByText(/^À \d/)).toBeVisible();
+  // Le bandeau annonce l'émission à venir sans progression ni temps restant.
+  expect(screen.getByText('À venir')).toBeVisible();
+  expect(screen.queryByText(/^reste /)).toBeNull();
 });
 
 it('le défilement ne rappelle pas le pont quand aucun aperçu n’est affiché', async () => {
