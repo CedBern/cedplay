@@ -596,11 +596,12 @@ public class NativePlayerPlugin extends Plugin {
 
     @PluginMethod
     public void getRecordingsFolder(PluginCall call) {
-        String uri = recorderPrefs().getString("folder", null);
-        if (uri == null) { call.resolve(); return; }
+        // Toujours renseigné : le dossier choisi, sinon Films/CedPlay par défaut — la box TV
+        // n'a pas de sélecteur de dossier, les enregistrements y fonctionnent quand même.
+        String uri = RecordingTarget.chosenFolder(getContext());
         JSObject value = new JSObject();
-        value.put("uri", uri);
-        value.put("name", recorderPrefs().getString("name", "Enregistrements"));
+        value.put("uri", uri != null ? uri : "default");
+        value.put("name", RecordingTarget.folderName(getContext()));
         call.resolve(value);
     }
 
@@ -610,29 +611,15 @@ public class NativePlayerPlugin extends Plugin {
         // on la déporte hors du thread principal.
         call.setKeepAlive(true);
         scanExecutor.execute(() -> {
-            String uri = recorderPrefs().getString("folder", null);
             JSArray files = new JSArray();
             try {
-                if (uri != null) {
-                    DocumentFile dir = DocumentFile.fromTreeUri(getContext(), Uri.parse(uri));
-                    if (dir != null && dir.canRead()) {
-                        DocumentFile[] children = dir.listFiles();
-                        if (children != null) {
-                            for (DocumentFile f : children) {
-                                if (f == null || f.isDirectory()) continue;
-                                String name = f.getName();
-                                if (name == null) continue;
-                                String lower = name.toLowerCase(Locale.ROOT);
-                                if (!lower.endsWith(".ts") && !lower.endsWith(".mp4") && !lower.endsWith(".m4v")) continue;
-                                JSObject o = new JSObject();
-                                o.put("uri", f.getUri().toString());
-                                o.put("name", name);
-                                o.put("size", f.length());
-                                o.put("lastModified", f.lastModified());
-                                files.put(o);
-                            }
-                        }
-                    }
+                for (RecordingTarget.Item item : RecordingTarget.list(getContext())) {
+                    JSObject o = new JSObject();
+                    o.put("uri", item.uri);
+                    o.put("name", item.name);
+                    o.put("size", item.size);
+                    o.put("lastModified", item.lastModified);
+                    files.put(o);
                 }
             } catch (Exception ignored) {}
             JSObject value = new JSObject();
@@ -647,8 +634,7 @@ public class NativePlayerPlugin extends Plugin {
         String uri = call.getString("uri");
         if (uri == null || uri.isEmpty()) { call.reject("Fichier invalide"); return; }
         try {
-            DocumentFile f = DocumentFile.fromSingleUri(getContext(), Uri.parse(uri));
-            if (f != null && f.delete()) call.resolve();
+            if (RecordingTarget.delete(getContext(), uri)) call.resolve();
             else call.reject("Suppression impossible");
         } catch (Exception e) {
             call.reject("Suppression impossible");

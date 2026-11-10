@@ -6,7 +6,6 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 
-import androidx.documentfile.provider.DocumentFile;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DataSpec;
 import androidx.media3.datasource.DefaultHttpDataSource;
@@ -88,11 +87,11 @@ public class Recorder {
         return running.get();
     }
 
-    public void start(String url, String title, DocumentFile dir, Listener listener) {
-        start(url, title, dir, PlayerOptions.userAgent(context), listener);
+    public void start(String url, String title, RecordingTarget.Target target, Listener listener) {
+        start(url, title, target, PlayerOptions.userAgent(context), listener);
     }
 
-    public void start(String url, String title, DocumentFile dir, String userAgent, Listener listener) {
+    public void start(String url, String title, RecordingTarget.Target target, String userAgent, Listener listener) {
         if (!running.compareAndSet(false, true)) return;
         this.userAgent = PlayerOptions.cleanUserAgent(userAgent);
         this.listener = listener;
@@ -113,8 +112,8 @@ public class Recorder {
                     main.post(() -> { if (this.listener != null) this.listener.onRecordError("le portail n'a pas donné de lien de lecture"); });
                     return;
                 }
-                if (isHls(source)) recordHls(source, dir, base);
-                else recordTs(source, dir);
+                if (isHls(source)) recordHls(source, target, base);
+                else recordTs(source, target);
             } catch (Exception e) {
                 running.set(false);
                 main.post(() -> { if (this.listener != null) this.listener.onRecordError("dossier d'enregistrement inaccessible"); });
@@ -183,10 +182,10 @@ public class Recorder {
     }
 
     // ── MPEG-TS : copie brute ────────────────────────────────────────────
-    private void recordTs(String url, DocumentFile dir) throws IOException {
+    private void recordTs(String url, RecordingTarget.Target target) throws IOException {
         if (!running.get()) return;
         final String name = outputName;
-        DocumentFile out = dir.createFile("video/mp2t", name);
+        final Uri out = target.create("video/mp2t", name);
         if (out == null) { running.set(false); postError("création du fichier impossible"); return; }
         DefaultHttpDataSource source = newSource();
         activeSource = source;
@@ -194,7 +193,7 @@ public class Recorder {
         long total = 0;
         boolean opened = false;
         boolean interrupted = false;
-        try (OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
+        try (OutputStream os = target.open(out)) {
             if (os == null) { postError("ouverture du fichier impossible"); return; }
             opened = true;
             main.post(() -> { if (listener != null) listener.onRecordStarted(name); });
@@ -218,11 +217,11 @@ public class Recorder {
             running.set(false);
             if (interrupted) {
                 if (total == 0) {
-                    try { out.delete(); } catch (Exception ignored) {}
+                    target.delete(out);
                     postError("enregistrement interrompu avant la première donnée (réseau ou stockage)");
                 } else postInterrupted(name, total);
             } else if (opened) {
-                if (total == 0) { try { out.delete(); } catch (Exception ignored) {} } // arrêt avant la première donnée : pas de fichier vide
+                if (total == 0) target.delete(out); // arrêt avant la première donnée : pas de fichier vide
                 postStopped(name, total);
             }
         }
@@ -401,7 +400,7 @@ public class Recorder {
         }
     }
 
-    private void recordHls(String url, DocumentFile dir, String base) throws IOException {
+    private void recordHls(String url, RecordingTarget.Target target, String base) throws IOException {
         String[] mediaUrl = new String[1];
         Playlist pl;
         try {
@@ -417,12 +416,12 @@ public class Recorder {
         final boolean fmp4 = pl.segments.get(0).mapUri != null;
         final String name = base + (fmp4 ? ".mp4" : ".ts");
         outputName = name;
-        DocumentFile out = dir.createFile(fmp4 ? "video/mp4" : "video/mp2t", name);
+        final Uri out = target.create(fmp4 ? "video/mp4" : "video/mp2t", name);
         if (out == null) { running.set(false); postError("création du fichier impossible"); return; }
 
         long total = 0;
         String error = null;
-        try (OutputStream os = context.getContentResolver().openOutputStream(out.getUri(), "w")) {
+        try (OutputStream os = target.open(out)) {
             if (os == null) { running.set(false); postError("ouverture du fichier impossible"); return; }
             main.post(() -> { if (listener != null) listener.onRecordStarted(name); });
             Map<String, byte[]> keys = new HashMap<>();
@@ -478,7 +477,7 @@ public class Recorder {
             running.set(false);
         }
         if (error != null && total == 0) {
-            try { out.delete(); } catch (Exception ignored) {}
+            target.delete(out);
             postError(error);
         } else if (error != null) {
             // Incident en cours d'enregistrement : ce qui a été capturé reste lisible,
@@ -486,7 +485,7 @@ public class Recorder {
             postInterrupted(name, total);
         } else {
             // Un arrêt volontaire garde ce qui a été capturé : le fichier est lisible.
-            if (total == 0) { try { out.delete(); } catch (Exception ignored) {} } // arrêt avant la première donnée : pas de fichier vide
+            if (total == 0) target.delete(out); // arrêt avant la première donnée : pas de fichier vide
             postStopped(name, total);
         }
     }

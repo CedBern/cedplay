@@ -132,6 +132,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Android 9 et avant : écrire dans Films/CedPlay quand aucun dossier n'a été choisi.
+         À partir d'Android 10, MediaStore s'en charge sans autorisation. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Android TV : rangée Favoris et « À suivre » sur l'écran d'accueil. -->
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA" />

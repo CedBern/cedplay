@@ -311,8 +311,6 @@ public class NativePlayerActivity extends AppCompatActivity {
     private Button btnRec;
     private boolean recording = false;
     private Recorder recorder;
-    private String recordFolderUri;
-    private ActivityResultLauncher<Intent> recordFolderLauncher;
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private LinearLayout gestureHudLayout;
     private TextView gestureHudIcon;
@@ -534,7 +532,6 @@ public class NativePlayerActivity extends AppCompatActivity {
         rebuildNumberIndex();
         createMediaSession();
         initCast();
-        initRecorder();
         buildUI();
         hideSystemUI();
     }
@@ -2891,43 +2888,15 @@ public class NativePlayerActivity extends AppCompatActivity {
         return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
     }
 
-    private void initRecorder() {
-        recordFolderUri = getSharedPreferences("recorder", MODE_PRIVATE).getString("folder", null);
-        recordFolderLauncher = registerForActivityResult(
-            new ActivityResultContracts.StartActivityForResult(), result -> {
-                if (result.getResultCode() != RESULT_OK) {
-                    Toast.makeText(this, "Aucun dossier choisi", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                Intent data = result.getData();
-                Uri tree = data != null ? data.getData() : null;
-                if (tree == null) {
-                    Toast.makeText(this, "Aucun dossier choisi", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                try {
-                    getContentResolver().takePersistableUriPermission(tree,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                } catch (Exception ignored) {}
-                recordFolderUri = tree.toString();
-                getSharedPreferences("recorder", MODE_PRIVATE).edit().putString("folder", recordFolderUri).apply();
-                startRecording();
-            });
-    }
-
     private void toggleRecording() {
         if (recording) {
             stopRecording();
             return;
         }
-        if (recordFolderUri == null) {
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
-            try { recordFolderLauncher.launch(intent); }
-            catch (Exception e) { Toast.makeText(this, "Sélecteur de dossier indisponible", Toast.LENGTH_SHORT).show(); }
+        // Sans dossier choisi (box TV : pas de sélecteur), on enregistre dans Films/CedPlay.
+        // Android 9 et avant demandent l'autorisation de stockage pour ce dossier public.
+        if (RecordingTarget.needsStoragePermission(this)) {
+            requestPermissions(new String[] { android.Manifest.permission.WRITE_EXTERNAL_STORAGE }, 1002);
             return;
         }
         startRecording();
@@ -2936,19 +2905,14 @@ public class NativePlayerActivity extends AppCompatActivity {
     private void startRecording() {
         // Garde double : le booléen `recording` (retour asynchrone) ET l'instance
         // `recorder` (démarrage immédiat) — évite un double enregistrement au re-tap.
-        if (recording || recorder != null || recordFolderUri == null || streamUrl == null) return;
+        if (recording || recorder != null || streamUrl == null) return;
         if (!isHttpUrl(streamUrl)) { Toast.makeText(this, "Enregistrement réservé aux flux HTTP", Toast.LENGTH_SHORT).show(); return; }
-        DocumentFile dir = DocumentFile.fromTreeUri(this, Uri.parse(recordFolderUri));
-        if (dir == null || !dir.canWrite()) {
-            Toast.makeText(this, "Dossier d'enregistrement inaccessible en écriture", Toast.LENGTH_SHORT).show();
-            recordFolderUri = null;
-            return;
-        }
+        RecordingTarget.Target target = RecordingTarget.target(this);
         // Android 13+ : sans cette autorisation, aucune notification d'enregistrement.
         ensureNotificationPermission();
         final Recorder started = new Recorder(this);
         recorder = started;
-        started.start(streamUrl, streamTitle, dir, new Recorder.Listener() {
+        started.start(streamUrl, streamTitle, target, new Recorder.Listener() {
             @Override public void onRecordStarted(String fileName) {
                 if (recorder != started) return; // instance obsolète (arrêt puis redémarrage)
                 recording = true;
@@ -2985,6 +2949,18 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT < 33) return;
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1001);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        // 1002 : autorisation de stockage demandée juste avant un enregistrement sur Android 9.
+        if (requestCode != 1002) return;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startRecording();
+        } else {
+            Toast.makeText(this, "Sans accès au stockage, l'enregistrement est impossible", Toast.LENGTH_LONG).show();
         }
     }
 

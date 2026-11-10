@@ -9,14 +9,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 
-import androidx.documentfile.provider.DocumentFile;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -78,10 +76,9 @@ public class RecordService extends Service {
             return START_NOT_STICKY;
         }
         if (url == null || url.isEmpty()) { finishIfIdle("Flux manquant"); return START_NOT_STICKY; }
-        String folderUri = getSharedPreferences("recorder", MODE_PRIVATE).getString("folder", null);
-        if (folderUri == null) { finishIfIdle("Aucun dossier d'enregistrement choisi"); return START_NOT_STICKY; }
-        DocumentFile dir = DocumentFile.fromTreeUri(this, Uri.parse(folderUri));
-        if (dir == null || !dir.canWrite()) { finishIfIdle("Dossier d'enregistrement inaccessible"); return START_NOT_STICKY; }
+        // Dossier choisi, sinon Films/CedPlay (ou le dossier de l'application si le
+        // stockage partagé n'est pas autorisé) : la programmation fonctionne aussi sur la box.
+        RecordingTarget.Target target = RecordingTarget.target(this);
 
         // WakeLock partiel : le Doze ne doit pas geler la capture quand l'écran
         // est éteint. Relâché quand le dernier enregistrement s'arrête.
@@ -95,7 +92,7 @@ public class RecordService extends Service {
         urls.put(token, url);
         refreshOngoing();
         String userAgent = intent == null ? null : intent.getStringExtra(EXTRA_USER_AGENT);
-        started.start(url, title, dir, userAgent, new Recorder.Listener() {
+        started.start(url, title, target, userAgent, new Recorder.Listener() {
             @Override public void onRecordStarted(String fileName) {
                 if (recorders.get(token) != started) return;
                 refreshOngoing();
