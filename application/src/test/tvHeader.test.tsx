@@ -158,3 +158,12 @@ it('Retour des catégories Films rejoint le menu, puis Séries s’ouvre avec OK
   expect(screen.getByRole('tab', { name: 'Séries' })).toHaveAttribute('aria-selected', 'true');
   expect(await waitForPoster()).toBeVisible();
 });
+
+it('mode TV/Desktop occupe toute la largeur sans bloc container centré', async () => {
+  render(<IPTVPlayer />);
+  await screen.findByText('Reprise test');
+  const shell = document.querySelector<HTMLElement>('.tv-app-shell')!;
+  expect(shell).toBeTruthy();
+  expect(shell).not.toHaveClass('container', 'mx-auto');
+  expect(shell).toHaveClass('w-full', 'max-w-none');
+});

@@ -1058,7 +1058,7 @@ export function IPTVPlayer() {
           <div className="min-w-0"><p className="font-medium">Ouverture du lecteur…</p><p className="truncate text-sm text-neutral-300">{openingChannel}</p></div>
         </div>
       </div>}
-      <div className={`app-shell container mx-auto p-2 sm:p-4 ${tvMode ? 'tv-app-shell' : ''}`}>
+      <div className={`app-shell ${tvMode ? 'tv-app-shell w-full max-w-none' : 'container mx-auto p-2 sm:p-4'}`}>
 
         {/* Main Content */}
         {!tvMode && appHeader}

@@ -728,6 +728,17 @@ async function main() {
     })()`);
     await cdp.waitFor(`!!document.querySelector('[role="dialog"]') && /Réglages/i.test(document.querySelector('[role="dialog"]')?.textContent || '')`, 8000, 'settings dialog');
     await cdp.screenshot('08-settings-1920x1080.png');
+    await cdp.pressKey('Escape');
+    await cdp.waitFor(`!document.querySelector('[role="dialog"]')`, 5000, 'settings dialog closed');
+    await cdp.clickSelector('[role="tab"][aria-label="Direct"]');
+    await cdp.waitFor(`!!document.querySelector('[data-tv-live]')`, 8000, 'live 1920x1080');
+    const liveBounds = await cdp.evalJs(`(() => {
+      const live = document.querySelector('[data-tv-live]');
+      const r = live?.getBoundingClientRect();
+      return r ? { left: r.left, right: r.right, width: r.width, innerWidth: window.innerWidth } : null;
+    })()`);
+    assert.ok(liveBounds && liveBounds.left <= 100 && liveBounds.width >= 1750, `Direct 1920x1080 doit occuper toute la largeur utile (reçu ${JSON.stringify(liveBounds)})`);
+    await cdp.screenshot('15-live-1920x1080.png');
 
     assert.equal(cdp.consoleErrors.length, 0, `Erreurs console inattendues: ${cdp.consoleErrors.join('; ')}`);
     assert.equal(cdp.pageErrors.length, 0, `Exceptions page inattendues: ${cdp.pageErrors.join('; ')}`);

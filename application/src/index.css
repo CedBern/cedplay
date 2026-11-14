@@ -323,7 +323,7 @@ html.tv-mode:has([data-tv-live], [data-tv-vod]) body { overflow: hidden; }
 /* TV : rail constant de 76 px ; les libellés se déploient au-dessus du contenu. */
 /* Marge de sécurité : certains téléviseurs rognent les bords de l'image (surbalayage).
    Le bas est réservé par TV_SAFE_BOTTOM (utils/tvSafeArea.ts) pour les écrans à hauteur calculée. */
-.tv-app-shell { padding-left: 88px !important; padding-top: 42px !important; padding-right: 32px !important; padding-bottom: 24px !important; }
+.tv-app-shell { width: 100%; max-width: none; margin-left: 0; margin-right: 0; padding-left: 88px !important; padding-top: 42px !important; padding-right: 32px !important; padding-bottom: 24px !important; }
 .tv-app-shell > [data-orientation] { margin-top: 0; }
 .tv-app-shell > [data-orientation] > :is([role="tabpanel"], .tv-sidebar, .tv-shell-clock) { margin-top: 0 !important; }
 .tv-sidebar {
@@ -488,6 +488,12 @@ html.tv-mode [data-more-panel] .text-\[13px\] { font-size: 12px; line-height: 16
 .settings-dialog[data-settings-mobile] > button { top: 4px; right: 4px; width: 44px; }
 
 /* ── Desktop Windows (CedPlay Desktop) : raffinements souris & grand écran sans altérer la TV Android ── */
+html.desktop-mode.tv-mode .tv-live {
+  grid-template-columns: minmax(200px, clamp(200px, 18%, 280px)) minmax(0, 1fr) minmax(280px, clamp(280px, 30%, 500px));
+}
+html.desktop-mode.tv-mode .tv-vod {
+  grid-template-columns: minmax(190px, clamp(190px, 17%, 280px)) minmax(0, 1fr);
+}
 html.desktop-mode.tv-mode .tv-sidebar {
   transition: width 180ms ease, background-color 180ms ease, box-shadow 180ms ease !important;
   border-right: 1px solid hsl(var(--foreground) / 0.06);

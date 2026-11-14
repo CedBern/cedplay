@@ -1,3 +1,19 @@
+## Correction largeur pleine page Desktop 1920×1080 (« très vide sur les côtés ») — 14 novembre 2026
+
+- **Cause racine identifiée** : dans `application/src/components/IPTVPlayer.tsx`, `.app-shell` appliquait `container mx-auto` même en mode TV/Desktop, ce qui héritait du plafond `screens: { "2xl": "1400px" }` et du centrage horizontal de `application/tailwind.config.ts` (~260 px noirs de chaque côté en `1920×1080`).
+- **Modifications appliquées (non commitées)** :
+  - `application/src/components/IPTVPlayer.tsx` : suppression de `container mx-auto p-2 sm:p-4` lorsque `tvMode` est actif, remplacé par `tv-app-shell w-full max-w-none`.
+  - `application/src/index.css` : `.tv-app-shell` forcé à `width: 100%; max-width: none; margin-left: 0; margin-right: 0;` ; sous `html.desktop-mode.tv-mode`, équilibrage responsive de `.tv-live` (`minmax(200px, clamp(200px, 18%, 280px)) minmax(0, 1fr) minmax(280px, clamp(280px, 30%, 500px))`) et `.tv-vod` (`minmax(190px, clamp(190px, 17%, 280px)) minmax(0, 1fr)`) sans modifier Android TV.
+  - `application/src/test/tvHeader.test.tsx` : nouveau test unitaire vérifiant l'absence de `container` / `mx-auto` et la présence de `w-full max-w-none` en mode TV/Desktop.
+  - `desktop/e2e-verify.mjs` : ajout d'une étape `1920×1080` sur `Direct` contrôlant `liveBounds.left <= 100 && liveBounds.width >= 1750` et générant `preuves/desktop-windows-1.12.64/15-live-1920x1080.png`.
+- **Vérifications et livrables reconstruits (`dist-desktop/`, non signés Authenticode)** :
+  - `pnpm verify` (Web) : `tsc` app/node `0` erreur, `eslint ./src` `0` erreur / `15` avertissements, Vitest **164/164 fichiers / 1 243/1 243 tests passés**, build Vite `9,16 s`.
+  - Reconstruction Windows (`npm run dist`) : `CedPlay-1.12.64-Windows-x64-Setup.exe` (`247 575 881` octets, SHA-256 `D91A6A5D9E816639D2007742803BBC8B43B7327952D3545D9BA0D8AA126EC26D`) et `CedPlay-1.12.64-Windows-x64.zip` (`324 711 915` octets, SHA-256 `42F1A08520C8333A9167C7F2FC193329516407882275442D145B1FE55861483E`).
+  - E2E sur `dist-desktop/win-unpacked/CedPlay.exe` (`e2e-verify.mjs`) : code `0`, `0` erreur, capture `15-live-1920x1080.png` vérifiée visuellement bord à bord (plus aucun vide latéral).
+  - Recette autonome hors dépôt sur le nouveau ZIP (`42F1A0...`) : extraction isolée `%TEMP%`, `PATH` sans Node/Chrome/FFmpeg, profil vide, serveur + FFmpeg embarqués, DVR `.ts` maintenu après fermeture fenêtre et arrêt propre code `0`.
+  - Suite Desktop + Runtime + Packaging : **36/36 passés** (`0 fail`, `0 skipped`, rejouée après fermeture de l'instance `CedPlay.exe` qui détenait le mutex `Local\CedPlayDesktopLauncher`).
+- **Suivi Second Cerveau** : fiche `CedPlay.md` mise à jour et `entretien.py actualiser / verifier / sonder` exécutés.
+
 ## Contre-vérification & clôture distribution Windows — 14 novembre 2026
 
 - **Vérification des livrables et correctifs ci-dessous** :
