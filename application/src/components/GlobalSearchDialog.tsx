@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -21,6 +21,8 @@ import { Search, Tv, Film, MonitorPlay, ExternalLink, Play, Lock, History, X } f
 export interface GlobalSearchDialogProps {
   open: boolean;
   tvMode?: boolean;
+  initialQuery?: string | undefined;
+  onQueryChange?: ((query: string) => void) | undefined;
   onOpenChange: (open: boolean) => void;
   playlist: PlaylistInfo | null;
   onSelectChannel: (channel: Channel) => void;
@@ -38,6 +40,8 @@ export interface GlobalSearchDialogProps {
 export function GlobalSearchDialog({
   open,
   tvMode = false,
+  initialQuery,
+  onQueryChange,
   onOpenChange,
   playlist,
   onSelectChannel,
@@ -48,7 +52,8 @@ export function GlobalSearchDialog({
   parentalEnabled,
   onLockedChannelSelect,
 }: GlobalSearchDialogProps) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery ?? '');
+  const inputRef = useRef<HTMLInputElement>(null);
   const [recent, setRecent] = useState<string[]>([]);
   const [watchlist, setWatchlist] = useState<VodWatchlistItem[]>([]);
   const [catalog, setCatalog] = useState<VodWatchlistItem[]>([]);
@@ -57,6 +62,11 @@ export function GlobalSearchDialog({
   const [catalogProgress, setCatalogProgress] = useState<{ done: number; total: number } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [vodLimit, setVodLimit] = useState(12);
+
+  const updateQuery = useCallback((next: string) => {
+    setQuery(next);
+    onQueryChange?.(next);
+  }, [onQueryChange]);
   const account = useMemo(() => playlist ? getXtreamAccount(playlist) : null, [playlist]);
   // Verrou VOD : les catégories du catalogue ne voyagent pas avec les titres, le hook
   // les résout une fois puis filtre les résultats (fermé tant qu'elles sont inconnues).
@@ -113,11 +123,13 @@ export function GlobalSearchDialog({
 
   useEffect(() => {
     if (open) {
-      setQuery('');
+      const q = initialQuery ?? '';
+      setQuery(q);
+      onQueryChange?.(q);
       setRecent(readSearchHistory());
       void getVodWatchlistFromDB().then(setWatchlist).catch(() => {});
     }
-  }, [open]);
+  }, [open, initialQuery, onQueryChange]);
 
   // Une recherche menée jusqu'à un résultat rejoint l'historique de l'appareil :
   // la rouvrir ne demande plus de la retaper.
@@ -185,6 +197,7 @@ export function GlobalSearchDialog({
   }, [cleanQuery, vodIndex, adultVod]);
 
   const hasResults = matchedChannels.length > 0 || matchedLockedChannels.length > 0 || matchedStreaming.length > 0 || matchedReplay.length > 0 || matchedVod.length > 0;
+  const firstResultKind = matchedChannels.length > 0 ? 'channel' : matchedLockedChannels.length > 0 ? 'locked' : matchedStreaming.length > 0 ? 'streaming' : matchedReplay.length > 0 ? 'replay' : matchedVod.length > 0 ? 'vod' : null;
 
   const handleOpenPlatform = (platform: (typeof streamingPlatforms)[number]) => {
     // Application officielle d'abord (accueil si la page n'est pas un App Link), sinon navigateur.
@@ -202,7 +215,7 @@ export function GlobalSearchDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent onEscapeKeyDown={event => {
+      <DialogContent data-remote-self onEscapeKeyDown={event => {
         // Radix écoute Retour/Escape en capture, avant le champ : le premier
         // appui quitte la saisie, le suivant peut fermer la recherche.
         if (tvMode && document.activeElement?.matches('input[data-remote-input]:not([readonly])')) event.preventDefault();
@@ -220,12 +233,24 @@ export function GlobalSearchDialog({
         <div className="relative mt-2">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
           <Input
+            ref={inputRef}
             remoteActivation={tvMode}
             autoFocus
             aria-label="Rechercher"
             placeholder="Chaînes, direct, films, séries, plateformes…"
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={e => updateQuery(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'ArrowDown') {
+                const target = document.querySelector<HTMLElement>(
+                  '[data-search-first-result], [data-recent-search-first], [data-popular-search-first]'
+                );
+                if (target) {
+                  e.preventDefault();
+                  target.focus();
+                }
+              }
+            }}
             className="pl-9 bg-neutral-900 border-neutral-800 text-white placeholder:text-neutral-500 min-h-11"
           />
         </div>
@@ -260,21 +285,29 @@ export function GlobalSearchDialog({
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {recent.map(entry => (
+                  {recent.map((entry, idx) => (
                     <span key={entry} className="inline-flex items-center overflow-hidden rounded-full border border-neutral-800 bg-white/5">
                       <button
                         type="button"
-                        onClick={() => setQuery(entry)}
+                        onClick={() => updateQuery(entry)}
                         title={entry}
+                        {...(idx === 0 ? { 'data-recent-search-first': true } : {})}
+                        onKeyDown={e => {
+                          if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            inputRef.current?.focus();
+                          }
+                        }}
                         className="block max-w-[240px] truncate px-2.5 py-1.5 text-xs text-neutral-200 hover:text-white"
                       >
                         {entry}
                       </button>
                       <button
                         type="button"
+                        tabIndex={tvMode ? -1 : 0}
                         aria-label={`Retirer « ${entry} » de l'historique`}
                         onClick={() => setRecent(forgetSearch(entry))}
-                        className="px-1.5 py-1.5 text-neutral-500 hover:text-white"
+                        className={`px-1.5 py-1.5 text-neutral-500 hover:text-white ${tvMode ? 'pointer-events-none opacity-40' : ''}`}
                       >
                         <X className="h-3 w-3" aria-hidden="true" />
                       </button>
@@ -285,11 +318,18 @@ export function GlobalSearchDialog({
             )}
             <p className="text-xs text-neutral-400">Recherches populaires :</p>
             <div className="flex flex-wrap gap-2">
-              {['TF1', 'France 2', 'M6', 'Canal+', 'Arte', 'Netflix', 'YouTube', 'Disney+'].map(tag => (
+              {['TF1', 'France 2', 'M6', 'Canal+', 'Arte', 'Netflix', 'YouTube', 'Disney+'].map((tag, idx) => (
                 <button
                   key={tag}
                   type="button"
-                  onClick={() => setQuery(tag)}
+                  {...(idx === 0 ? { 'data-popular-search-first': true } : {})}
+                  onClick={() => updateQuery(tag)}
+                  onKeyDown={e => {
+                    if (e.key === 'ArrowUp' && recent.length === 0) {
+                      e.preventDefault();
+                      inputRef.current?.focus();
+                    }
+                  }}
                   className="text-xs bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white px-2.5 py-1.5 rounded-full border border-neutral-800"
                 >
                   {tag}
@@ -306,30 +346,35 @@ export function GlobalSearchDialog({
               <Tv className="h-3.5 w-3.5" /> Chaînes en direct ({matchedChannels.length})
             </h3>
             <div className="space-y-1">
-              {matchedChannels.map(channel => (
-                <button
-                  key={channel.id}
-                  type="button"
-                  onClick={() => {
-                    rememberQuery();
-                    onSelectChannel(channel);
-                    handleOpenChange(false);
-                  }}
-                  className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{channel.name}</p>
-                      {channel.group && <p className="text-xs text-neutral-400 truncate">{channel.group}</p>}
+              {matchedChannels.map((channel, idx) => {
+                const isFirst = firstResultKind === 'channel' && idx === 0;
+                return (
+                  <button
+                    key={channel.id}
+                    type="button"
+                    {...(isFirst ? { 'data-search-first-result': true } : {})}
+                    onKeyDown={isFirst ? e => { if (e.key === 'ArrowUp') { e.preventDefault(); inputRef.current?.focus(); } } : undefined}
+                    onClick={() => {
+                      rememberQuery();
+                      onSelectChannel(channel);
+                      handleOpenChange(false);
+                    }}
+                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{channel.name}</p>
+                        {channel.group && <p className="text-xs text-neutral-400 truncate">{channel.group}</p>}
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {channelQuality(channel) && <Badge variant="outline" className="text-[10px] border-neutral-700">{channelQuality(channel)}</Badge>}
-                    <Play className="h-4 w-4 text-primary" />
-                  </div>
-                </button>
-              ))}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {channelQuality(channel) && <Badge variant="outline" className="text-[10px] border-neutral-700">{channelQuality(channel)}</Badge>}
+                      <Play className="h-4 w-4 text-primary" />
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -341,24 +386,29 @@ export function GlobalSearchDialog({
               <Lock className="h-3.5 w-3.5" /> Chaînes protégées ({matchedLockedChannels.length})
             </h3>
             <div className="space-y-1">
-              {matchedLockedChannels.map(channel => (
-                <button
-                  key={channel.id}
-                  type="button"
-                  onClick={() => { rememberQuery(); onLockedChannelSelect?.(); }}
-                  className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-amber-500/30 text-left transition-colors"
-                  title="Contenu protégé par le code parental"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{channel.name}</p>
-                      {channel.group && <p className="text-xs text-neutral-400 truncate">{channel.group}</p>}
+              {matchedLockedChannels.map((channel, idx) => {
+                const isFirst = firstResultKind === 'locked' && idx === 0;
+                return (
+                  <button
+                    key={channel.id}
+                    type="button"
+                    {...(isFirst ? { 'data-search-first-result': true } : {})}
+                    onKeyDown={isFirst ? e => { if (e.key === 'ArrowUp') { e.preventDefault(); inputRef.current?.focus(); } } : undefined}
+                    onClick={() => { rememberQuery(); onLockedChannelSelect?.(); }}
+                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-amber-500/30 text-left transition-colors"
+                    title="Contenu protégé par le code parental"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ChannelLogo src={channel.logo ?? null} name={channel.name} compact />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{channel.name}</p>
+                        {channel.group && <p className="text-xs text-neutral-400 truncate">{channel.group}</p>}
+                      </div>
                     </div>
-                  </div>
-                  <Lock className="h-4 w-4 text-amber-400 shrink-0" />
-                </button>
-              ))}
+                    <Lock className="h-4 w-4 text-amber-400 shrink-0" />
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -370,23 +420,28 @@ export function GlobalSearchDialog({
               <ExternalLink className="h-3.5 w-3.5" /> Plateformes de streaming ({matchedStreaming.length})
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {matchedStreaming.map(platform => (
-                <button
-                  key={platform.id}
-                  type="button"
-                  onClick={() => handleOpenPlatform(platform)}
-                  className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <PlatformLogo platformId={platform.id} size="sm" className="h-6 w-6 rounded shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{platform.name}</p>
-                      {platform.note && <p className="text-[11px] text-neutral-400 truncate">{platform.note}</p>}
+              {matchedStreaming.map((platform, idx) => {
+                const isFirst = firstResultKind === 'streaming' && idx === 0;
+                return (
+                  <button
+                    key={platform.id}
+                    type="button"
+                    {...(isFirst ? { 'data-search-first-result': true } : {})}
+                    onKeyDown={isFirst ? e => { if (e.key === 'ArrowUp') { e.preventDefault(); inputRef.current?.focus(); } } : undefined}
+                    onClick={() => handleOpenPlatform(platform)}
+                    className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <PlatformLogo platformId={platform.id} size="sm" className="h-6 w-6 rounded shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{platform.name}</p>
+                        {platform.note && <p className="text-[11px] text-neutral-400 truncate">{platform.note}</p>}
+                      </div>
                     </div>
-                  </div>
-                  {platform.badge && <Badge variant="outline" className="text-[10px] border-neutral-700 shrink-0">{platform.badge}</Badge>}
-                </button>
-              ))}
+                    {platform.badge && <Badge variant="outline" className="text-[10px] border-neutral-700 shrink-0">{platform.badge}</Badge>}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -398,25 +453,30 @@ export function GlobalSearchDialog({
               <Tv className="h-3.5 w-3.5" /> Replay officiel ({matchedReplay.length})
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {matchedReplay.map(ch => (
-                <button
-                  key={ch.id}
-                  type="button"
-                  onClick={() => handleOpenReplay(ch.url, ch.platform)}
-                  className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="h-6 w-6 rounded flex items-center justify-center font-bold text-xs text-white" style={{ backgroundColor: ch.color }}>
-                      {ch.platform[0]}
+              {matchedReplay.map((ch, idx) => {
+                const isFirst = firstResultKind === 'replay' && idx === 0;
+                return (
+                  <button
+                    key={ch.id}
+                    type="button"
+                    {...(isFirst ? { 'data-search-first-result': true } : {})}
+                    onKeyDown={isFirst ? e => { if (e.key === 'ArrowUp') { e.preventDefault(); inputRef.current?.focus(); } } : undefined}
+                    onClick={() => handleOpenReplay(ch.url, ch.platform)}
+                    className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-6 w-6 rounded flex items-center justify-center font-bold text-xs text-white" style={{ backgroundColor: ch.color }}>
+                        {ch.platform[0]}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{ch.name}</p>
+                        <p className="text-[11px] text-neutral-400 truncate">{ch.platform}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{ch.name}</p>
-                      <p className="text-[11px] text-neutral-400 truncate">{ch.platform}</p>
-                    </div>
-                  </div>
-                  <Badge variant="outline" className="text-[10px] border-neutral-700 shrink-0">Replay</Badge>
-                </button>
-              ))}
+                    <Badge variant="outline" className="text-[10px] border-neutral-700 shrink-0">Replay</Badge>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -428,33 +488,38 @@ export function GlobalSearchDialog({
               <Film className="h-3.5 w-3.5" /> Films et séries ({matchedVod.length})
             </h3>
             <div className="space-y-1">
-              {matchedVod.slice(0, vodLimit).map(item => (
-                <button
-                  key={`${item.kind}:${item.id}`}
-                  type="button"
-                  onClick={() => {
-                    rememberQuery();
-                    // La fiche s'ouvre par-dessus la recherche : la refermer ramène aux
-                    // résultats, sans retaper la requête ni perdre la position.
-                    if (onSelectVod) { onSelectVod(item); return; }
-                    onSelectTab(item.kind === 'series' ? 'series' : 'movies');
-                    handleOpenChange(false);
-                  }}
-                  className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="relative h-12 w-8 rounded bg-neutral-900 flex items-center justify-center shrink-0 overflow-hidden">
-                      {item.kind === 'series' ? <MonitorPlay className="h-4 w-4 text-primary" /> : <Film className="h-4 w-4 text-primary" />}
-                      {item.poster && <img src={item.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />}
+              {matchedVod.slice(0, vodLimit).map((item, idx) => {
+                const isFirst = firstResultKind === 'vod' && idx === 0;
+                return (
+                  <button
+                    key={`${item.kind}:${item.id}`}
+                    type="button"
+                    {...(isFirst ? { 'data-search-first-result': true } : {})}
+                    onKeyDown={isFirst ? e => { if (e.key === 'ArrowUp') { e.preventDefault(); inputRef.current?.focus(); } } : undefined}
+                    onClick={() => {
+                      rememberQuery();
+                      // La fiche s'ouvre par-dessus la recherche : la refermer ramène aux
+                      // résultats, sans retaper la requête ni perdre la position.
+                      if (onSelectVod) { onSelectVod(item); return; }
+                      onSelectTab(item.kind === 'series' ? 'series' : 'movies');
+                      handleOpenChange(false);
+                    }}
+                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-white/5 hover:bg-white/10 border border-neutral-900 hover:border-primary/40 text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="relative h-12 w-8 rounded bg-neutral-900 flex items-center justify-center shrink-0 overflow-hidden">
+                        {item.kind === 'series' ? <MonitorPlay className="h-4 w-4 text-primary" /> : <Film className="h-4 w-4 text-primary" />}
+                        {item.poster && <img src={item.poster} alt="" loading="lazy" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onError={e => { e.currentTarget.style.display = 'none'; }} />}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                        <p className="text-xs text-neutral-400">{item.kind === 'series' ? 'Série' : 'Film'}{item.rating ? ` · ★ ${item.rating}` : ''}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{item.name}</p>
-                      <p className="text-xs text-neutral-400">{item.kind === 'series' ? 'Série' : 'Film'}{item.rating ? ` · ★ ${item.rating}` : ''}</p>
-                    </div>
-                  </div>
-                  <Badge variant="secondary" className="text-[10px]">Voir</Badge>
-                </button>
-              ))}
+                    <Badge variant="secondary" className="text-[10px]">Voir</Badge>
+                  </button>
+                );
+              })}
             </div>
             {matchedVod.length > vodLimit && <button type="button" className="min-h-11 px-3 rounded-lg bg-white/10 text-sm" onClick={() => setVodLimit(limit => limit + 24)}>Afficher davantage de titres</button>}
           </div>

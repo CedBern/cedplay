@@ -320,25 +320,41 @@ html:not(.dark) :is(.text-amber-200\/90, .text-amber-300, .text-amber-300\/90, .
 /* La page ne défile pas sous l'écran TV : tout tient dans la hauteur de l'écran. */
 html.tv-mode:has([data-tv-live], [data-tv-vod]) body { overflow: hidden; }
 
-/* ── En-tête TV : une seule ligne, repliée pendant la navigation dans Films et Séries ── */
-html.tv-mode [data-app-header] { transition: margin-top 240ms cubic-bezier(.2, .8, .2, 1), opacity 200ms ease; }
-html.tv-chrome-hidden [data-app-header] { position: relative; margin-top: calc(-1 * var(--tv-header-shift, 0px)); opacity: 0; pointer-events: none; }
-/* La grille gagne exactement la hauteur rendue par l'en-tête, au même rythme. */
-html.tv-chrome-hidden [data-tv-vod] { --tv-vod-extra: var(--tv-header-shift, 0px); }
-html.tv-mode .tv-vod { transition: height 240ms cubic-bezier(.2, .8, .2, 1); }
-@media (prefers-reduced-motion: reduce) { html.tv-mode [data-app-header], html.tv-mode .tv-vod { transition: none; } }
-
-/* Rubriques TV : texte et icône, l'active soulignée d'un trait orange. */
-.tv-header-main { display: grid; grid-template-columns: max-content minmax(0, 1fr); }
-.tv-nav { width: 100%; min-width: 0; justify-content: flex-start; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.tv-nav::-webkit-scrollbar { display: none; }
-.tv-nav-tab { flex: none; }
-.tv-nav-tab::after {
-  content: ''; position: absolute; left: 50%; bottom: 3px; width: 18px; height: 2px; margin-left: -9px;
-  border-radius: 2px; background: hsl(var(--primary)); transform: scaleX(0); transition: transform 200ms ease;
+/* TV : rail constant de 76 px ; les libellés se déploient au-dessus du contenu. */
+/* Marge de sécurité : certains téléviseurs rognent les bords de l'image (surbalayage).
+   Le bas est réservé par TV_SAFE_BOTTOM (utils/tvSafeArea.ts) pour les écrans à hauteur calculée. */
+.tv-app-shell { padding-left: 88px !important; padding-top: 42px !important; padding-right: 32px !important; padding-bottom: 24px !important; }
+.tv-app-shell > [data-orientation] { margin-top: 0; }
+.tv-app-shell > [data-orientation] > :is([role="tabpanel"], .tv-sidebar, .tv-shell-clock) { margin-top: 0 !important; }
+.tv-sidebar {
+  position: fixed; inset: 0 auto 0 0; z-index: 40; width: 76px; padding: 18px 10px;
+  display: flex; flex-direction: column; gap: 16px; overflow: hidden;
+  color: hsl(var(--foreground) / .8);
+  background: linear-gradient(90deg, hsl(var(--background) / .92), hsl(var(--background) / .62));
 }
-.tv-nav-tab[data-state="active"]::after { transform: scaleX(1); }
-.tv-nav-tab[data-state="active"] svg { color: hsl(var(--primary)); }
+.tv-sidebar[data-expanded="true"] {
+  width: 248px;
+  background: linear-gradient(90deg, hsl(var(--background) / .98) 60%, hsl(var(--background) / .88));
+  box-shadow: 24px 0 48px hsl(0 0% 0% / .3);
+}
+.tv-sidebar-brand { display: flex; align-items: center; gap: 18px; min-height: 40px; padding-left: 12px; font-size: 23px; font-weight: 600; }
+.tv-nav { display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: 100%; min-width: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+.tv-nav::-webkit-scrollbar { display: none; }
+.tv-sidebar .tv-nav-tab {
+  display: flex; flex: none; align-items: center; justify-content: flex-start;
+  width: 100%; height: 48px; min-height: 48px; gap: 20px; padding: 0 16px;
+  border-radius: 12px; color: inherit; font-size: 18px; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+.tv-sidebar .tv-nav-tab svg { width: 24px; height: 24px; flex: none; stroke-width: 1.8; }
+.tv-nav-label { opacity: 0; visibility: hidden; }
+.tv-sidebar[data-expanded="true"] .tv-nav-label { opacity: 1; visibility: visible; }
+.tv-sidebar .tv-nav-tab[data-state="active"] { color: hsl(var(--foreground)); background: hsl(var(--foreground) / .08); }
+.tv-sidebar .tv-nav-tab[data-state="active"] svg { color: hsl(var(--primary)); }
+.tv-sidebar .tv-nav-tab[data-state="active"]::before { content: ''; position: absolute; left: 0; top: 13px; width: 3px; height: 22px; border-radius: 2px; background: hsl(var(--primary)); }
+.tv-shell-clock { position: absolute; right: 32px; top: 14px; }
+@media (prefers-reduced-transparency: reduce) { .tv-sidebar, .tv-sidebar[data-expanded="true"] { background: hsl(var(--background)); } }
+@media (max-height: 600px) { .tv-sidebar { gap: 8px; padding-top: 10px; } .tv-nav { gap: 3px; } .tv-sidebar .tv-nav-tab { height: 42px; min-height: 42px; } }
+
 /* Boutons discrets de l'en-tête TV (liste, recherche, source) : sans cadre, une pastille au survol. */
 .tv-chip { border: 0; background: transparent; }
 .tv-chip.is-current { background-color: hsl(var(--secondary)); }
@@ -364,3 +380,142 @@ html.tv-mode :is(.tv-scroll, [data-app-header]) { scroll-behavior: auto; }
 
 /* Accueil TV : garder les cartes focalisées sous le menu fixe, sans superposition. */
 html.tv-mode [data-discover-screen] button { scroll-margin-top: 96px; scroll-margin-bottom: 16px; }
+
+/* Découvrir TV : visuel contextuel et rangées compactes, sans changer l'accueil mobile. */
+[data-discover-tv] [data-discover-filters] { background: transparent; padding-top: 0; padding-bottom: 0; backdrop-filter: none; }
+[data-discover-tv] [data-discover-row] > div:first-child { margin-bottom: 4px; }
+[data-discover-tv] [data-discover-rail] { gap: 12px; padding-top: 6px; padding-bottom: 6px; }
+[data-discover-tv] [data-discover-card], [data-discover-tv] [data-discover-rail] > article {
+  border-color: transparent; border-radius: 6px; background-color: hsl(var(--foreground) / .045);
+}
+/* Focus clair, jamais orange : l'orange reste l'accent de ce qui est choisi ou en cours. Le contour est
+   intérieur pour ne pas être rogné par les cartes arrondies ni par le rail. */
+[data-discover-tv] [data-discover-rail] button:focus { outline: 3px solid hsl(var(--foreground)) !important; outline-offset: -3px !important; }
+[data-discover-tv] [data-discover-rail] > article:focus-within { background-color: hsl(var(--foreground) / .08); }
+[data-discover-tv] [data-discover-card].poster { background-color: transparent; }
+[data-discover-tv] [data-discover-card].poster > div:first-child { border-radius: 5px; }
+[data-discover-tv] [data-discover-resume] [data-discover-kind], [data-discover-tv] [data-discover-progress-copy] { display: none; }
+[data-discover-tv] [data-discover-resume] > div:last-child button { min-height: 32px; height: 32px; padding-top: 0; padding-bottom: 0; }
+/* Fiche, Vu, Retirer : seulement sous la carte ciblée. La place reste réservée, rien ne saute. */
+[data-discover-tv] [data-discover-resume] > div:last-child { visibility: hidden; }
+[data-discover-tv] [data-discover-resume]:focus-within > div:last-child { visibility: visible; }
+/* Accueil TV : le bandeau occupe la moitié de l'écran et monte jusqu'en haut ; les filtres se posent dessus. */
+[data-discover-tv][data-discover-has-hero] { position: relative; margin-top: -42px !important; }
+[data-discover-tv][data-discover-has-hero] [data-discover-filters] { position: absolute; top: 10px; left: 4px; z-index: 20; margin: 0; padding: 0; }
+[data-discover-tv][data-discover-has-hero] > .tv-discover-hero { margin-top: 0; }
+[data-discover-tv] .tv-discover-hero {
+  position: relative; isolation: isolate; min-height: 270px; overflow: hidden; display: flex; align-items: flex-end;
+  background: linear-gradient(105deg, hsl(var(--background)) 8%, #1c171d 67%, #282029);
+}
+/* Le même visuel, recadré et assombri : une ambiance derrière le texte, sans flou ni seconde image. */
+[data-discover-tv] .tv-discover-hero-backdrop {
+  position: absolute; inset: 0 0 0 34%; z-index: -1; opacity: .34;
+  -webkit-mask-image: linear-gradient(90deg, transparent, black 48%); mask-image: linear-gradient(90deg, transparent, black 48%);
+}
+[data-discover-tv] .tv-discover-hero-backdrop img { width: 100%; height: 100%; object-fit: cover; object-position: center 24%; }
+/* Pied sombre : la première rangée s'accroche au bandeau. */
+[data-discover-tv] .tv-discover-hero::after {
+  content: ''; position: absolute; inset: auto 0 0 0; height: 72px; z-index: -1;
+  background: linear-gradient(0deg, hsl(var(--background)), transparent);
+}
+[data-discover-tv] .tv-discover-hero-glow {
+  position: absolute; inset: 0; z-index: -1; opacity: .7;
+  background: radial-gradient(ellipse at 83% 20%, #72505b55, transparent 58%), radial-gradient(ellipse at 75% 110%, #36505744, transparent 65%);
+}
+[data-discover-tv] .tv-discover-hero-copy { position: relative; z-index: 1; width: 62%; padding: 64px 24px 18px 4px; }
+/* Le fond et les textes restent dans le même thème, même derrière une affiche sombre. */
+html:not(.dark) [data-discover-tv] .tv-discover-hero { background: linear-gradient(105deg, hsl(var(--background)) 8%, hsl(var(--secondary)) 100%); }
+html:not(.dark) [data-discover-tv] .tv-discover-hero-copy { background: hsl(var(--background) / .94); }
+html:not(.dark) [data-discover-tv] .tv-discover-hero-eyebrow { color: hsl(var(--primary)); }
+html:not(.dark) [data-discover-tv] .tv-discover-hero-hints { color: hsl(var(--muted-foreground)); }
+[data-discover-tv] .tv-discover-hero-eyebrow { margin-bottom: 8px; color: #ffac96; font-size: 11px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
+[data-discover-tv] .tv-discover-hero h1 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 36px; line-height: 1.08; font-weight: 600; letter-spacing: -.025em; }
+[data-discover-tv] .tv-discover-hero-meta { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: hsl(var(--foreground) / .74); }
+[data-discover-tv] .tv-discover-hero-description { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; margin-top: 8px; max-width: 48ch; font-size: 13px; line-height: 1.4; color: hsl(var(--foreground) / .65); }
+[data-discover-tv] .tv-discover-hero-hints { margin-top: 14px; font-size: 11px; color: hsl(var(--foreground) / .48); }
+[data-discover-tv] .tv-discover-hero-art { position: absolute; inset: 0 4% 0 64%; display: flex; align-items: center; justify-content: center; padding: 14px 12px; }
+[data-discover-tv] .tv-discover-hero-art img { height: 238px; max-width: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 14px 34px -12px hsl(0 0% 0% / .8); }
+[data-discover-tv] [data-image-layout="square"] .tv-discover-hero-art img { width: 200px; height: 200px; }
+[data-discover-tv] [data-image-layout="logo"] .tv-discover-hero-art img { width: 104px; height: 80px; object-fit: contain; box-shadow: none; }
+[data-discover-tv] [data-image-layout="cover"] .tv-discover-hero-art { inset: 0 0 0 44%; padding: 0; z-index: -1; mask-image: linear-gradient(90deg, transparent, black 35%); }
+[data-discover-tv] [data-image-layout="cover"] .tv-discover-hero-art img { width: 100%; height: 100%; object-fit: cover; border-radius: 0; box-shadow: none; }
+[data-discover-tv] [data-has-image="false"] .tv-discover-hero-copy { width: 85%; }
+@media (max-height: 600px) {
+  /* 960 × 540 : 200 px au minimum ; un titre long peut agrandir le bandeau
+     pour conserver les 64 px réservés aux filtres, sans recouvrir le texte. */
+  [data-discover-tv] .tv-discover-hero { min-height: 200px; }
+  [data-discover-tv] .tv-discover-hero-copy { padding-bottom: 14px; }
+  [data-discover-tv] .tv-discover-hero h1 { font-size: 32px; }
+  [data-discover-tv] .tv-discover-hero-description { display: none; }
+  [data-discover-tv] .tv-discover-hero-art img { height: 172px; }
+  [data-discover-tv] [data-image-layout="square"] .tv-discover-hero-art img { width: 156px; height: 156px; }
+  [data-discover-tv] [data-image-layout="logo"] .tv-discover-hero-art img { width: 96px; height: 72px; }
+}
+[data-discover-tv] .tv-discover-hero[data-has-image="false"] { height: auto; min-height: 124px; }
+/* Sans visuel le bandeau se resserre : il laisse la place des filtres posés au-dessus. */
+[data-discover-tv][data-discover-has-hero] .tv-discover-hero[data-has-image="false"] .tv-discover-hero-copy { padding-top: 64px; }
+[data-discover-tv] [data-has-image="false"] h1 { display: block; overflow: visible; overflow-wrap: anywhere; }
+[data-discover-tv] [data-has-image="false"] .tv-discover-hero-meta { white-space: normal; }
+[data-discover-tv] [data-has-image="false"] .tv-discover-hero-description { display: -webkit-box; }
+@media (prefers-reduced-motion: reduce) { [data-discover-tv] *, [data-discover-tv] *::before, [data-discover-tv] *::after { scroll-behavior: auto; animation: none; transition: none; } }
+
+/* Plus TV : les sept accès et la liste en cours tiennent à 960 × 540. */
+html.tv-mode [data-more-panel] > h2 { margin-bottom: 8px; font-size: 20px; line-height: 28px; }
+html.tv-mode [data-more-panel] > div { margin-bottom: 8px; }
+html.tv-mode [data-more-panel] button { min-height: 48px; gap: 12px; padding: 6px 14px; }
+html.tv-mode [data-more-panel] button > span:first-child { width: 30px; height: 30px; }
+html.tv-mode [data-more-panel] button > span:first-child svg { width: 16px; height: 16px; }
+html.tv-mode [data-more-panel] .text-\[13px\] { font-size: 12px; line-height: 16px; }
+
+/* Les réglages gardent leurs actions visibles quand le clavier réduit l'écran. */
+.settings-dialog { display: flex; flex-direction: column; max-height: 90dvh; overflow: hidden; }
+.settings-dialog .settings-header { flex-shrink: 0; padding-right: 24px; }
+.settings-dialog .settings-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 12px; }
+.settings-dialog[data-settings-mobile] {
+  width: calc(100% - 16px);
+  height: calc(var(--settings-viewport-height, 100dvh) - 16px);
+  max-height: calc(var(--settings-viewport-height, 100dvh) - 16px);
+  top: calc(var(--settings-viewport-top, 0px) + 8px);
+  transform: translateX(-50%);
+  padding: 16px;
+  gap: 12px;
+}
+.settings-dialog[data-settings-mobile] .settings-header { text-align: left; }
+.settings-dialog[data-settings-mobile] input:not([type="checkbox"]):not([type="range"]),
+.settings-dialog[data-settings-mobile] select,
+.settings-dialog[data-settings-mobile] textarea { font-size: 16px; }
+.settings-dialog[data-settings-mobile] button { min-height: 44px; }
+.settings-dialog[data-settings-mobile] > button { top: 4px; right: 4px; width: 44px; }
+
+/* ── Desktop Windows (CedPlay Desktop) : raffinements souris & grand écran sans altérer la TV Android ── */
+html.desktop-mode.tv-mode .tv-sidebar {
+  transition: width 180ms ease, background-color 180ms ease, box-shadow 180ms ease !important;
+  border-right: 1px solid hsl(var(--foreground) / 0.06);
+}
+html.desktop-mode.tv-mode .tv-nav-label {
+  transition: opacity 150ms ease;
+}
+html.desktop-mode.tv-mode [data-tv-item],
+html.desktop-mode.tv-mode .tv-nav-tab,
+html.desktop-mode.tv-mode .tv-chip,
+html.desktop-mode.tv-mode .tv-action {
+  cursor: pointer;
+}
+html.desktop-mode.tv-mode .tv-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--foreground) / 0.18) transparent;
+}
+html.desktop-mode.tv-mode .tv-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+html.desktop-mode.tv-mode .tv-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+html.desktop-mode.tv-mode .tv-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--foreground) / 0.2);
+  border-radius: 9999px;
+}
+html.desktop-mode.tv-mode .tv-scroll::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary) / 0.6);
+}

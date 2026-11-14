@@ -9,6 +9,9 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
   'openSubtitlesApiKey',
   'subdlApiKey',
   'parentalPin',
+  'traktToken',
+  'traktRefreshToken',
+  'traktClientSecret',
 ]);
 
 const MASK = '••••';

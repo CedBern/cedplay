@@ -12,6 +12,7 @@ import type { Channel, ChannelGroup } from '@/types/channel';
 import type { EPGData, EPGProgram } from '@/types/epg';
 import { getCurrentProgram, getUpcomingProgram, getProgramProgress, formatTime } from '@/utils/epgXmltv';
 import { getPlayHistory, saveFavoritesToDB } from '@/utils/idb';
+import { TV_SAFE_BOTTOM } from '@/utils/tvSafeArea';
 import { NativePlayerBridge, channelNumbering, findChannelByNumber, type PreviewState } from '@/utils/nativePlayer';
 
 type Column = 'cat' | 'list' | 'info';
@@ -274,14 +275,13 @@ export function TvLiveScreen({
   // (virtualiseur bloqué sur toutes les chaînes). Le layout effect affine ensuite.
   const [height, setHeight] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null;
-    const header = document.querySelector('[data-app-header]');
-    const top = header?.getBoundingClientRect().bottom ?? 96;
-    return Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - 12));
+    const top = document.querySelector('[data-tv-navigation]') ? 42 : document.querySelector('[data-app-header]')?.getBoundingClientRect().bottom ?? 96;
+    return Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - TV_SAFE_BOTTOM));
   });
   useLayoutEffect(() => {
     const measure = () => {
       const top = rootRef.current?.getBoundingClientRect().top ?? 0;
-      setHeight(Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - 12)));
+      setHeight(Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - TV_SAFE_BOTTOM)));
     };
     measure();
     window.addEventListener('resize', measure);
@@ -422,13 +422,24 @@ export function TvLiveScreen({
   const [zapBuffer, setZapBuffer] = useState('');
   const [zapMiss, setZapMiss] = useState<string | null>(null);
   const zapTimer = useRef<number | null>(null);
+  const zapMissTimer = useRef<number | null>(null);
+  const focusOutTimer = useRef<number | null>(null);
   const clearZapTimer = () => { if (zapTimer.current !== null) { window.clearTimeout(zapTimer.current); zapTimer.current = null; } };
-  useEffect(() => clearZapTimer, []);
+  useEffect(() => () => {
+    clearZapTimer();
+    if (zapMissTimer.current !== null) window.clearTimeout(zapMissTimer.current);
+    if (focusOutTimer.current !== null) window.clearTimeout(focusOutTimer.current);
+  }, []);
   const commitZap = useCallback((buffer: string) => {
     clearZapTimer();
     setZapBuffer('');
     const target = findChannelByNumber(numberingSource, buffer);
-    if (!target) { setZapMiss(buffer); window.setTimeout(() => setZapMiss(null), 1500); return; }
+    if (!target) {
+      setZapMiss(buffer);
+      if (zapMissTimer.current !== null) window.clearTimeout(zapMissTimer.current);
+      zapMissTimer.current = window.setTimeout(() => setZapMiss(null), 1500);
+      return;
+    }
     const inList = channels.findIndex(c => c.id === target.id);
     if (inList >= 0) { requestFocus(); setColumn('list'); setRow(inList); return; }
     // Ailleurs : rejoindre la catégorie de la chaîne (son groupe, sinon « Toutes »).
@@ -495,29 +506,32 @@ export function TvLiveScreen({
       handled = column === 'cat' ? moveCat(-1) : column === 'list' ? moveRow(-1) : moveInfo(-1);
       if (!handled) handled = focusMainNavigation(rootRef.current);
     } else if (key === 'ArrowRight') handled = (column === 'cat' ? go('list') : column === 'list' ? go('info') : false) || true;
-    else if (key === 'ArrowLeft') handled = (column === 'info' ? go('list') : column === 'list' ? go('cat') : false) || true;
+    else if (key === 'ArrowLeft') handled = (column === 'info' ? go('list') : column === 'list' ? go('cat') : focusMainNavigation(rootRef.current)) || true;
     else if (key === 'PageDown' || key === 'ChannelDown') handled = column === 'list' ? moveRow(PAGE) || true : column === 'cat' ? moveCat(PAGE) || true : false;
     else if (key === 'PageUp' || key === 'ChannelUp') handled = column === 'list' ? moveRow(-PAGE) || true : column === 'cat' ? moveCat(-PAGE) || true : false;
     if (handled) { e.preventDefault(); e.stopPropagation(); }
   };
 
   // Retour : aperçu → chaînes → catégories, puis le comportement habituel (Accueil).
+  const backActionRef = useRef<(event: Event) => void>(() => {});
+  backActionRef.current = (event: Event) => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !rootRef.current?.contains(active)) return;
+    if (column === 'info') { event.preventDefault(); go('list'); }
+    else if (column === 'list') { event.preventDefault(); go('cat'); }
+    else if (column === 'cat' && focusMainNavigation(rootRef.current)) event.preventDefault();
+  };
   useEffect(() => {
-    const onBack = (event: Event) => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLElement) || !rootRef.current?.contains(active)) return;
-      if (column === 'info') { event.preventDefault(); go('list'); }
-      else if (column === 'list') { event.preventDefault(); go('cat'); }
-      else if (column === 'cat' && focusMainNavigation(rootRef.current)) event.preventDefault();
-    };
+    const onBack = (event: Event) => backActionRef.current(event);
     window.addEventListener('tv-live-back', onBack);
     return () => window.removeEventListener('tv-live-back', onBack);
-  });
+  }, []);
 
   // Entrer dans l'écran à la télécommande : rejoindre la colonne active, pas la plus proche.
   const onFocusCapture = (e: React.FocusEvent) => {
     const from = e.relatedTarget;
     if (from instanceof Node && rootRef.current?.contains(from)) return;
+    if (from instanceof Element && from.closest('[data-tv-navigation]')) return;
     if (!document.documentElement.classList.contains('remote-navigation')) return;
     const target = e.target as HTMLElement;
     // Bas depuis les rubriques vise la première commande de gauche. Ne pas la
@@ -561,10 +575,18 @@ export function TvLiveScreen({
     if (!preview) return;
     const unsubscribe = NativePlayerBridge.onPreviewState(setPreviewState);
     const relayout = () => { if (requested.current) sendPreview(requested.current); };
+    const onResumeOrOnline = () => { if (requested.current) sendPreview(requested.current); };
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible' && requested.current) sendPreview(requested.current); };
     window.addEventListener('resize', relayout);
+    window.addEventListener('online', onResumeOrOnline);
+    window.addEventListener('app-resume', onResumeOrOnline);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       unsubscribe();
       window.removeEventListener('resize', relayout);
+      window.removeEventListener('online', onResumeOrOnline);
+      window.removeEventListener('app-resume', onResumeOrOnline);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       requested.current = null;
       void NativePlayerBridge.hidePreview();
     };
@@ -578,10 +600,25 @@ export function TvLiveScreen({
     const t = window.setTimeout(() => sendPreview(previewUrl), PREVIEW_DELAY);
     return () => window.clearTimeout(t);
   }, [preview, previewUrl, sendPreview]);
+  useEffect(() => {
+    if (!preview || previewState !== 'error' || !previewUrl) return;
+    // En cas d'erreur de chargement (ex: coupure réseau en sortie de veille),
+    // une relance automatique est tentée une fois la connexion rétablie.
+    const retryTimer = window.setTimeout(() => {
+      if (requested.current === previewUrl) sendPreview(previewUrl);
+    }, 3500);
+    return () => window.clearTimeout(retryTimer);
+  }, [preview, previewState, previewUrl, sendPreview]);
   const onFocusIn = () => setFocusInside(true);
   // Vérifier après coup : une ligne virtualisée remplacée ou la fenêtre qui passe au lecteur
   // ne doivent pas couper l'aperçu, seule une sortie réelle du focus le fait.
-  const onFocusOut = () => { window.setTimeout(() => setFocusInside(!!rootRef.current?.contains(document.activeElement)), 0); };
+  const onFocusOut = () => {
+    if (focusOutTimer.current !== null) window.clearTimeout(focusOutTimer.current);
+    focusOutTimer.current = window.setTimeout(() => {
+      focusOutTimer.current = null;
+      setFocusInside(!!rootRef.current?.contains(document.activeElement));
+    }, 0);
+  };
 
   const current = highlighted && epgData ? getCurrentProgram(highlighted.id, epgData, now) : null;
   const upcoming = highlighted && epgData ? getUpcomingProgram(highlighted.id, epgData, now) : null;
@@ -676,10 +713,8 @@ export function TvLiveScreen({
 
       {/* Aperçu */}
       <aside aria-label="Aperçu" data-tv-col="info" className={`tv-col flex min-h-0 flex-col rounded-2xl border border-neutral-900 bg-neutral-950 p-4 ${column === 'info' ? 'is-active' : ''}`}>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="truncate">{highlighted?.group ?? ''}</span>
-          <span className="font-mono tabular-nums">{formatTime(now)}</span>
-        </div>
+        {/* L'heure est dans l'en-tête, commune à toutes les rubriques. */}
+        <p className="truncate text-xs text-muted-foreground">{highlighted?.group ?? ''}</p>
         {highlighted ? <>
           {preview ? <>
             {/* Emplacement de la vidéo : Android y pose son lecteur ; dessous, le logo en attendant l'image. */}

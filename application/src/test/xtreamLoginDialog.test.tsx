@@ -2,7 +2,7 @@
 // Le dialog Radix est fermé par défaut : on l'ouvre en cliquant le bouton
 // « Connexion Xtream » (DialogTrigger), comme le fait PlaylistLoader.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { XtreamLoginDialog } from '@/components/XtreamLoginDialog';
 import { toast } from 'sonner';
@@ -16,6 +16,16 @@ vi.mock('@capacitor/core', () => ({
   Capacitor: { isNativePlatform: () => false },
   CapacitorHttp: { get: vi.fn(), post: vi.fn() },
 }));
+
+// Appairage par QR code : le pont Android est remplacé par un double que le test pilote.
+type Paired = { server: string; username: string; password: string };
+const pairing = vi.hoisted(() => ({
+  open: vi.fn(),
+  close: vi.fn(),
+  send: (() => false) as (credentials: Paired) => boolean,
+  show: (() => {}) as (url: string) => void,
+}));
+vi.mock('@/utils/tvPairing', () => ({ openPairing: pairing.open }));
 
 const toastMock = vi.mocked(toast);
 const fetchMock = vi.fn();
@@ -42,6 +52,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   vi.stubGlobal('fetch', fetchMock);
+  pairing.open.mockImplementation((onCredentials: (credentials: Paired) => boolean, onUrl: (url: string) => void) => {
+    pairing.send = onCredentials;
+    pairing.show = onUrl;
+    return pairing.close;
+  });
 });
 
 afterEach(() => {
@@ -51,6 +66,95 @@ afterEach(() => {
 });
 
 describe('XtreamLoginDialog', () => {
+  it('TV : le QR code s’affiche et les identifiants envoyés par le téléphone lancent la connexion', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(jsonResponse([{ category_id: 1, category_name: 'FR INFO' }]));
+    render(<XtreamLoginDialog tvMode onPlaylistLoaded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Connexion Xtream' }));
+    expect(pairing.open).toHaveBeenCalledTimes(1);
+    // Sans réseau local, pas d'adresse : seule la saisie à la télécommande est proposée.
+    expect(screen.queryByRole('img', { name: 'QR code de connexion' })).toBeNull();
+    act(() => pairing.show('http://192.168.1.20:40123/k7m2q9xd'));
+    expect(screen.getByRole('img', { name: 'QR code de connexion' })).toBeInTheDocument();
+    expect(screen.getByText('192.168.1.20:40123/k7m2q9xd')).toBeInTheDocument();
+    // Les champs restent utilisables à la télécommande, à côté du code.
+    expect(screen.getByPlaceholderText('Identifiant')).toBeInTheDocument();
+
+    act(() => pairing.send({ server: 'http://serveur.test:8080', username: 'marie', password: 'secret' }));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'FR INFO' })).toBeInTheDocument());
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('username=marie&password=secret');
+    expect(toastMock.success).toHaveBeenCalledWith('Identifiants reçus du téléphone.');
+    // Étape suivante : le code disparaît et le serveur d'appairage est fermé.
+    expect(screen.queryByRole('img', { name: 'QR code de connexion' })).toBeNull();
+    expect(pairing.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('TV : un envoi du téléphone refusé par le fournisseur laisse le QR code et les champs remplis', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(jsonResponse({ error: 'Identifiants refusés' }, false, 401));
+    render(<XtreamLoginDialog tvMode onPlaylistLoaded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Connexion Xtream' }));
+    act(() => pairing.show('http://192.168.1.20:40123/k7m2q9xd'));
+    act(() => pairing.send({ server: 'http://serveur.test:8080', username: 'marie', password: 'faux' }));
+    await waitFor(() => expect(screen.getByText(/Erreur : Identifiants refusés/)).toBeInTheDocument());
+    expect(screen.getByRole('img', { name: 'QR code de connexion' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Identifiant')).toHaveValue('marie');
+    expect(pairing.close).not.toHaveBeenCalled();
+  });
+
+  it('TV : un second envoi du téléphone est refusé tant que la connexion est en cours', async () => {
+    const user = userEvent.setup();
+    let answer: (value: unknown) => void = () => {};
+    fetchMock.mockReturnValue(new Promise(resolve => { answer = resolve; }));
+    render(<XtreamLoginDialog tvMode onPlaylistLoaded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Connexion Xtream' }));
+    act(() => pairing.show('http://192.168.1.20:40123/k7m2q9xd'));
+    const credentials = { server: 'http://serveur.test:8080', username: 'marie', password: 'secret' };
+    let first = false;
+    let second = true;
+    act(() => { first = pairing.send(credentials); });
+    act(() => { second = pairing.send({ ...credentials, username: 'paul' }); });
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+    expect(screen.getByPlaceholderText('Identifiant')).toHaveValue('marie');
+    await act(async () => { answer(jsonResponse([{ category_id: 1, category_name: 'FR INFO' }])); });
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'FR INFO' })).toBeInTheDocument());
+    expect(fetchMock.mock.calls.every(call => !String(call[0]).includes('username=paul'))).toBe(true);
+  });
+
+  it('TV : le QR code expire au bout de cinq minutes et un nouveau code peut être demandé', () => {
+    vi.useFakeTimers();
+    try {
+      render(<XtreamLoginDialog tvMode onPlaylistLoaded={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Connexion Xtream' }));
+      act(() => pairing.show('http://192.168.1.20:40123/k7m2q9xd'));
+      act(() => { vi.advanceTimersByTime(5 * 60 * 1000 - 1000); });
+      expect(screen.getByRole('img', { name: 'QR code de connexion' })).toBeInTheDocument();
+      expect(pairing.close).not.toHaveBeenCalled();
+
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(screen.queryByRole('img', { name: 'QR code de connexion' })).toBeNull();
+      expect(pairing.close).toHaveBeenCalledTimes(1);
+      // La saisie à la télécommande reste possible une fois le code expiré.
+      expect(screen.getByPlaceholderText('Identifiant')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Afficher un nouveau code/ }));
+      expect(pairing.open).toHaveBeenCalledTimes(2);
+      act(() => pairing.show('http://192.168.1.20:40999/z9y8x7wv'));
+      expect(screen.getByText('192.168.1.20:40999/z9y8x7wv')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Afficher un nouveau code/ })).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('téléphone : aucun appairage n’est ouvert', async () => {
+    const user = userEvent.setup();
+    render(<XtreamLoginDialog onPlaylistLoaded={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Connexion Xtream' }));
+    expect(screen.getByPlaceholderText('Identifiant')).toBeInTheDocument();
+    expect(pairing.open).not.toHaveBeenCalled();
+  });
+
   it('TV : Droite rejoint Importer depuis le milieu de 289 catégories et Haut revient à la même ligne', async () => {
     const user = userEvent.setup();
     const loaded = vi.fn();

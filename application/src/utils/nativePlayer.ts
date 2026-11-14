@@ -3,6 +3,8 @@ import { toast } from 'sonner';
 import { isPlaybackDelegated, setPlaybackDelegated } from './playbackOwnership';
 import { readVodProgress, saveVodProgress } from './xtreamCatalog';
 import { updateVodHistoryProgress, pushPlayHistory } from './idb';
+import { StorageManager } from './storage';
+import { maybeScrobbleTrakt } from './trakt';
 import type { Channel } from '@/types/channel';
 import type { EPGData } from '@/types/epg';
 import type { AudioPlaybackState, PodcastEpisode, PodcastProgress } from '@/types/podcast';
@@ -14,11 +16,27 @@ import {
 } from './podcastStorage';
 import { getActiveUserAgent } from './userAgent';
 import { attachUsageMeter, type NativeUsageAccess } from './usageJournal';
+import {
+  DesktopLocalBridge,
+  DesktopRecordingsBridge,
+  desktopLocalFileUrl,
+  desktopOpenExternal,
+  desktopSetPlayerOptions,
+  desktopSubtitleVttUrl,
+  isDesktopRuntime,
+  onDesktopPreviewState,
+  openDesktopLiveSession,
+  openDesktopMosaicSession,
+  openDesktopVodSession,
+  showDesktopPreview,
+  stopDesktopPreview,
+} from './desktopBridge';
 
-interface NativeStream { url: string; title: string }
+export interface NativeStream { url: string; title: string }
 /** Bilan d'une session du lecteur natif : interruptions, images perdues, erreurs (aucune URL). */
 export interface PlaybackStats {
   durationMs?: number;
+  playedMs?: number | undefined;
   zaps?: number;
   rebuffers?: number;
   rebufferMs?: number;
@@ -26,7 +44,7 @@ export interface PlaybackStats {
   errors?: number;
   lastErrorCode?: string;
 }
-interface VodResult { positionMs: number; durationMs: number; completed?: boolean | undefined; mediaId?: string; progress?: { mediaId: string; positionMs: number; durationMs: number; completed?: boolean }[]; stats?: PlaybackStats | undefined }
+interface VodResult { positionMs: number; durationMs: number; completed?: boolean | undefined; mediaId?: string; progress?: { mediaId: string; positionMs: number; durationMs: number; completed?: boolean; playedMs?: number | undefined }[]; stats?: PlaybackStats | undefined; playedMs?: number | undefined }
 
 export interface LocalFolder { uri: string; name: string }
 export interface LocalMedia {
@@ -50,7 +68,7 @@ interface NativePlayerPluginType {
   openExternal(options: { url: string; title?: string | undefined }): Promise<void>;
   openWeb(options: { url: string; title?: string | undefined; packages?: string[] | undefined; allowAppHome?: boolean | undefined }): Promise<void>;
   openMosaic(options: { streams: NativeStream[] }): Promise<void>;
-  openVod(options: { url: string; title: string; tvUi?: boolean | undefined; mediaId: string; startPositionMs: number; restart: boolean; subtitleUrl?: string | undefined; subtitleContent?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; episodeIds?: string[] | undefined; channelIndex?: number | undefined }): Promise<VodResult>;
+  openVod(options: { url: string; title: string; tvUi?: boolean | undefined; mediaId: string; startPositionMs: number; restart: boolean; subtitleUrl?: string | undefined; subtitleContent?: string | undefined; channelUrls?: string[] | undefined; channelTitles?: string[] | undefined; episodeIds?: string[] | undefined; episodeStartPositions?: number[] | undefined; channelIndex?: number | undefined }): Promise<VodResult>;
   pickFolder(): Promise<{ uri: string; name: string } | null>;
   listFolders(): Promise<{ folders: LocalFolder[] }>;
   scanLibrary(options: { uri?: string }): Promise<{ files: LocalMedia[]; count: number; truncated: boolean }>;
@@ -107,7 +125,7 @@ export interface NativePlayerOptions {
 }
 
 /** Cadre de l'aperçu, en pixels CSS de la page. */
-export interface PreviewRequest { url: string; x: number; y: number; width: number; height: number; radius: number; dpr: number }
+export interface PreviewRequest { url: string; title?: string; x: number; y: number; width: number; height: number; radius: number; dpr: number }
 export type PreviewState = 'loading' | 'playing' | 'error';
 
 const NativePlayer = registerPlugin<NativePlayerPluginType>('NativePlayer');
@@ -119,7 +137,7 @@ export const nativeUsageJournal: NativeUsageAccess = {
 };
 
 function isAvailable(): boolean {
-  return Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('NativePlayer');
+  return isDesktopRuntime() || (Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('NativePlayer'));
 }
 
 /** Programme transmis au lecteur Android : [début ms, fin ms, titre]. */
@@ -164,7 +182,7 @@ export function zapListData(channels: Channel[]): string {
 }
 
 export function syncNativeZapList(channels: Channel[]): Promise<void> {
-  if (!isAvailable() || !channels.length) return Promise.resolve();
+  if (isDesktopRuntime() || !isAvailable() || !channels.length) return Promise.resolve();
   if (syncedZapList?.channels === channels) return zapListSync ?? Promise.resolve();
   const key = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   syncedZapList = null;
@@ -273,7 +291,7 @@ export function buildNativeZap(channels: Channel[], selected: Channel, maxWindow
 
   let start = 0;
   let end = ordered.length;
-  if (ordered.length > maxWindow) {
+  if (!isDesktopRuntime() && ordered.length > maxWindow) {
     const half = Math.floor(maxWindow / 2);
     start = Math.max(0, index - half);
     end = Math.min(ordered.length, start + maxWindow);
@@ -336,6 +354,21 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
   setPlaybackDelegated(true);
   void AudioBridge.pauseForVideo();
   try {
+    if (isDesktopRuntime()) {
+      const hasZap = Boolean(zap && zap.urls.length === zap.titles.length && zap.index >= 0 && zap.index < zap.urls.length);
+      if (method === 'openExternal') {
+        await desktopOpenExternal(url);
+        return true;
+      }
+      await openDesktopLiveSession(
+        url,
+        title,
+        hasZap ? zap : undefined,
+        onReturned,
+        onJump,
+      );
+      return true;
+    }
     // The Android plugin resolves when the activity closes, not when it opens.
     const result = await NativePlayer[method]({
       url, title,
@@ -362,7 +395,7 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
     return true;
   } catch {
     toast.error(method === 'open'
-      ? 'Impossible d’ouvrir le lecteur Android. Réessaie ou choisis un lecteur externe.'
+      ? 'Impossible d’ouvrir le lecteur. Réessaie ou choisis un lecteur externe.'
       : 'Impossible d’ouvrir un lecteur externe. Vérifie qu’un lecteur comme VLC est installé.');
     return false;
   } finally {
@@ -373,29 +406,34 @@ async function openPlayer(method: 'open' | 'openExternal', url: string, title?: 
 
 export const NativePlayerBridge = {
   isAvailable,
-  /** true sur un téléviseur ou une box Android TV ; null si la question ne peut pas être posée. */
+  /** true sur un téléviseur / box Android TV / Windows Desktop ; null si la question ne peut pas être posée. */
   async isTelevision(): Promise<boolean | null> {
+    if (isDesktopRuntime()) return true;
     if (!isAvailable()) return null;
     try { return (await NativePlayer.isTelevision()).tv === true; } catch { return null; }
   },
-  /** Aperçu vidéo de l'écran Direct TV, posé par Android au-dessus du cadre donné. */
+  /** Aperçu vidéo de l'écran Direct TV, posé par Android ou Windows Desktop au-dessus du cadre donné. */
   async showPreview(request: PreviewRequest): Promise<boolean> {
     if (!isAvailable() || isPlaybackDelegated()) return false;
     void AudioBridge.pauseForVideo();
+    if (isDesktopRuntime()) return showDesktopPreview(request);
     try { await NativePlayer.showPreview(request); return true; } catch { return false; }
   },
   /** Coupe le flux de l'aperçu (la connexion au fournisseur se libère) en gardant le lecteur prêt. */
   async stopPreview(): Promise<void> {
     if (!isAvailable()) return;
+    if (isDesktopRuntime()) { stopDesktopPreview(); return; }
     try { await NativePlayer.stopPreview(); } catch { /* rien à arrêter */ }
   },
   async hidePreview(): Promise<void> {
     if (!isAvailable()) return;
+    if (isDesktopRuntime()) { stopDesktopPreview(); return; }
     try { await NativePlayer.hidePreview(); } catch { /* rien à fermer */ }
   },
   /** État de l'aperçu (chargement, image affichée, erreur). Renvoie la fonction de désabonnement. */
   onPreviewState(listener: (state: PreviewState) => void): () => void {
     if (!isAvailable()) return () => {};
+    if (isDesktopRuntime()) return onDesktopPreviewState(listener);
     let handle: PluginListenerHandle | null = null;
     let removed = false;
     void NativePlayer.addListener('previewState', data => listener(data.state)).then(h => {
@@ -406,21 +444,22 @@ export const NativePlayerBridge = {
   /** Transmet les réglages du lecteur (User-Agent de la liste, mémoire tampon, décodage, AFR). */
   async setPlayerOptions(options: NativePlayerOptions): Promise<void> {
     if (!isAvailable()) return;
+    if (isDesktopRuntime()) { await desktopSetPlayerOptions(options); return; }
     try { await NativePlayer.setPlayerOptions(options); } catch { /* ancienne version native : réglages par défaut */ }
   },
   /** Android TV : rangée Favoris de l'écran d'accueil (30 au plus). */
   async setHomeFavorites(items: { id: string; name: string; logo?: string | undefined }[]): Promise<void> {
-    if (!isAvailable()) return;
+    if (!isAvailable() || isDesktopRuntime()) return;
     try { await NativePlayer.setHomeFavorites({ items: items.slice(0, 30) }); } catch { /* lanceur sans rangées */ }
   },
   /** Android TV : dernière chaîne regardée dans « À suivre ». */
   async addWatchNext(channel: { id: string; name: string; logo?: string | undefined }): Promise<void> {
-    if (!isAvailable()) return;
+    if (!isAvailable() || isDesktopRuntime()) return;
     try { await NativePlayer.addWatchNext({ id: channel.id, name: channel.name, ...(channel.logo ? { logo: channel.logo } : {}) }); } catch { /* lanceur sans rangée À suivre */ }
   },
   /** Raccourcis de l'icône Android (appui long) : 4 favoris au plus. */
   async setChannelShortcuts(items: { id: string; name: string }[]): Promise<void> {
-    if (!isAvailable()) return;
+    if (!isAvailable() || isDesktopRuntime()) return;
     try { await NativePlayer.setChannelShortcuts({ items: items.slice(0, 4) }); } catch { /* lanceur sans raccourcis */ }
   },
   async openMosaic(streams: NativeStream[]): Promise<boolean> {
@@ -430,8 +469,12 @@ export const NativePlayerBridge = {
     })) { toast.error('Choisis de 2 à 8 flux HTTP distincts pour la mosaïque.'); return false; }
     setPlaybackDelegated(true);
     void AudioBridge.pauseForVideo();
-    try { await NativePlayer.openMosaic({ streams }); return true; }
-    catch { toast.error('Impossible d’ouvrir la mosaïque Android.'); return false; }
+    try {
+      if (isDesktopRuntime()) return await openDesktopMosaicSession(streams);
+      await NativePlayer.openMosaic({ streams });
+      return true;
+    }
+    catch { toast.error('Impossible d’ouvrir la mosaïque.'); return false; }
     finally { setPlaybackDelegated(false); }
   },
   async openVod(
@@ -440,41 +483,156 @@ export const NativePlayerBridge = {
     mediaId: string,
     restart = false,
     subtitle?: { url?: string | undefined; content?: string | undefined } | undefined,
-    zap?: { urls: string[]; titles: string[]; ids?: string[] | undefined; index: number; history?: { mediaId: string; name: string; seriesId?: string | undefined; poster?: string | undefined; episodeName?: string | undefined }[] } | undefined
+    zap?: {
+      urls: string[];
+      titles: string[];
+      ids?: string[] | undefined;
+      index: number;
+      history?: {
+        mediaId: string;
+        name: string;
+        seriesId?: string | undefined;
+        poster?: string | undefined;
+        episodeName?: string | undefined;
+        season?: number | undefined;
+        episode?: number | undefined;
+        tmdbId?: number | undefined;
+        year?: string | undefined;
+      }[];
+    } | undefined,
+    vodMeta?: {
+      name: string;
+      mediaKind?: 'movie' | 'series' | undefined;
+      seriesId?: string | undefined;
+      episodeName?: string | undefined;
+      season?: number | undefined;
+      episode?: number | undefined;
+      tmdbId?: number | undefined;
+      year?: string | undefined;
+    } | undefined,
   ): Promise<boolean> {
     if (!isAvailable() || isPlaybackDelegated()) return false;
     try { if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error(); }
     catch { toast.error('Adresse de vidéo invalide.'); return false; }
     setPlaybackDelegated(true);
     void AudioBridge.pauseForVideo();
+
+    const currentMeta = zap?.history?.find(h => h.mediaId === mediaId);
+    const openedAt = Date.now();
+    const sessionId = `native:${mediaId}:${openedAt}`;
+    const startPositionMs = restart ? 0 : readVodProgress(mediaId)?.positionMs || 0;
+
     try {
-      const result = await NativePlayer.openVod({
-        url,
-        title,
-        tvUi: isTvUi(),
-        mediaId,
-        startPositionMs: restart ? 0 : readVodProgress(mediaId)?.positionMs || 0,
-        restart,
-        ...(subtitle?.url ? { subtitleUrl: subtitle.url } : {}),
-        ...(subtitle?.content ? { subtitleContent: subtitle.content } : {}),
-        ...(zap && zap.urls.length > 0 ? {
-          channelUrls: zap.urls,
-          channelTitles: zap.titles,
-          episodeIds: zap.ids,
-          channelIndex: zap.index,
-        } : {}),
-      });
+      const result: VodResult | null = isDesktopRuntime()
+        ? await openDesktopVodSession({
+          url,
+          title,
+          mediaId,
+          startPositionMs,
+          restart,
+          subtitle,
+          ...(zap ? {
+            zap: {
+              ...zap,
+              ...(zap.ids ? { episodeStartPositions: zap.ids.map(id => (id === mediaId && restart ? 0 : readVodProgress(id)?.positionMs || 0)) } : {}),
+            },
+          } : {}),
+        })
+        : await NativePlayer.openVod({
+          url,
+          title,
+          tvUi: isTvUi(),
+          mediaId,
+          startPositionMs,
+          restart,
+          ...(subtitle?.url ? { subtitleUrl: subtitle.url } : {}),
+          ...(subtitle?.content ? { subtitleContent: subtitle.content } : {}),
+          ...(zap && zap.urls.length > 0 ? {
+            channelUrls: zap.urls,
+            channelTitles: zap.titles,
+            episodeIds: zap.ids,
+            ...(zap.ids ? { episodeStartPositions: zap.ids.map(id => (id === mediaId && restart ? 0 : readVodProgress(id)?.positionMs || 0)) } : {}),
+            channelIndex: zap.index,
+          } : {}),
+        });
       if (result) {
+        const sessionElapsedMs = Math.max(0, Date.now() - openedAt);
         const allowed = new Set([mediaId, ...(zap?.ids || [])]);
         const entries = result.progress?.length ? result.progress : [{ ...result, mediaId: result.mediaId || mediaId }];
+        const scrobbleTasks: Array<() => Promise<void>> = [];
         for (const entry of entries) {
           if (!allowed.has(entry.mediaId) || !Number.isFinite(entry.positionMs) || !Number.isFinite(entry.durationMs)) continue;
+          const isMain = entry.mediaId === mediaId;
           const metadata = zap?.history?.find(h => h.mediaId === entry.mediaId);
-          if (metadata && entry.mediaId !== mediaId) {
-            await pushPlayHistory({ channelId: `vod:${entry.mediaId}`, ts: Date.now(), kind: 'vod', name: metadata.name, ...(metadata.seriesId ? { seriesId: metadata.seriesId } : {}), ...(metadata.poster ? { poster: metadata.poster } : {}), ...(metadata.episodeName ? { episodeName: metadata.episodeName } : {}) }).catch(() => {});
+          if (metadata && !isMain) {
+            await pushPlayHistory({
+              channelId: `vod:${entry.mediaId}`,
+              ts: Date.now(),
+              kind: 'vod',
+              name: metadata.name,
+              ...(metadata.seriesId ? { seriesId: metadata.seriesId } : {}),
+              ...(metadata.poster ? { poster: metadata.poster } : {}),
+              ...(metadata.episodeName ? { episodeName: metadata.episodeName } : {}),
+              ...(metadata.season !== undefined ? { season: metadata.season } : {}),
+              ...(metadata.episode !== undefined ? { episode: metadata.episode } : {}),
+              ...(metadata.tmdbId ? { tmdbId: metadata.tmdbId } : {}),
+              ...(metadata.year ? { year: metadata.year } : {}),
+            }).catch(() => {});
           }
           saveVodProgress(entry.mediaId, entry.positionMs, entry.durationMs);
           await updateVodHistoryProgress(entry.mediaId, entry.positionMs, entry.durationMs, entry.completed).catch(() => {});
+
+          const itemTitle = (isMain ? (vodMeta?.name || currentMeta?.name || title) : metadata?.name) || title;
+          const itemMediaKind: 'movie' | 'series' = isMain
+            ? (vodMeta?.mediaKind || (currentMeta?.seriesId || mediaId.includes(':series:') ? 'series' : 'movie'))
+            : (metadata?.seriesId ? 'series' : 'movie');
+          const itemEpisodeName = isMain ? (vodMeta?.episodeName ?? currentMeta?.episodeName) : metadata?.episodeName;
+          const itemSeason = isMain ? (vodMeta?.season ?? currentMeta?.season) : metadata?.season;
+          const itemEpisode = isMain ? (vodMeta?.episode ?? currentMeta?.episode) : metadata?.episode;
+          const itemTmdbId = isMain ? (vodMeta?.tmdbId ?? currentMeta?.tmdbId) : metadata?.tmdbId;
+          const itemYear = isMain ? (vodMeta?.year ?? currentMeta?.year) : metadata?.year;
+
+          // Temps réellement regardé dans cette session :
+          // Si le lecteur natif Android fournit playedMs par épisode (ou à défaut au niveau session pour le média initial), on l'utilise directement.
+          // Sinon (repli), progression par rapport à startPositionMs bornée par le temps écoulé réel.
+          const exactPlayedMs = entry.playedMs ?? (isMain ? (result.playedMs ?? result.stats?.playedMs) : undefined);
+          const positionAdvance = isMain ? Math.max(0, entry.positionMs - startPositionMs) : entry.positionMs;
+          const watchDurationMs = exactPlayedMs !== undefined
+            ? exactPlayedMs
+            : (entry.completed ? Math.max(5000, positionAdvance) : Math.min(sessionElapsedMs, positionAdvance));
+
+          const scrobbleTs = Date.now();
+          const entrySessionId = isMain ? sessionId : `native:${entry.mediaId}:${scrobbleTs}`;
+          scrobbleTasks.push(() =>
+            maybeScrobbleTrakt(
+              {
+                channelId: `vod:${entry.mediaId}`,
+                name: itemTitle,
+                mediaKind: itemMediaKind,
+                ...(itemEpisodeName ? { episodeName: itemEpisodeName } : {}),
+                ...(itemSeason !== undefined ? { season: itemSeason } : {}),
+                ...(itemEpisode !== undefined ? { episode: itemEpisode } : {}),
+                ...(itemTmdbId ? { tmdbId: itemTmdbId } : {}),
+                ...(itemYear ? { year: itemYear } : {}),
+                ts: scrobbleTs,
+              },
+              entry.positionMs,
+              entry.durationMs,
+              entry.completed,
+              StorageManager.getCachedSettings(),
+              entrySessionId,
+              undefined,
+              true,
+              watchDurationMs,
+            ).then(() => undefined, () => undefined),
+          );
+        }
+        if (scrobbleTasks.length > 0) {
+          void (async () => {
+            for (const runTask of scrobbleTasks) {
+              await runTask();
+            }
+          })();
         }
       }
       if (result?.stats) recordNativeStats(result.stats);
@@ -492,19 +650,20 @@ export const NativePlayerBridge = {
     if (!isAvailable() || isPlaybackDelegated()) return false;
     try { if (!['http:', 'https:'].includes(new URL(url).protocol)) throw new Error(); }
     catch { toast.error('Adresse de lien invalide.'); return false; }
+    if (isDesktopRuntime()) return desktopOpenExternal(url);
     try { await NativePlayer.openWeb({ url, title, packages, allowAppHome }); return true; }
     catch { toast.error('Impossible d’ouvrir le lien sur Android.'); return false; }
   }
 };
 
-/** Pont vers la bibliothèque locale (USB / disque dur / carte SD) côté Android. */
+/** Pont vers la bibliothèque locale (USB / disque dur / carte SD / dossiers Windows). */
 export const LocalLibraryBridge = {
   isAvailable,
 
   async pickFolder(): Promise<LocalFolder | null> {
-    if (!isAvailable()) { toast.error('Bibliothèque locale disponible uniquement sur Android.'); return null; }
+    if (!isAvailable()) { toast.error('Bibliothèque locale disponible uniquement dans CedPlay Desktop ou Android.'); return null; }
     try {
-      const result = await NativePlayer.pickFolder();
+      const result = isDesktopRuntime() ? await DesktopLocalBridge.pickFolder() : await NativePlayer.pickFolder();
       return result ?? null;
     } catch { toast.error('Impossible d’ouvrir le sélecteur de dossier.'); return null; }
   },
@@ -512,6 +671,7 @@ export const LocalLibraryBridge = {
   async listFolders(): Promise<LocalFolder[]> {
     if (!isAvailable()) return [];
     try {
+      if (isDesktopRuntime()) return await DesktopLocalBridge.listFolders();
       const result = await NativePlayer.listFolders();
       return Array.isArray(result.folders) ? result.folders : [];
     } catch { return []; }
@@ -520,6 +680,7 @@ export const LocalLibraryBridge = {
   async scanLibrary(uri?: string): Promise<{ files: LocalMedia[]; truncated: boolean } | null> {
     if (!isAvailable()) return null;
     try {
+      if (isDesktopRuntime()) return await DesktopLocalBridge.scanLibrary(uri);
       const result = await NativePlayer.scanLibrary(uri ? { uri } : {});
       return { files: Array.isArray(result.files) ? result.files : [], truncated: !!result.truncated };
     } catch { toast.error('Analyse du dossier impossible.'); return null; }
@@ -527,8 +688,11 @@ export const LocalLibraryBridge = {
 
   async removeFolder(uri: string): Promise<boolean> {
     if (!isAvailable()) return false;
-    try { await NativePlayer.removeFolder({ uri }); return true; }
-    catch { toast.error('Impossible de retirer ce dossier.'); return false; }
+    try {
+      if (isDesktopRuntime()) return await DesktopLocalBridge.removeFolder(uri);
+      await NativePlayer.removeFolder({ uri });
+      return true;
+    } catch { toast.error('Impossible de retirer ce dossier.'); return false; }
   },
 
   async playLocal(uri: string, title: string, subtitleUri?: string): Promise<{ positionMs: number; durationMs: number; completed?: boolean } | null> {
@@ -536,20 +700,38 @@ export const LocalLibraryBridge = {
     setPlaybackDelegated(true);
     void AudioBridge.pauseForVideo();
     try {
+      if (isDesktopRuntime()) {
+        const res = await openDesktopVodSession({
+          url: desktopLocalFileUrl(uri),
+          localUri: uri,
+          title,
+          mediaId: `local:${uri}`,
+          startPositionMs: 0,
+          restart: false,
+          ...(subtitleUri ? { subtitle: { url: desktopSubtitleVttUrl(subtitleUri) } } : {}),
+        });
+        return res
+          ? {
+            positionMs: res.positionMs,
+            durationMs: res.durationMs,
+            ...(res.completed !== undefined ? { completed: res.completed } : {}),
+          }
+          : null;
+      }
       return await NativePlayer.playLocal({ uri, title, tvUi: isTvUi(), ...(subtitleUri ? { subtitleUri } : {}) });
     } catch { toast.error('Impossible de lire ce fichier.'); return null; }
     finally { setPlaybackDelegated(false); }
   },
 };
 
-/** Pont vers les enregistrements DVR (flux en direct capturés par le lecteur natif). */
+/** Pont vers les enregistrements DVR (flux en direct capturés). */
 export const RecordingsBridge = {
   isAvailable,
 
   async pickFolder(): Promise<{ uri: string; name: string } | null> {
-    if (!isAvailable()) { toast.error('Enregistrements disponibles uniquement sur Android.'); return null; }
+    if (!isAvailable()) { toast.error('Enregistrements disponibles uniquement dans CedPlay Desktop ou Android.'); return null; }
     try {
-      const result = await NativePlayer.pickRecordingsFolder();
+      const result = isDesktopRuntime() ? await DesktopRecordingsBridge.pickFolder() : await NativePlayer.pickRecordingsFolder();
       return result ?? null;
     } catch { toast.error('Impossible d’ouvrir le sélecteur de dossier.'); return null; }
   },
@@ -557,7 +739,7 @@ export const RecordingsBridge = {
   async getFolder(): Promise<{ uri: string; name: string } | null> {
     if (!isAvailable()) return null;
     try {
-      const result = await NativePlayer.getRecordingsFolder();
+      const result = isDesktopRuntime() ? await DesktopRecordingsBridge.getFolder() : await NativePlayer.getRecordingsFolder();
       return result ?? null;
     } catch { return null; }
   },
@@ -565,6 +747,7 @@ export const RecordingsBridge = {
   async list(): Promise<LocalMedia[]> {
     if (!isAvailable()) return [];
     try {
+      if (isDesktopRuntime()) return await DesktopRecordingsBridge.list();
       const result = await NativePlayer.listRecordings();
       return Array.isArray(result.files) ? result.files : [];
     } catch { return []; }
@@ -572,17 +755,23 @@ export const RecordingsBridge = {
 
   async remove(uri: string): Promise<boolean> {
     if (!isAvailable()) return false;
-    try { await NativePlayer.deleteRecording({ uri }); return true; }
-    catch { toast.error('Suppression impossible.'); return false; }
+    try {
+      if (isDesktopRuntime()) return await DesktopRecordingsBridge.remove(uri);
+      await NativePlayer.deleteRecording({ uri });
+      return true;
+    } catch { toast.error('Suppression impossible.'); return false; }
   },
 
   /** silent : pas de message d'erreur (programmation automatique des séries). */
   async schedule(url: string, title: string, startTimeMs: number, durationMs: number, options: { silent?: boolean } = {}): Promise<boolean> {
-    if (!isAvailable()) { if (!options.silent) toast.error('Programmation disponible uniquement sur Android.'); return false; }
+    if (!isAvailable()) { if (!options.silent) toast.error('Programmation disponible uniquement dans CedPlay Desktop ou Android.'); return false; }
     // Figer la liste au moment de la programmation, avant toute attente ou changement de liste.
     const userAgent = getActiveUserAgent();
-    try { await NativePlayer.scheduleRecording({ url, title, startTimeMs, durationMs, userAgent }); return true; }
-    catch (e) {
+    try {
+      if (isDesktopRuntime()) return await DesktopRecordingsBridge.schedule({ url, title, startTimeMs, durationMs, userAgent });
+      await NativePlayer.scheduleRecording({ url, title, startTimeMs, durationMs, userAgent });
+      return true;
+    } catch (e) {
       if (!options.silent) toast.error(e instanceof Error && e.message ? e.message : 'Programmation impossible.');
       return false;
     }
@@ -591,6 +780,7 @@ export const RecordingsBridge = {
   async listScheduled(): Promise<ScheduledRecording[]> {
     if (!isAvailable()) return [];
     try {
+      if (isDesktopRuntime()) return await DesktopRecordingsBridge.listScheduled();
       const result = await NativePlayer.listScheduledRecordings();
       return Array.isArray(result.schedules) ? result.schedules : [];
     } catch { return []; }
@@ -598,8 +788,11 @@ export const RecordingsBridge = {
 
   async cancelScheduled(id: string): Promise<boolean> {
     if (!isAvailable()) return false;
-    try { await NativePlayer.cancelScheduledRecording({ id }); return true; }
-    catch { toast.error('Annulation impossible.'); return false; }
+    try {
+      if (isDesktopRuntime()) return await DesktopRecordingsBridge.cancelScheduled(id);
+      await NativePlayer.cancelScheduledRecording({ id });
+      return true;
+    } catch { toast.error('Annulation impossible.'); return false; }
   },
 };
 
@@ -683,8 +876,12 @@ function handleNativeAudioEvent(data: Partial<AudioPlaybackState> | null | undef
   });
 }
 
+function isNativeAudioAvailable(): boolean {
+  return Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('NativePlayer');
+}
+
 function ensureNativeAudioListener(): void {
-  if (nativeAudioListenerAttached || !isAvailable()) return;
+  if (nativeAudioListenerAttached || !isNativeAudioAvailable()) return;
   nativeAudioListenerAttached = true;
   void NativePlayer.addListener('audioState', handleNativeAudioEvent).catch(() => {
     nativeAudioListenerAttached = false;
@@ -742,7 +939,7 @@ function saveActiveEpisodeBeforeTransition(): void {
   if (!currentAudioState.active || !currentAudioState.episodeId) return;
   let pos = currentAudioState.positionMs;
   let dur = currentAudioState.durationMs;
-  if (!isAvailable() && webAudioEl && Number.isFinite(webAudioEl.currentTime) && webAudioEl.currentTime > 0) {
+  if (!isNativeAudioAvailable() && webAudioEl && Number.isFinite(webAudioEl.currentTime) && webAudioEl.currentTime > 0) {
     pos = Math.max(pos, Math.round(webAudioEl.currentTime * 1000));
     if (Number.isFinite(webAudioEl.duration) && webAudioEl.duration > 0) {
       dur = Math.round(webAudioEl.duration * 1000);
@@ -788,7 +985,7 @@ export const AudioBridge = {
 
   /** Synchronise les progressions enregistrées par le service Android en arrière-plan (écran éteint). */
   async syncFromNative(): Promise<void> {
-    if (!isAvailable()) return;
+    if (!isNativeAudioAvailable()) return;
     ensureNativeAudioListener();
     try {
       const [{ entries }, state] = await Promise.all([
@@ -836,7 +1033,7 @@ export const AudioBridge = {
 
     // 2. Couper toute vidéo active (aperçu direct Android ou vidéo Web) pour éviter tout double son
     notifyAudioTakingOverFromVideo();
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       void NativePlayer.stopPreview().catch(() => {});
     }
 
@@ -876,7 +1073,7 @@ export const AudioBridge = {
 
     emitAudioState(optimistic);
 
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       try {
         await NativePlayer.playAudioEpisode({
           episodeId: episode.id,
@@ -920,7 +1117,7 @@ export const AudioBridge = {
     if (!currentAudioState.active) return;
     saveActiveEpisodeBeforeTransition();
     emitAudioState({ ...currentAudioState, playing: false });
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       try { await NativePlayer.pauseAudio(); } catch { /* ignore */ }
     } else if (webAudioEl) {
       try { webAudioEl.pause(); } catch { /* ignore */ }
@@ -931,7 +1128,7 @@ export const AudioBridge = {
   async pauseForVideo(): Promise<void> {
     if (currentAudioState.active && currentAudioState.playing) {
       await this.pause();
-    } else if (isAvailable()) {
+    } else if (isNativeAudioAvailable()) {
       try { await NativePlayer.pauseAudio(); } catch { /* ignore */ }
     }
   },
@@ -940,7 +1137,7 @@ export const AudioBridge = {
     if (!currentAudioState.active || !currentAudioState.episodeId) return;
     notifyAudioTakingOverFromVideo();
     emitAudioState({ ...currentAudioState, playing: true });
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       try { await NativePlayer.resumeAudio(); } catch { /* ignore */ }
     } else if (webAudioEl) {
       try {
@@ -965,7 +1162,7 @@ export const AudioBridge = {
       saveActiveEpisodeBeforeTransition();
     }
     emitAudioState({ ...EMPTY_AUDIO_STATE });
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       try { await NativePlayer.stopAudio(); } catch { /* ignore */ }
     } else if (webAudioEl) {
       try {
@@ -981,7 +1178,7 @@ export const AudioBridge = {
       ? Math.max(0, Math.min(currentAudioState.durationMs, Math.round(positionMs)))
       : Math.max(0, Math.round(positionMs));
     emitAudioState({ ...currentAudioState, positionMs: clamped }, { forceSave: true });
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       try { await NativePlayer.seekAudioTo({ positionMs: clamped }); } catch { /* ignore */ }
     } else if (webAudioEl) {
       try { webAudioEl.currentTime = clamped / 1000; } catch { /* ignore */ }
@@ -998,7 +1195,7 @@ export const AudioBridge = {
     const safeSpeed = clampPodcastSpeed(speed);
     if (!currentAudioState.active || !currentAudioState.episodeId) return;
     emitAudioState({ ...currentAudioState, speed: safeSpeed });
-    if (isAvailable()) {
+    if (isNativeAudioAvailable()) {
       try { await NativePlayer.setAudioSpeed({ speed: safeSpeed }); } catch { /* ignore */ }
     } else if (webAudioEl) {
       try {

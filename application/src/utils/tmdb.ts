@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getMeta, setMeta } from '@/utils/idb';
 import { normalizeForCompare } from '@/utils/titleNormalize';
 import { memoFetch } from '@/utils/memoFetch';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 import {
   DEFAULT_WATCH_REGION, parseWatchAvailability, type WatchAvailability,
 } from '@/utils/watchAvailability';
@@ -94,27 +95,51 @@ async function tmdbGet(path: string, apiKey: string, signal?: AbortSignal): Prom
   if (!isToken) params.set('api_key', credential);
   const separator = path.includes('?') ? '&' : '?';
   const url = `${API}${path}${separator}${params}`;
-  if (Capacitor.isNativePlatform()) {
-    const response = await CapacitorHttp.get({
-      url,
-      headers,
-      responseType: 'json',
-      connectTimeout: 10_000,
-      readTimeout: MAX_FETCH_MS,
-    });
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  if (isDesktopRuntime() || Capacitor.isNativePlatform()) {
+    const requestPromise = isDesktopRuntime()
+      ? desktopHttp({ url, headers, responseType: 'json', timeoutMs: MAX_FETCH_MS })
+      : CapacitorHttp.get({
+          url,
+          headers,
+          responseType: 'json',
+          connectTimeout: 10_000,
+          readTimeout: MAX_FETCH_MS,
+        });
+    if (signal) requestPromise.catch(() => {});
+    let onAbort: (() => void) | undefined;
+    const response = signal
+      ? await Promise.race([
+          requestPromise,
+          new Promise<never>((_, reject) => {
+            onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+            signal.addEventListener('abort', onAbort, { once: true });
+          }),
+        ]).finally(() => {
+          if (onAbort) signal.removeEventListener('abort', onAbort);
+        })
+      : await requestPromise;
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
     if (response.status === 401) throw new TmdbAuthenticationError();
     if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
     return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
   }
   const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   const timeout = setTimeout(() => controller.abort(), MAX_FETCH_MS);
   try {
-    const response = await fetch(url, { headers, signal: signal ?? controller.signal });
+    const response = await fetch(url, { headers, signal: controller.signal });
     if (response.status === 401) throw new TmdbAuthenticationError();
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.json();
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -186,25 +211,25 @@ function parseTmdbDetails(data: unknown): TmdbDetails {
 }
 
 /** Recherche d'un titre (films ou séries), avec cache 12 h et déduplication en vol. */
-export async function searchTmdb(query: string, year: string, kind: TmdbKind, apiKey: string): Promise<TmdbSearchResult[]> {
+export async function searchTmdb(query: string, year: string, kind: TmdbKind, apiKey: string, signal?: AbortSignal): Promise<TmdbSearchResult[]> {
   const cacheKey = `tmdb_search_${kind}_${normalizeForCompare(`${query} ${year}`)}`;
   return memoFetch(cacheKey, async () => {
     const cached = await getMeta<{ fetchedAt: number; results: TmdbSearchResult[] }>(cacheKey);
     if (cached?.results?.length && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.results;
     const params = new URLSearchParams({ query, ...(year ? { year } : {}) });
-    const results = parseSearchResults(await tmdbGet(`/search/${kind}?${params}`, apiKey));
+    const results = parseSearchResults(await tmdbGet(`/search/${kind}?${params}`, apiKey, signal));
     await setMeta(cacheKey, { fetchedAt: Date.now(), results });
     return results;
   });
 }
 
 /** Fiche complète TMDB (casting, avis spectateurs, films similaires), avec cache 12 h et déduplication en vol. */
-export async function fetchTmdbDetails(id: number, kind: TmdbKind, apiKey: string): Promise<TmdbDetails> {
+export async function fetchTmdbDetails(id: number, kind: TmdbKind, apiKey: string, signal?: AbortSignal): Promise<TmdbDetails> {
   const cacheKey = `tmdb_${kind}_${id}`;
   return memoFetch(cacheKey, async () => {
     const cached = await getMeta<{ fetchedAt: number; details: TmdbDetails }>(cacheKey);
     if (cached?.details && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.details;
-    const details = parseTmdbDetails(await tmdbGet(`/${kind}/${id}?append_to_response=credits,reviews,recommendations`, apiKey));
+    const details = parseTmdbDetails(await tmdbGet(`/${kind}/${id}?append_to_response=credits,reviews,recommendations`, apiKey, signal));
     await setMeta(cacheKey, { fetchedAt: Date.now(), details });
     return details;
   });

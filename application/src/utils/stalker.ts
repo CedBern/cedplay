@@ -1,5 +1,6 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { channelQuality } from '@/utils/channelQuality';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 import type { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
 
 /**
@@ -14,7 +15,7 @@ export const STALKER_MARK = '#cedplay-stalker=';
 const STB_AGENT = 'Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3';
 
 export const isStalkerUrl = (url: string) => url.includes(STALKER_MARK);
-export const stalkerAvailable = () => Capacitor.isNativePlatform();
+export const stalkerAvailable = () => Capacitor.isNativePlatform() || isDesktopRuntime();
 
 /** « 00-1a-79-aa-bb-cc » → « 00:1A:79:AA:BB:CC » ; vide si ce n'est pas une adresse MAC. */
 export function normalizeMac(input: string): string {
@@ -58,13 +59,21 @@ function headers(account: StalkerAccount, token?: string): Record<string, string
 
 async function call(account: StalkerAccount, params: Record<string, string>, token?: string): Promise<unknown> {
   const query = new URLSearchParams({ ...params, JsHttpRequest: '1-xml' });
-  const response = await CapacitorHttp.get({
-    url: `${account.portal}${account.portal.includes('?') ? '&' : '?'}${query}`,
-    headers: headers(account, token),
-    responseType: 'text',
-    connectTimeout: 10_000,
-    readTimeout: 60_000,
-  });
+  const targetUrl = `${account.portal}${account.portal.includes('?') ? '&' : '?'}${query}`;
+  const response = isDesktopRuntime()
+    ? await desktopHttp<unknown>({
+      url: targetUrl,
+      headers: headers(account, token),
+      responseType: 'text',
+      timeoutMs: 60_000,
+    })
+    : await CapacitorHttp.get({
+      url: targetUrl,
+      headers: headers(account, token),
+      responseType: 'text',
+      connectTimeout: 10_000,
+      readTimeout: 60_000,
+    });
   if (response.status === 401 || response.status === 403) throw new Error('Le portail refuse cette adresse MAC.');
   if (response.status < 200 || response.status >= 300) throw new Error(`Le portail répond HTTP ${response.status}.`);
   let body: unknown = response.data;

@@ -12,7 +12,7 @@ import { normalizeForCompare, normalizeTitle, stripQualityTags } from '@/utils/t
  * titres (et l'identifiant TMDB quand le fichier le fournit) sont conservés.
  */
 
-export type WatchPlatformId = 'netflix' | 'prime' | 'youtube' | 'disney' | 'hbo' | 'arte' | 'autre';
+export type WatchPlatformId = 'netflix' | 'prime' | 'youtube' | 'disney' | 'hbo' | 'arte' | 'trakt' | 'autre';
 
 export const WATCH_PLATFORMS: { id: WatchPlatformId; label: string }[] = [
   { id: 'netflix', label: 'Netflix' },
@@ -21,6 +21,7 @@ export const WATCH_PLATFORMS: { id: WatchPlatformId; label: string }[] = [
   { id: 'disney', label: 'Disney+' },
   { id: 'hbo', label: 'HBO Max' },
   { id: 'arte', label: 'Arte' },
+  { id: 'trakt', label: 'Trakt' },
   { id: 'autre', label: 'Autre' },
 ];
 
@@ -46,6 +47,8 @@ const PLATFORM_ALIASES: Record<string, WatchPlatformId> = {
   max: 'hbo',
   arte: 'arte',
   'arte tv': 'arte',
+  trakt: 'trakt',
+  'trakt.tv': 'trakt',
   autre: 'autre',
   other: 'autre',
   inconnu: 'autre',
@@ -456,6 +459,7 @@ export function externalSeeds(watches: PlayHistoryEntry[], items: CatalogItem[],
     if (known && known.ts >= watch.ts) continue;
     seeds.set(channelId, {
       channelId,
+      originChannelId: watch.channelId,
       ts: watch.ts,
       kind: 'vod',
       name: item.name,

@@ -4,6 +4,8 @@ import type HlsType from 'hls.js';
 import { Capacitor } from '@capacitor/core';
 import { isPlaybackDelegated, onPlaybackDelegated } from '@/utils/playbackOwnership';
 import { getProxyBase } from '@/utils/proxy';
+import { desktopProxyUrl, isDesktopRuntime } from '@/utils/desktopBridge';
+import { getActiveUserAgent } from '@/utils/userAgent';
 
 interface PlayOptions { resetAttempts?: boolean; autoplay?: boolean; }
 const MAX_RETRIES = 5;
@@ -11,6 +13,17 @@ const MAX_RETRIES = 5;
 export function getPlaybackUrl(rawUrl: string): string {
   if (Capacitor.isNativePlatform()) {
     return rawUrl;
+  }
+  if (isDesktopRuntime()) {
+    try {
+      const parsed = new URL(rawUrl, window.location.href);
+      if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.protocol === 'blob:') {
+        return rawUrl;
+      }
+      return desktopProxyUrl(rawUrl, getActiveUserAgent());
+    } catch {
+      return rawUrl;
+    }
   }
   try {
     const parsed = new URL(rawUrl, window.location.href);

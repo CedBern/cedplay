@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getMeta, setMeta } from '@/utils/idb';
 import { normalizeTitle, normalizeForCompare } from '@/utils/titleNormalize';
 import { memoFetch } from '@/utils/memoFetch';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 
 export type SubtitleLanguage = 'fr' | 'en' | 'es' | 'other';
 
@@ -95,7 +96,15 @@ export function lookupImdbId(
 
     try {
       let data: CinemetaResult;
-      if (Capacitor.isNativePlatform()) {
+      if (isDesktopRuntime()) {
+        const res = await desktopHttp<CinemetaResult | string>({
+          url,
+          headers: { 'User-Agent': 'LecteurIPTV/1.5' },
+          responseType: 'json',
+          timeoutMs: 10_000,
+        });
+        data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+      } else if (Capacitor.isNativePlatform()) {
         const res = await CapacitorHttp.get({
           url,
           headers: { 'User-Agent': 'LecteurIPTV/1.5' },
@@ -168,7 +177,15 @@ async function searchSubtitlesInner(
   const stremioUrl = `https://opensubtitles-v3.strem.io/subtitles/${endpointType}/${endpointId}.json`;
   try {
     let data: SubtitleSearchResult = {};
-    if (Capacitor.isNativePlatform()) {
+    if (isDesktopRuntime()) {
+      const res = await desktopHttp<SubtitleSearchResult | string>({
+        url: stremioUrl,
+        headers: { 'User-Agent': 'LecteurIPTV/1.5' },
+        responseType: 'json',
+        timeoutMs: 12_000,
+      });
+      data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    } else if (Capacitor.isNativePlatform()) {
       const res = await CapacitorHttp.get({
         url: stremioUrl,
         headers: { 'User-Agent': 'LecteurIPTV/1.5' },
@@ -218,7 +235,10 @@ async function searchSubtitlesInner(
       };
 
       let osData: SubtitleSearchResult = {};
-      if (Capacitor.isNativePlatform()) {
+      if (isDesktopRuntime()) {
+        const res = await desktopHttp<SubtitleSearchResult | string>({ url: apiUrl, headers, responseType: 'json' });
+        osData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+      } else if (Capacitor.isNativePlatform()) {
         const res = await CapacitorHttp.get({ url: apiUrl, headers });
         osData = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
       } else {
@@ -283,7 +303,18 @@ export function downloadSubtitleText(url: string, apiKeys?: SubtitleApiKeys): Pr
       const endpoint = 'https://api.opensubtitles.com/api/v1/download';
       const body = { file_id: Number(officialFile[1]) };
       let data: { link?: string };
-      if (Capacitor.isNativePlatform()) {
+      if (isDesktopRuntime()) {
+        const response = await desktopHttp<{ link?: string } | string>({
+          url: endpoint,
+          method: 'POST',
+          headers,
+          body,
+          responseType: 'json',
+          timeoutMs: 15000,
+        });
+        if (response.status < 200 || response.status >= 300) throw new Error('Téléchargement refusé par OpenSubtitles.');
+        data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+      } else if (Capacitor.isNativePlatform()) {
         const response = await CapacitorHttp.post({ url: endpoint, headers, data: body, connectTimeout: 10000, readTimeout: 15000 });
         if (response.status < 200 || response.status >= 300) throw new Error('Téléchargement refusé par OpenSubtitles.');
         data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
@@ -296,6 +327,11 @@ export function downloadSubtitleText(url: string, apiKeys?: SubtitleApiKeys): Pr
       downloadUrl = data.link;
     }
     const headers: Record<string, string> = { 'User-Agent': 'LecteurIPTV/1.5' };
+    if (isDesktopRuntime()) {
+      const res = await desktopHttp<string>({ url: downloadUrl, headers, responseType: 'text', timeoutMs: 15_000 });
+      if (res.status < 200 || res.status >= 300) throw new Error('Sous-titre indisponible.');
+      return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    }
     if (Capacitor.isNativePlatform()) {
       const res = await CapacitorHttp.get({
         url: downloadUrl,

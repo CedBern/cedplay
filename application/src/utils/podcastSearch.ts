@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 import type { LinkResolutionResult, PodcastSearchResult } from '@/types/podcast';
 
 /**
@@ -103,6 +104,22 @@ export const PODCAST_GENRES = [
  * Effectue une requête HTTP multi-plateforme (CapacitorHttp sur Android, fetch sur Web).
  */
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null> {
+  if (isDesktopRuntime()) {
+    try {
+      const res = await desktopHttp<T | string>({
+        url,
+        headers: { Accept: 'application/json, text/plain, */*' },
+        responseType: 'json',
+        timeoutMs: 10000,
+      });
+      if (res.status >= 200 && res.status < 300) {
+        return typeof res.data === 'string' ? JSON.parse(res.data) as T : res.data;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
   if (Capacitor.isNativePlatform()) {
     try {
       const res = await CapacitorHttp.get({
@@ -140,6 +157,25 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T | null
  * Récupère le texte brut d'une page Web pour analyser les liens alternatifs RSS ou les balises meta OpenGraph.
  */
 async function fetchHtmlText(url: string, signal?: AbortSignal): Promise<string | null> {
+  if (isDesktopRuntime()) {
+    try {
+      const res = await desktopHttp<string>({
+        url,
+        headers: {
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent': 'CedPlay/1.12 (Windows; Podcasts)',
+        },
+        responseType: 'text',
+        timeoutMs: 10000,
+      });
+      if (res.status >= 200 && res.status < 300) {
+        return typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
   if (Capacitor.isNativePlatform()) {
     try {
       const res = await CapacitorHttp.get({

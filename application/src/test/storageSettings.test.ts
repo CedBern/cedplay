@@ -52,7 +52,7 @@ describe('StorageManager settings validation & migration', () => {
     // Migration should have attempted to persist repaired version
     expect(saveSettingsToDBMock).toHaveBeenCalledTimes(1);
     expect((stored as AppSettings).volume).toBe(1);
-  expect(loaded.__version).toBe(10);
+    expect(loaded.__version).toBe(11);
     expect(loaded.proxyUrl).toBe('');
   expect(loaded.tmdbApiKey).toBe(''); // défaut appliqué par la migration v4 -> v5
   expect(loaded.subtitlesEnabled).toBe(true);
@@ -109,7 +109,7 @@ describe('StorageManager settings validation & migration', () => {
     saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
 
     const result = await StorageManager.loadSettingsAsync();
-    expect(result.__version).toBe(10);
+    expect(result.__version).toBe(11);
     expect(result.telemetryPersistence).toBe(true); // default applied during migration
     expect(saveSettingsToDBMock).toHaveBeenCalled();
   });
@@ -167,13 +167,13 @@ describe('StorageManager settings validation & migration', () => {
   });
 
   it('migrates the legacy tvPreview boolean to tvPreviewMode (v8 -> v9)', async () => {
-    const { tvPreviewMode: _dropped, ...withoutMode } = StorageManager.defaultSettings(); // eslint-disable-line @typescript-eslint/no-unused-vars
+    const { tvPreviewMode: _dropped, ...withoutMode } = StorageManager.defaultSettings();
     getSettingsFromDBMock.mockResolvedValueOnce({ ...withoutMode, __version: 8, tvPreview: false });
     saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
 
     const loaded = await StorageManager.loadSettingsAsync();
     expect(loaded.tvPreviewMode).toBe('off');
-    expect(loaded.__version).toBe(10);
+    expect(loaded.__version).toBe(11);
   });
 
   it('adds last-channel start (off) and 24 h playlist refresh during v9 -> v10', async () => {
@@ -184,7 +184,19 @@ describe('StorageManager settings validation & migration', () => {
     const loaded = await StorageManager.loadSettingsAsync();
     expect(loaded.startOnLastChannel).toBe(false);
     expect(loaded.playlistRefreshHours).toBe(24);
-    expect(loaded.__version).toBe(10);
+    expect(loaded.__version).toBe(11);
+  });
+
+  it('initialise les réglages Trakt.tv lors de la migration v10 -> v11', async () => {
+    const { traktToken: _a, traktScrobble: _b, traktSync: _c, ...v10 } = StorageManager.defaultSettings();
+    getSettingsFromDBMock.mockResolvedValueOnce({ ...v10, __version: 10 });
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+
+    const loaded = await StorageManager.loadSettingsAsync();
+    expect(loaded.traktToken).toBe('');
+    expect(loaded.traktScrobble).toBe(true);
+    expect(loaded.traktSync).toBe(true);
+    expect(loaded.__version).toBe(11);
   });
 
   it('keeps a chosen playlist refresh interval and rejects invalid ones', async () => {
@@ -197,7 +209,7 @@ describe('StorageManager settings validation & migration', () => {
   });
 
   it('defaults tvPreviewMode to auto when nothing was persisted', async () => {
-    const { tvPreviewMode: _dropped, ...withoutMode } = StorageManager.defaultSettings(); // eslint-disable-line @typescript-eslint/no-unused-vars
+    const { tvPreviewMode: _dropped, ...withoutMode } = StorageManager.defaultSettings();
     getSettingsFromDBMock.mockResolvedValueOnce({ ...withoutMode, __version: 8 });
     saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
 
@@ -302,5 +314,35 @@ describe('miroir du thème (anti-flash au lancement)', () => {
     StorageManager.setThemeMirror('light');
     StorageManager.purgeLegacyKeys();
     expect(StorageManager.getThemeMirror()).toBe('light');
+  });
+
+  it('préserve interfaceMode lors de la sauvegarde, du rechargement et du fallback', async () => {
+    getSettingsFromDBMock.mockResolvedValue(StorageManager.defaultSettings());
+    saveSettingsToDBMock.mockImplementation(async (s: unknown) => { stored = s; });
+
+    const saved = await StorageManager.saveSettings({ interfaceMode: 'tv' });
+    expect(saved.interfaceMode).toBe('tv');
+
+    StorageManager.__resetCacheForTests();
+    getSettingsFromDBMock.mockResolvedValue(stored);
+    expect((await StorageManager.loadSettingsAsync()).interfaceMode).toBe('tv');
+
+    // Branche fallback (un champ invalide fait échouer Zod sans perdre interfaceMode)
+    StorageManager.__resetCacheForTests();
+    getSettingsFromDBMock.mockResolvedValue({ ...StorageManager.defaultSettings(), volume: 99, interfaceMode: 'mobile' });
+    const repaired = await StorageManager.loadSettingsAsync();
+    expect(repaired.volume).toBe(1);
+    expect(repaired.interfaceMode).toBe('mobile');
+  });
+
+  it('setLastPlaylist ignore une QuotaExceededError sans lever d’exception', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('plein', 'QuotaExceededError');
+    });
+    try {
+      expect(() => StorageManager.setLastPlaylist('MaListe')).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -180,7 +180,6 @@ final class LivePreview {
             @Override public void onPlayerError(PlaybackException error) {
                 if (player != created) return;
                 android.util.Log.w("IPTV-Preview", "error=" + error.errorCode);
-                requestUrl = null;
                 release();
                 listener.onState("error");
             }

@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 import { FeedFormatError, parsePodcastRss, type ParsedPodcastFeed } from './podcastParser';
 
 /**
@@ -17,6 +18,23 @@ export async function fetchPodcastFeed(rawUrl: string): Promise<ParsedPodcastFee
   }
 
   const normalizedUrl = parsed.toString();
+
+  if (isDesktopRuntime()) {
+    const response = await desktopHttp<string>({
+      url: normalizedUrl,
+      headers: {
+        Accept: 'application/rss+xml, application/xml, text/xml, */*',
+        'User-Agent': 'CedPlay/1.12 (Windows; Podcasts)',
+      },
+      responseType: 'text',
+      timeoutMs: 15000,
+    });
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Le serveur du podcast a répondu avec le code HTTP ${response.status}.`);
+    }
+    const xmlText = typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? '');
+    return parsePodcastRss(xmlText, normalizedUrl);
+  }
 
   if (Capacitor.isNativePlatform()) {
     const response = await CapacitorHttp.get({

@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 
 /**
  * User-Agent envoyé au fournisseur (flux, guide, API Xtream). Certains serveurs
@@ -21,8 +22,13 @@ let active = DEFAULT_USER_AGENT;
 export function setActiveUserAgent(userAgent: string): void { active = cleanUserAgent(userAgent) || DEFAULT_USER_AGENT; }
 export function getActiveUserAgent(): string { return active; }
 
-/** Télécharge un texte avec ce User-Agent (Android : requête native, sans contrainte CORS). */
+/** Télécharge un texte avec ce User-Agent (Android ou Desktop : requête directe sans contrainte CORS). */
 export async function fetchTextWithUserAgent(url: string, userAgent: string): Promise<string> {
+  if (isDesktopRuntime()) {
+    const response = await desktopHttp<string>({ url, headers: { 'User-Agent': userAgent }, responseType: 'text', timeoutMs: 60000 });
+    if (response.status < 200 || response.status >= 300) throw new Error(`Import impossible : HTTP ${response.status}.`);
+    return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+  }
   if (!Capacitor.isNativePlatform()) throw new Error('native only');
   const response = await CapacitorHttp.get({ url, headers: { 'User-Agent': userAgent }, responseType: 'text', connectTimeout: 15000, readTimeout: 60000 });
   if (response.status < 200 || response.status >= 300) throw new Error(`Import impossible : HTTP ${response.status}.`);
@@ -51,6 +57,15 @@ export async function httpGetJson(url: string, options: HttpGetOptions = {}): Pr
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const cancelled = () => new DOMException('Cancelled', 'AbortError');
   if (options.signal?.aborted) throw cancelled();
+  if (isDesktopRuntime()) {
+    const response = await desktopHttp<unknown>({
+      url,
+      headers: { 'User-Agent': getActiveUserAgent() },
+      responseType: 'json',
+      timeoutMs,
+    });
+    return { ok: response.status >= 200 && response.status < 300, status: response.status, data: typeof response.data === 'string' ? parseJsonLoose(response.data) : response.data };
+  }
   if (Capacitor.isNativePlatform()) {
     const response = await CapacitorHttp.get({
       url, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json',

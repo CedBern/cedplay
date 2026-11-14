@@ -75,4 +75,14 @@ describe('SettingsPanel aperçu vidéo', () => {
     expect(saved.tvPreviewMode).toBe('off');
     expect(saved.tvPreview).toBe(false);
   });
+
+  it('place le point d’entrée télécommande sur la première option tout en haut et expose le curseur de volume accessible', () => {
+    render(<SettingsPanel open={true} currentSettings={baseSettings} onSettingsChange={vi.fn()} onOpenChange={vi.fn()} />);
+    const autoplayCheckbox = screen.getByLabelText(/Lire automatiquement la chaîne sélectionnée/i);
+    expect(autoplayCheckbox.hasAttribute('data-remote-start')).toBe(true);
+
+    const volumeSlider = screen.getByLabelText(/Volume de départ/i);
+    expect(volumeSlider).toBeVisible();
+    expect(volumeSlider.getAttribute('type')).toBe('range');
+  });
 });

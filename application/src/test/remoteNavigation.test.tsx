@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import userEvent from '@testing-library/user-event';
 import 'fake-indexeddb/auto';
 import { Input } from '@/components/ui/input';
 import { MainNavigation } from '@/components/MainNavigation';
+import { focusRemote } from '@/utils/remoteNavigation';
 import { TvLiveScreen } from '@/components/TvLiveScreen';
 
 function Navigation({ modal = false, remove = false }: { modal?: boolean; remove?: boolean }) {
@@ -40,6 +41,39 @@ it('les flèches initialisent le focus, déplacent entre contrôles et préserve
   expect(left.defaultPrevented).toBe(false);
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByText('Importer')).toHaveFocus();
+});
+it('un curseur horizontal (input range) conserve gauche/droite pour le réglage et permet de sortir avec haut/bas', () => {
+  geometry();
+  function SliderNav() {
+    useRemoteNavigation();
+    return <>
+      <button data-x="0" data-y="0">Haut</button>
+      <input type="range" data-x="0" data-y="100" aria-label="Curseur" />
+      <button data-x="0" data-y="200">Bas</button>
+    </>;
+  }
+  render(<SliderNav />);
+  const slider = screen.getByLabelText('Curseur');
+  slider.focus();
+  expect(slider).toHaveFocus();
+
+  // Flèche gauche : préservée pour modifier le curseur, ne quitte pas le champ
+  const left = new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true });
+  slider.dispatchEvent(left);
+  expect(left.defaultPrevented).toBe(false);
+  expect(slider).toHaveFocus();
+
+  // Flèche bas : quitte le curseur horizontal et déplace le focus vers le bouton Bas
+  fireEvent.keyDown(slider, { key: 'ArrowDown' });
+  expect(screen.getByText('Bas')).toHaveFocus();
+
+  // Flèche haut : revient sur le curseur
+  fireEvent.keyDown(screen.getByText('Bas'), { key: 'ArrowUp' });
+  expect(slider).toHaveFocus();
+
+  // Flèche haut depuis le curseur : quitte le curseur vers le bouton Haut
+  fireEvent.keyDown(slider, { key: 'ArrowUp' });
+  expect(screen.getByText('Haut')).toHaveFocus();
 });
 it('garde le focus dans un dialogue et le rétablit après disparition du contrôle courant', async () => {
   geometry(); const view = render(<Navigation />);
@@ -220,7 +254,7 @@ it('une recherche TV se traverse dans les quatre directions sans saisir ; OK act
   expect(input).toHaveAttribute('readonly');
 });
 
-it('le parcours horizontal des rubriques ne mesure pas les cartes du catalogue', () => {
+it('le parcours vertical du rail ne mesure pas les cartes du catalogue', () => {
   geometry();
   function Page() {
     useRemoteNavigation();
@@ -232,9 +266,9 @@ it('le parcours horizontal des rubriques ne mesure pas les cartes du catalogue',
   const measured = vi.fn();
   container.querySelectorAll<HTMLElement>('[data-card]').forEach(el => { el.getBoundingClientRect = measured; });
   screen.getByRole('tab', { name: 'Découvrir' }).focus();
-  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('tab', { name: 'Plus' })).toHaveFocus();
-  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+  for (let i = 0; i < 5; i++) fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
   expect(screen.getByRole('tab', { name: 'Découvrir' })).toHaveFocus();
   expect(measured).not.toHaveBeenCalled();
 });
@@ -257,8 +291,73 @@ it('Retour depuis une catégorie Direct rejoint le menu et permet d’ouvrir Fil
   window.dispatchEvent(back);
   expect(back.defaultPrevented).toBe(true);
   expect(screen.getByRole('tab', { name: 'Direct' })).toHaveFocus();
-  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
   expect(screen.getByRole('tab', { name: 'Films' })).toHaveFocus();
   await userEvent.keyboard('{Enter}');
   expect(screen.getByRole('button', { name: 'Catalogue films' })).toBeVisible();
+});
+
+
+it('le rail se déploie au focus, garde OK pour choisir et Droite rend le dernier contrôle du panneau actif', async () => {
+  geometry();
+  const searched = vi.fn();
+  function Page() {
+    useRemoteNavigation();
+    const [section, setSection] = useState('continue');
+    return <Tabs value={section} activationMode="manual" orientation="vertical" onValueChange={setSection}>
+      <MainNavigation tv onNavigate={setSection} onSearch={searched} />
+      <TabsContent value="continue"><button data-remote-entry>Entrée Découvrir</button><button>Dernière carte</button></TabsContent>
+      <TabsContent value="channels"><button data-remote-entry>Entrée Direct</button></TabsContent>
+    </Tabs>;
+  }
+  render(<Page />);
+  const rail = screen.getByRole('navigation', { name: 'Navigation principale' });
+  expect(rail).toHaveAttribute('data-expanded', 'false');
+  act(() => screen.getByRole('button', { name: 'Dernière carte' }).focus());
+  act(() => screen.getByRole('tab', { name: 'Découvrir' }).focus());
+  expect(rail).toHaveAttribute('data-expanded', 'true');
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+  expect(screen.getByRole('tab', { name: 'Direct' })).toHaveFocus();
+  expect(screen.getByRole('tab', { name: 'Découvrir' })).toHaveAttribute('aria-selected', 'true');
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(screen.getByRole('button', { name: 'Dernière carte' })).toHaveFocus();
+  expect(rail).toHaveAttribute('data-expanded', 'false');
+  act(() => screen.getByRole('tab', { name: 'Direct' }).focus());
+  await userEvent.keyboard('{Enter}');
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(screen.getByRole('button', { name: 'Entrée Direct' })).toHaveFocus();
+  act(() => screen.getByRole('tab', { name: 'Découvrir' }).focus());
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  expect(screen.getByRole('button', { name: 'Recherche unifiée' })).toHaveFocus();
+  await userEvent.keyboard('{Enter}');
+  expect(searched).toHaveBeenCalledOnce();
+});
+
+it('Gauche depuis les catégories Direct ouvre le rail, Droite retrouve la catégorie sans lancer de chaîne', () => {
+  geometry();
+  const onPlay = vi.fn();
+  function Page() {
+    useRemoteNavigation();
+    return <Tabs value="channels" activationMode="manual"><MainNavigation tv onNavigate={() => {}} />
+      <TabsContent value="channels"><TvLiveScreen playlistId="left-menu" groups={[{ name: 'France', channels: [{ id: 'c', name: 'Une chaîne', url: 'https://example.test/1.ts' }] }]} favoriteIds={[]} onPlay={onPlay} /></TabsContent>
+    </Tabs>;
+  }
+  render(<Page />);
+  const category = screen.getByRole('button', { name: /^Toutes/ });
+  act(() => category.focus());
+  fireEvent.keyDown(category, { key: 'ArrowLeft' });
+  expect(screen.getByRole('tab', { name: 'Direct' })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+  expect(category).toHaveFocus();
+  expect(onPlay).not.toHaveBeenCalled();
+});
+
+it('entrer dans le rail fixe préserve le défilement de Découvrir sous le menu', () => {
+  const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+  render(<Tabs value="continue"><MainNavigation tv onNavigate={()=>{}} /></Tabs>);
+  document.documentElement.scrollTop = 800;
+  focusRemote(screen.getByRole('tab', {name:'Découvrir'}));
+  expect(document.documentElement.scrollTop).toBe(800);
+  expect(scroll).not.toHaveBeenCalled();
+  document.documentElement.scrollTop = 0;
 });

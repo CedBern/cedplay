@@ -1,10 +1,16 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { EPGGrid } from '@/components/EPGGrid';
 import { formatTime } from '@/utils/epgXmltv';
 
 vi.mock('@tanstack/react-virtual', () => ({ useVirtualizer: () => ({ getTotalSize: () => 108, getVirtualItems: () => [{ index: 0, start: 44 }] }) }));
 vi.mock('@/utils/reminders', () => ({ getReminders: async () => [], addReminder: vi.fn(), removeReminder: vi.fn(), REMINDERS_EVENT: 'reminders-updated' }));
+beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  // Les programmes précédents doivent rester dans le jour affiché, même après minuit.
+  vi.setSystemTime(new Date(2026, 10, 14, 12, 0, 0));
+});
+
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 const channel = { id: 'a', name: 'Chaîne test', url: 'https://example.test/a' };

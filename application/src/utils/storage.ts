@@ -56,6 +56,14 @@ export interface AppSettings {
   playerBuffer?: 'small' | 'normal' | 'large' | 'max'; // mémoire tampon du lecteur Android (direct)
   playerDecoder?: 'hardware' | 'software'; // décodeurs vidéo essayés en premier par le lecteur Android
   playerAfr?: boolean; // fréquence d'affichage adaptée à la vidéo (Android TV)
+  traktToken?: string; // jeton d'accès OAuth Trakt.tv
+  traktRefreshToken?: string; // jeton de rafraîchissement OAuth Trakt.tv
+  traktExpiresAt?: number; // expiration du jeton (ms)
+  traktUsername?: string; // nom d'utilisateur Trakt (@username)
+  traktScrobble?: boolean; // synchronisation de la progression en direct vers Trakt
+  traktSync?: boolean; // synchronisation de l'historique Trakt vers « Vu ailleurs »
+  traktClientId?: string; // identifiant client Trakt personnalisé (facultatif)
+  traktClientSecret?: string; // secret client Trakt personnalisé (facultatif)
   __version?: number; // internal version for migrations
 }
 
@@ -95,6 +103,14 @@ const appSettingsSchema = z.object({
   playerBuffer: z.enum(['small', 'normal', 'large', 'max']).optional(),
   playerDecoder: z.enum(['hardware', 'software']).optional(),
   playerAfr: z.boolean().optional(),
+  traktToken: z.string().max(500).optional(),
+  traktRefreshToken: z.string().max(500).optional(),
+  traktExpiresAt: z.number().optional(),
+  traktUsername: z.string().max(100).optional(),
+  traktScrobble: z.boolean().optional(),
+  traktSync: z.boolean().optional(),
+  traktClientId: z.string().max(200).optional(),
+  traktClientSecret: z.string().max(200).optional(),
   __version: z.number().optional()
 });
 
@@ -150,7 +166,9 @@ export class StorageManager {
   }
 
   static setFavorites(channelIds: string[]): void {
-    localStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(channelIds));
+    try {
+      localStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(channelIds));
+    } catch { /* stockage plein ou désactivé */ }
   }
 
   static toggleFavorite(channelId: string): void {
@@ -201,7 +219,15 @@ export class StorageManager {
   tvPreviewMode: 'auto',
   startOnLastChannel: false,
   playlistRefreshHours: 24,
-  __version: 10
+  traktToken: '',
+  traktRefreshToken: '',
+  traktExpiresAt: 0,
+  traktUsername: '',
+  traktScrobble: true,
+  traktSync: true,
+  traktClientId: '',
+  traktClientSecret: '',
+  __version: 11
     };
   }
 
@@ -347,7 +373,9 @@ export class StorageManager {
   }
 
   static setLastPlaylist(playlistName: string): void {
-    localStorage.setItem(STORAGE_KEYS.LAST_PLAYLIST, playlistName);
+    try {
+      localStorage.setItem(STORAGE_KEYS.LAST_PLAYLIST, playlistName);
+    } catch { /* stockage plein ou désactivé */ }
   }
 
   /** Miroir synchrone du thème, lu par le script inline d'index.html au démarrage. */
@@ -407,6 +435,7 @@ export class StorageManager {
   ...(p.subdlApiKey !== undefined ? { subdlApiKey: p.subdlApiKey } : {}),
         ...(p.parentalControlEnabled !== undefined ? { parentalControlEnabled: p.parentalControlEnabled } : {}),
         ...(p.parentalPin !== undefined ? { parentalPin: p.parentalPin } : {}),
+        ...(p.interfaceMode !== undefined ? { interfaceMode: p.interfaceMode } : {}),
         ...(p.proxyUrl !== undefined ? { proxyUrl: p.proxyUrl } : {}),
         ...(p.tvPreview !== undefined ? { tvPreview: p.tvPreview } : {}),
         ...(p.tvPreviewMode !== undefined ? { tvPreviewMode: p.tvPreviewMode } : {}),
@@ -415,6 +444,14 @@ export class StorageManager {
         ...(p.playerBuffer !== undefined ? { playerBuffer: p.playerBuffer } : {}),
         ...(p.playerDecoder !== undefined ? { playerDecoder: p.playerDecoder } : {}),
         ...(p.playerAfr !== undefined ? { playerAfr: p.playerAfr } : {}),
+        ...(p.traktToken !== undefined ? { traktToken: p.traktToken } : {}),
+        ...(p.traktRefreshToken !== undefined ? { traktRefreshToken: p.traktRefreshToken } : {}),
+        ...(p.traktExpiresAt !== undefined ? { traktExpiresAt: p.traktExpiresAt } : {}),
+        ...(p.traktUsername !== undefined ? { traktUsername: p.traktUsername } : {}),
+        ...(p.traktScrobble !== undefined ? { traktScrobble: p.traktScrobble } : {}),
+        ...(p.traktSync !== undefined ? { traktSync: p.traktSync } : {}),
+        ...(p.traktClientId !== undefined ? { traktClientId: p.traktClientId } : {}),
+        ...(p.traktClientSecret !== undefined ? { traktClientSecret: p.traktClientSecret } : {}),
         ...(p.__version !== undefined ? { __version: p.__version } : {})
       };
       return this.migrateIfNeeded(base);
@@ -448,6 +485,9 @@ export class StorageManager {
       subdlApiKey: typeof s.subdlApiKey === 'string' ? String(s.subdlApiKey).slice(0, 200) : '',
       parentalControlEnabled: coerceBool(s.parentalControlEnabled, false),
       parentalPin: typeof s.parentalPin === 'string' ? String(s.parentalPin).slice(0, MAX_PARENTAL_PIN_LENGTH) : '',
+      ...(s.interfaceMode === 'auto' || s.interfaceMode === 'tv' || s.interfaceMode === 'mobile'
+        ? { interfaceMode: s.interfaceMode }
+        : (base.interfaceMode !== undefined ? { interfaceMode: base.interfaceMode } : {})),
       proxyUrl: typeof s.proxyUrl === 'string' ? String(s.proxyUrl).slice(0, 300) : '',
       tvPreview: coerceBool(s.tvPreview, base.tvPreview as boolean),
       tvPreviewMode: s.tvPreviewMode === 'manual' || s.tvPreviewMode === 'off' || s.tvPreviewMode === 'auto' ? s.tvPreviewMode : 'auto',
@@ -460,7 +500,15 @@ export class StorageManager {
         ? { playerDecoder: s.playerDecoder }
         : (base.playerDecoder !== undefined ? { playerDecoder: base.playerDecoder } : {})),
       playerAfr: coerceBool(s.playerAfr, base.playerAfr as boolean),
-      __version: 10
+      traktToken: typeof s.traktToken === 'string' ? String(s.traktToken).slice(0, 500) : '',
+      traktRefreshToken: typeof s.traktRefreshToken === 'string' ? String(s.traktRefreshToken).slice(0, 500) : '',
+      traktExpiresAt: typeof s.traktExpiresAt === 'number' && !Number.isNaN(s.traktExpiresAt) ? s.traktExpiresAt : 0,
+      traktUsername: typeof s.traktUsername === 'string' ? String(s.traktUsername).slice(0, 100) : '',
+      traktScrobble: coerceBool(s.traktScrobble, true),
+      traktSync: coerceBool(s.traktSync, true),
+      traktClientId: typeof s.traktClientId === 'string' ? String(s.traktClientId).slice(0, 200) : '',
+      traktClientSecret: typeof s.traktClientSecret === 'string' ? String(s.traktClientSecret).slice(0, 200) : '',
+      __version: 11
     };
     return this.migrateIfNeeded(safe);
   }
@@ -522,6 +570,18 @@ export class StorageManager {
       if (s.startOnLastChannel === undefined) s.startOnLastChannel = false;
       if (s.playlistRefreshHours === undefined) s.playlistRefreshHours = 24;
       s.__version = 10;
+    }
+    // v10 -> v11 (connexion personnelle Trakt.tv : jetons, scrobble et synchro historique)
+    if (s.__version < 11) {
+      if (s.traktToken === undefined) s.traktToken = '';
+      if (s.traktRefreshToken === undefined) s.traktRefreshToken = '';
+      if (s.traktExpiresAt === undefined) s.traktExpiresAt = 0;
+      if (s.traktUsername === undefined) s.traktUsername = '';
+      if (s.traktScrobble === undefined) s.traktScrobble = true;
+      if (s.traktSync === undefined) s.traktSync = true;
+      if (s.traktClientId === undefined) s.traktClientId = '';
+      if (s.traktClientSecret === undefined) s.traktClientSecret = '';
+      s.__version = 11;
     }
     if (s.playbackRate !== undefined) s.playbackRate = Math.min(2, Math.max(0.5, s.playbackRate));
     return s;

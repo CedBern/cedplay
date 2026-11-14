@@ -52,3 +52,12 @@ describe.each([false, true])('Authentification TMDB (Android : %s)', native => {
       .rejects.toThrow('Clé ou jeton TMDB refusé. Vérifie la valeur dans Réglages › Films et séries.');
   });
 });
+
+it('annule immédiatement une requête TMDB native en cours lors d’un abort', async () => {
+  http.native = true;
+  http.get.mockImplementation(() => new Promise(() => {}));
+  const controller = new AbortController();
+  const pending = searchTmdb('Inception', '', 'movie', shortKey, controller.signal);
+  controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+});

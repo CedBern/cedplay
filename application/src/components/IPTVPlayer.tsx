@@ -1,3 +1,4 @@
+import { TvClock } from '@/components/TvClock';
 import { NativePlayerBridge, AudioBridge, buildNativeZap, setNativeEpg, setNativeCatchupProvider, findChannelByNumber, syncNativeZapList } from '@/utils/nativePlayer';
 import { watchNativeFavorites } from '@/utils/nativeFavorites';
 import { findExistingPlaylist, reconcilePlaylist } from '@/utils/playlistIdentity';
@@ -21,6 +22,10 @@ import { ChannelEditorDialog } from '@/components/ChannelEditor';
 import { fetchTextWithUserAgent, playlistUserAgent, setActiveUserAgent } from '@/utils/userAgent';
 import { Capacitor } from '@capacitor/core';
 import { useTvMode } from '@/hooks/useTvMode';
+import { DesktopCinemaPlayer } from '@/components/DesktopCinemaPlayer';
+import { DesktopLivePreview } from '@/components/DesktopLivePreview';
+import { DesktopMosaicPlayer } from '@/components/DesktopMosaicPlayer';
+import { isDesktopRuntime, toggleDesktopFullscreen } from '@/utils/desktopBridge';
 import { MosaicPicker } from '@/components/MosaicPicker';
 import type { VodResumeRequest } from '@/components/VodLibrary';
 import { ParentalPinDialog } from '@/components/ParentalPinDialog';
@@ -38,6 +43,7 @@ import { toast } from 'sonner';
 import { getFavoritesFromDB, pushPlayHistory } from '@/utils/idb';
 import { useEPG } from '@/hooks/useEPG';
 import { useRemindersSync } from '@/hooks/useRemindersSync';
+import { useLanSync } from '@/hooks/useLanSync';
 import { CORSProxy } from '@/utils/corsProxy';
 import { parseM3UInWorker } from '@/utils/parseWorker';
 import { adultGroupNames } from '@/utils/parentalControl';
@@ -57,6 +63,7 @@ let telemetryLoggerPromise: Promise<typeof import('@/utils/telemetry/logger')> |
 function getTelemetryLogger() { if (!telemetryLoggerPromise) telemetryLoggerPromise = import('@/utils/telemetry/logger'); return telemetryLoggerPromise; }
 
 export function IPTVPlayer() {
+  const [tvLocalRequest, setTvLocalRequest] = useState(0);
   const [currentPlaylist, setCurrentPlaylist] = useState<PlaylistInfo | null>(null);
   // Liste affichée à l'instant présent, lue par les traitements asynchrones (actualisation).
   const currentPlaylistRef = useRef(currentPlaylist);
@@ -95,12 +102,15 @@ export function IPTVPlayer() {
   const [vodResumeRequest, setVodResumeRequest] = useState<VodResumeRequest | null>(null);
   // Une reprise de film vise le catalogue, même si USB/SD était ouvert.
   useEffect(() => { if (vodResumeRequest?.kind === 'movie') setMovieSource('catalog'); }, [vodResumeRequest]);
-  const openSavedVod = (kind: 'movie' | 'series', item?: VodWatchlistItem) => {
+  const openSavedVod = useCallback((kind: 'movie' | 'series', item?: VodWatchlistItem) => {
     setActiveTab(kind === 'movie' ? 'movies' : 'series');
     if (kind === 'movie') setMovieSource('catalog');
     setVodResumeRequest(item ? { nonce: Date.now(), kind, id: item.id, name: item.name, item, mode: 'details' } : null);
-  };
+  }, []);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchResumeQuery = useRef<string | null>(null);
+  const tabBeforeSearch = useRef<string>('channels');
   const [openingChannel, setOpeningChannel] = useState<string | null>(null);
   const nativeOpening = useRef(false);
   const [pendingNativeNumber, setPendingNativeNumber] = useState<string | null>(null);
@@ -120,11 +130,6 @@ export function IPTVPlayer() {
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
-  // Le menu TV reste visible : l'accès à Films/Séries prime sur le gain de hauteur.
-  const headerRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    document.documentElement.classList.remove('tv-chrome-hidden');
-  }, [tvMode, activeTab]);
   useEffect(() => {
     if (activeTab === 'player') webPlayerSection.current?.scrollIntoView({ block: 'start' });
   }, [activeTab, currentChannel?.id]);
@@ -134,6 +139,9 @@ export function IPTVPlayer() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setSearchOpen(prev => !prev);
+      } else if (isDesktopRuntime() && e.key === 'F11') {
+        e.preventDefault();
+        toggleDesktopFullscreen();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -212,8 +220,12 @@ export function IPTVPlayer() {
   useEffect(() => {
     if (loadingInitial || allPlaylistsLoaded.current) return;
     if (currentPlaylist && activeTab !== 'loader') return;
+    let cancelled = false;
     allPlaylistsLoaded.current = true;
-    getPlaylistsFromDB().then(saved => setAllPlaylists(saved)).catch(() => { allPlaylistsLoaded.current = false; });
+    getPlaylistsFromDB()
+      .then(saved => { if (!cancelled) setAllPlaylists(saved); })
+      .catch(() => { allPlaylistsLoaded.current = false; });
+    return () => { cancelled = true; };
   }, [loadingInitial, currentPlaylist, activeTab]);
 
   const exportAdvanced = async (options: Parameters<typeof downloadPlaylistAdvanced>[2]) => {
@@ -361,19 +373,21 @@ export function IPTVPlayer() {
   // Listes de favoris supplémentaires (Sport, Enfants…).
   const [favoriteLists, setFavoriteLists] = useState<FavoriteList[]>([]);
   useEffect(() => {
-    const reload = () => { void loadFavoriteLists().then(setFavoriteLists); };
+    let cancelled = false;
+    const reload = () => { void loadFavoriteLists().then(lists => { if (!cancelled) setFavoriteLists(lists); }).catch(() => {}); };
     reload();
     window.addEventListener(FAVORITE_LISTS_EVENT, reload);
-    return () => window.removeEventListener(FAVORITE_LISTS_EVENT, reload);
+    return () => { cancelled = true; window.removeEventListener(FAVORITE_LISTS_EVENT, reload); };
   }, []);
 
   // Favoris (ordre choisi) : les numéros 1, 2, 3… lancent les favoris correspondants.
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   useEffect(() => {
-    const reload = () => { void getFavoritesFromDB().then(setFavoriteIds).catch(() => {}); };
+    let cancelled = false;
+    const reload = () => { void getFavoritesFromDB().then(ids => { if (!cancelled) setFavoriteIds(ids); }).catch(() => {}); };
     reload();
     window.addEventListener('favorites-updated', reload);
-    return () => window.removeEventListener('favorites-updated', reload);
+    return () => { cancelled = true; window.removeEventListener('favorites-updated', reload); };
   }, [currentPlaylist?.id]);
 
   // Réglages du lecteur Android : User-Agent de la liste ouverte, mémoire tampon, décodage, AFR.
@@ -483,14 +497,21 @@ export function IPTVPlayer() {
         void setLastChannelForPlaylist(playlist.id, selected.id).catch(() => {});
         void pushPlayHistory({ channelId: selected.id, ts: Date.now(), kind: 'live' }).catch(() => {});
       };
-      dismissSpinner = window.setTimeout(() => setOpeningChannel(null), 800);
+      dismissSpinner = window.setTimeout(() => setOpeningChannel(null), isDesktopRuntime() ? 0 : 800);
       const opened = await NativePlayerBridge.open(channel.url, channel.name, buildNativeZap(playableChannels, channel), url => {
         const match = playableChannels.find(c => c.url === url || c.variants?.some(v => v.url === url));
         const variant = match?.variants?.find(v => v.url === url);
         remember(variant || match || channel);
         setActiveTab('channels');
       }, number => setPendingNativeNumber(number));
-      if (opened) setActiveTab('channels');
+      if (searchResumeQuery.current) {
+        const q = searchResumeQuery.current;
+        searchResumeQuery.current = null;
+        setSearchQuery(q);
+        setSearchOpen(true);
+      } else if (opened) {
+        setActiveTab('channels');
+      }
     } finally {
       window.clearTimeout(dismissSpinner);
       nativeOpening.current = false;
@@ -516,7 +537,45 @@ export function IPTVPlayer() {
   // Entrées de la colonne des catégories (Direct TV) : des flèches inline recréées à chaque
   // rendu feraient rebâtir le `useMemo` de TvLiveScreen, qui réarme alors son minuteur de
   // catégorie au moindre rafraîchissement du parent (guide, favoris, zapping).
-  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const openSearch = useCallback(() => {
+    tabBeforeSearch.current = activeTab;
+    searchResumeQuery.current = null;
+    setSearchQuery('');
+    setSearchOpen(true);
+  }, [activeTab]);
+
+  const handleSearchSelectChannel = useCallback((channel: Channel) => {
+    if (searchQuery.trim()) searchResumeQuery.current = searchQuery;
+    handleChannelSelect(channel);
+  }, [searchQuery, handleChannelSelect]);
+
+  const handleSearchSelectVod = useCallback((item: VodWatchlistItem) => {
+    if (searchQuery.trim()) searchResumeQuery.current = searchQuery;
+    setSearchOpen(false);
+    openSavedVod(item.kind, item);
+  }, [searchQuery, openSavedVod]);
+
+  const onCloseVodDetails = useCallback(() => {
+    if (searchResumeQuery.current) {
+      const q = searchResumeQuery.current;
+      searchResumeQuery.current = null;
+      setSearchQuery(q);
+      setSearchOpen(true);
+      setActiveTab(tabBeforeSearch.current);
+    }
+  }, []);
+
+  const handleSearchOpenChange = useCallback((open: boolean) => {
+    // Une sélection ferme aussi le dialogue : conserver sa requête jusqu'au
+    // retour du lecteur, sans annuler le changement d'onglet vers la lecture.
+    if (!open && searchResumeQuery.current === null) {
+      if (activeTab !== tabBeforeSearch.current) {
+        setActiveTab(tabBeforeSearch.current);
+      }
+    }
+    setSearchOpen(open);
+  }, [activeTab]);
+
   const showGuide = useCallback(() => setChannelView('grid'), []);
   const openGroupManager = useCallback(() => setGroupManagerOpen(true), []);
 
@@ -561,6 +620,7 @@ export function IPTVPlayer() {
   // Rappels EPG : notifications système (Android) ; un appui ouvre la chaîne
   // par le même flux que le raccourci lecteuriptv://channel?id=… ci-dessus.
   useRemindersSync(setLaunchChannelId);
+  useLanSync();
 
   // Bouton retour Android : sous-écran → rubrique parente → Accueil, puis sortie.
   useEffect(() => {
@@ -692,7 +752,7 @@ export function IPTVPlayer() {
         for (const reminder of due) {
           toast.info(`« ${reminder.title} » commence sur ${reminder.channelName}.`, { duration: 8000 });
         }
-      });
+      }).catch(() => {});
     };
     check();
     const id = window.setInterval(check, 30_000);
@@ -709,8 +769,8 @@ export function IPTVPlayer() {
     try {
       let fresh: PlaylistInfo;
       if (pl.url) {
-        // User-Agent propre à la liste : requête native (la page ne peut pas le changer).
-        const content = pl.userAgent && Capacitor.isNativePlatform()
+        // User-Agent propre à la liste : requête directe (Android ou Desktop).
+        const content = pl.userAgent && (Capacitor.isNativePlatform() || isDesktopRuntime())
           ? await fetchTextWithUserAgent(pl.url, playlistUserAgent(pl))
           : await CORSProxy.fetchWithProxy(pl.url);
         if (!content.includes('#EXTINF:') || content.trim().startsWith('<')) {
@@ -956,17 +1016,16 @@ export function IPTVPlayer() {
     </div>
   );
 
-  // En-tête : sur TV, une seule ligne (logo, rubriques, recherche) — repliable.
-  const appHeader = (<header ref={headerRef} data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between ${tvMode ? 'gap-4' : 'gap-2'} border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${tvMode ? 'bg-background border-white/5' : scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
-      <div className={tvMode ? 'tv-header-main min-w-0 flex-1 items-center gap-3' : 'flex items-center gap-2 min-w-0 flex-1'}>
+  // En-tête téléphone et navigateur ; le mode TV possède son rail indépendant.
+  const appHeader = (<header data-app-header className={`sticky top-0 z-30 -mx-2 mb-3 flex items-center justify-between gap-2 border-b px-2 py-2 transition-[background-color,border-color] duration-300 sm:-mx-4 sm:px-4 ${scrolled ? 'glass border-white/5' : 'border-transparent'}`}>
+      <div className="flex items-center gap-2 min-w-0 flex-1">
         <h1 className="text-lg sm:text-2xl font-semibold tracking-tight text-white flex items-center gap-2 shrink-0">
           <BrandMark className="h-8 w-8 sm:h-9 sm:w-9" />
           {/* « Play » prend l'orange du triangle du logo, qui est aussi le bouton lecture. */}
           <span>Ced<span className="text-[#FF5A36]">Play</span></span>
         </h1>
-        {tvMode && <MainNavigation tv onNavigate={navigate} />}
-        {!tvMode && playlistMenu}
-        {!tvMode && currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
+        {playlistMenu}
+        {currentPlaylist.totalChannelsBeforeDedup && currentPlaylist.totalChannelsBeforeDedup > currentPlaylist.channels.length && (
           <Badge variant="outline" className="hidden sm:inline-flex border-neutral-800 text-amber-300 text-xs shrink-0">
             {currentPlaylist.channels.length}/{currentPlaylist.totalChannelsBeforeDedup}
           </Badge>
@@ -974,21 +1033,19 @@ export function IPTVPlayer() {
       </div>
       
       <div className="flex items-center justify-end gap-1.5 shrink-0">
-        {/* TV : la connexion Xtream reste dans le menu de la liste, l'en-tête garde une seule ligne. */}
-        {!tvMode && <Button variant="outline" size="sm" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setXtreamOpen(true)} aria-label="Connexion Xtream">Xtream</Button>}
-        {tvMode ? <Button variant="ghost" size="sm" onClick={() => setSearchOpen(true)} className="tv-chip h-10 w-10 rounded-full p-0 text-muted-foreground" aria-label="Recherche unifiée" title="Recherche unifiée">
-          <Search aria-hidden="true" className="h-[18px] w-[18px]" />
-        </Button> : <Button 
+        {/* Connexion et recherche du mode téléphone. */}
+        <Button variant="outline" size="sm" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setXtreamOpen(true)} aria-label="Connexion Xtream">Xtream</Button>
+        <Button
           variant="outline" 
           size="sm"
-          onClick={() => setSearchOpen(true)}
+          onClick={openSearch}
           className="border-neutral-800 text-white hover:bg-neutral-900 h-11 w-11 p-0 sm:w-auto sm:px-3.5 text-sm"
           aria-label="Recherche unifiée"
           title="Recherche unifiée (Ctrl+K)"
         >
           <Search aria-hidden="true" className="h-4 w-4 sm:mr-1.5" />
           <span className="hidden sm:inline">Recherche</span>
-        </Button>}
+        </Button>
       </div>
     </header>
   );
@@ -1001,14 +1058,14 @@ export function IPTVPlayer() {
           <div className="min-w-0"><p className="font-medium">Ouverture du lecteur…</p><p className="truncate text-sm text-neutral-300">{openingChannel}</p></div>
         </div>
       </div>}
-      <div className="app-shell container mx-auto p-2 sm:p-4">
+      <div className={`app-shell container mx-auto p-2 sm:p-4 ${tvMode ? 'tv-app-shell' : ''}`}>
 
         {/* Main Content */}
         {!tvMode && appHeader}
-        <Tabs activationMode="manual" value={navSectionFor(activeTab, tvMode)} onValueChange={value => navigate(value as NavSection)} className="space-y-4">
-          {tvMode ? appHeader : <MainNavigation onNavigate={navigate} />}
+        <Tabs orientation={tvMode ? 'vertical' : 'horizontal'} activationMode="manual" value={navSectionFor(activeTab, tvMode)} onValueChange={value => navigate(value as NavSection)} className="space-y-4">
+          {tvMode ? <><MainNavigation tv onNavigate={navigate} onSearch={openSearch} /><div className="tv-shell-clock"><TvClock /></div></> : <MainNavigation onNavigate={navigate} />}
 
-          <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} tvMode={tvMode} onOpenPodcasts={feedUrl => { setPodcastFocus(feedUrl ? { feedUrl, nonce: Date.now() } : null); setActiveTab('podcasts'); }} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} parentalEnabled={appSettings.parentalControlEnabled === true} /></Suspense></TabsContent>
+          <TabsContent value="continue" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyContinuePanel playlist={currentPlaylist} tvMode={tvMode} tmdbApiKey={appSettings.tmdbApiKey} onSearchTitle={title => { setSearchQuery(title); setSearchOpen(true); }} onOpenPodcasts={feedUrl => { setPodcastFocus(feedUrl ? { feedUrl, nonce: Date.now() } : null); setActiveTab('podcasts'); }} epgData={epgData} onBrowseLive={() => setActiveTab('channels')} onConnect={() => setXtreamOpen(true)} onChannelSelect={handleChannelSelect} onOpenVod={openSavedVod} onResumeVod={req => { setActiveTab(req.kind === 'movie' ? 'movies' : 'series'); setVodResumeRequest({ ...req, nonce: Date.now() }); }} lockedGroups={parentalLockedGroups} unlocked={parentalUnlocked} parentalEnabled={appSettings.parentalControlEnabled === true} /></Suspense></TabsContent>
           <TabsContent value="podcasts" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyPodcastsPanel tvMode={tvMode} focusFeed={podcastFocus} /></Suspense></TabsContent>
           <TabsContent value={tvMode ? (activeTab === 'series' ? 'series' : 'movies') : 'vod'} className="screen-enter space-y-4">
             {!tvMode && <div role="group" aria-label="Type de contenu" className="inline-flex rounded-full border border-neutral-900 bg-card p-1">
@@ -1023,8 +1080,8 @@ export function IPTVPlayer() {
                 >{label}</button>;
               })}
             </div>}
-            {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} source={tvMode ? undefined : movieSource} /></Suspense></div>}
-            {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} /></Suspense></div>}
+            {activeTab === 'movies' && <div key="movies" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyMoviesPanel onLocalHandled={() => setTvLocalRequest(0)} localRequest={tvMode ? tvLocalRequest : undefined} playlist={currentPlaylist} tmdbApiKey={appSettings.tmdbApiKey ?? null} resumeRequest={vodResumeRequest?.kind === 'movie' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} onConnect={() => setXtreamOpen(true)} onCloseDetails={onCloseVodDetails} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} source={tvMode ? undefined : movieSource} /></Suspense></div>}
+            {activeTab === 'series' && <div key="series" className="screen-enter"><Suspense fallback={<PanelFallback className="h-72" />}><LazyVodLibrary onShowLocal={tvMode ? () => { setTvLocalRequest(value => value + 1); setActiveTab('movies'); } : undefined} key={`${currentPlaylist.id}:series`} playlist={currentPlaylist} kind="series" tmdbApiKey={appSettings.tmdbApiKey} resumeRequest={vodResumeRequest?.kind === 'series' ? vodResumeRequest : undefined} onResumeHandled={() => setVodResumeRequest(null)} tvMode={tvMode} onSearch={openSearch} onConnect={() => setXtreamOpen(true)} onCloseDetails={onCloseVodDetails} parentalEnabled={appSettings.parentalControlEnabled === true} parentalUnlocked={parentalUnlocked} /></Suspense></div>}
           </TabsContent>
           <TabsContent value="more" className="screen-enter space-y-4">
             {activeTab === 'more' && <div className="screen-enter"><MorePanel onOpen={openMore}>{tvMode && playlistMenu}</MorePanel></div>}
@@ -1035,6 +1092,63 @@ export function IPTVPlayer() {
               </div>
               <Suspense fallback={<PanelFallback className="h-72" />}><LazyReplayHub channels={playableChannels} epgData={epgData} catchupDays={catchupDays} onCatchup={playCatchup} tvMode={tvMode} /></Suspense>
             </div>}
+          {activeTab === 'loader' && <section aria-label="Gestion des listes" className="space-y-4">
+            <div className="flex items-center gap-3 text-white"><Button data-remote-entry={tvMode ? '' : undefined} variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setActiveTab(tabBeforeLists)}><ArrowLeft aria-hidden="true" className="h-4 w-4 mr-2" />Retour</Button><h2 className="text-xl font-semibold">Mes listes</h2></div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Suspense fallback={null}><LazyBackupPanel onRestored={refreshAfterRestore} showLabel className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" /></Suspense>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900"><Download aria-hidden="true" className="h-4 w-4 mr-2" />Exporter</Button></DropdownMenuTrigger>
+                <DropdownMenuContent className="w-64">
+                  <DropdownMenuLabel>Exporter la liste active</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => downloadPlaylist(currentPlaylist)}>Liste M3U</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true })}>Avec les qualités</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true, includeFavorites: true })}>Qualités et favoris</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true })}>Avec toutes les variantes</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true, includeFavorites: true, onlyFavorites: true })}>Favoris uniquement</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="order-2 md:order-1">
+                <Suspense fallback={<PanelFallback className="h-64" />}><LazyPlaylistManager
+                  playlists={allPlaylists}
+                  currentId={currentPlaylist?.id}
+                  onSelect={async (pl) => {
+                    await openPlaylist(pl);
+                    toast.success(`Liste ouverte : ${pl.name}`);
+                  }}
+                  onRefresh={refreshPlaylist}
+                  onDeleted={async () => {
+                    const refreshed = await getPlaylistsFromDB();
+                    setAllPlaylists(refreshed);
+                    if (currentPlaylist && !refreshed.find(p => p.id === currentPlaylist.id)) {
+                      setCurrentChannel(null);
+                      setCurrentPlaylist(refreshed[0] || null);
+                      if (refreshed[0]) {
+                        try {
+                          const lastChannelId = await getLastChannelForPlaylist(refreshed[0].id);
+                          if (lastChannelId) {
+                            const ch = refreshed[0].channels.find(c => c.id === lastChannelId);
+                            if (ch) setCurrentChannel(ch);
+                          }
+                        } catch (e) { console.warn('Restore last channel after delete failed', e); }
+                      }
+                    }
+                  }}
+                  onMutate={(updated) => {
+                    setAllPlaylists(prev => prev.map(p => p.id === updated.id ? updated : p));
+                    if (currentPlaylist && currentPlaylist.id === updated.id) {
+                      setCurrentPlaylist(updated);
+                    }
+                  }}
+                /></Suspense>
+              </div>
+              <div className="order-1 md:order-2">
+                <Suspense fallback={<PanelFallback className="h-16" />}><LazyPlaylistLoader tvMode={tvMode} onPlaylistLoaded={(pl) => handlePlaylistLoaded(pl)} /></Suspense>
+              </div>
+            </div>
+          </section>}
           </TabsContent>
 
           <TabsContent value="channels" className="screen-enter space-y-4">
@@ -1123,68 +1237,22 @@ export function IPTVPlayer() {
 
           </TabsContent>
 
-          {activeTab === 'loader' && <section aria-label="Gestion des listes" className="space-y-4">
-            <div className="flex items-center gap-3 text-white"><Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" onClick={() => setActiveTab(tabBeforeLists)}><ArrowLeft aria-hidden="true" className="h-4 w-4 mr-2" />Retour</Button><h2 className="text-xl font-semibold">Mes listes</h2></div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Suspense fallback={null}><LazyBackupPanel onRestored={refreshAfterRestore} showLabel className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" /></Suspense>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild><Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900"><Download aria-hidden="true" className="h-4 w-4 mr-2" />Exporter</Button></DropdownMenuTrigger>
-                <DropdownMenuContent className="w-64">
-                  <DropdownMenuLabel>Exporter la liste active</DropdownMenuLabel>
-                  <DropdownMenuItem onClick={() => downloadPlaylist(currentPlaylist)}>Liste M3U</DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true })}>Avec les qualités</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true, includeFavorites: true })}>Qualités et favoris</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true, includeFavorites: true, includeVariants: true, annotateVariants: true })}>Avec toutes les variantes</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => void exportAdvanced({ includeQuality: true, includeFavorites: true, onlyFavorites: true })}>Favoris uniquement</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="order-2 md:order-1">
-                <Suspense fallback={<PanelFallback className="h-64" />}><LazyPlaylistManager
-                  playlists={allPlaylists}
-                  currentId={currentPlaylist?.id}
-                  onSelect={async (pl) => {
-                    await openPlaylist(pl);
-                    toast.success(`Liste ouverte : ${pl.name}`);
-                  }}
-                  onRefresh={refreshPlaylist}
-                  onDeleted={async () => {
-                    const refreshed = await getPlaylistsFromDB();
-                    setAllPlaylists(refreshed);
-                    if (currentPlaylist && !refreshed.find(p => p.id === currentPlaylist.id)) {
-                      setCurrentChannel(null);
-                      setCurrentPlaylist(refreshed[0] || null);
-                      if (refreshed[0]) {
-                        try {
-                          const lastChannelId = await getLastChannelForPlaylist(refreshed[0].id);
-                          if (lastChannelId) {
-                            const ch = refreshed[0].channels.find(c => c.id === lastChannelId);
-                            if (ch) setCurrentChannel(ch);
-                          }
-                        } catch (e) { console.warn('Restore last channel after delete failed', e); }
-                      }
-                    }
-                  }}
-                  onMutate={(updated) => {
-                    setAllPlaylists(prev => prev.map(p => p.id === updated.id ? updated : p));
-                    if (currentPlaylist && currentPlaylist.id === updated.id) {
-                      setCurrentPlaylist(updated);
-                    }
-                  }}
-                /></Suspense>
-              </div>
-              <div className="order-1 md:order-2">
-                <Suspense fallback={<PanelFallback className="h-16" />}><LazyPlaylistLoader tvMode={tvMode} onPlaylistLoaded={(pl) => handlePlaylistLoaded(pl)} /></Suspense>
-              </div>
-            </div>
-          </section>}
+
         </Tabs>
 
         {/* Lecteur web : reste monté quand on change d'onglet et devient un mini-lecteur. */}
         {webSession && currentChannel && <section aria-label="Lecteur" className={activeTab === 'player' ? 'mt-4 space-y-4' : ''}>
-          {activeTab === 'player' && <div className="flex items-center gap-3 text-white min-w-0"><Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => setActiveTab('channels')}><ArrowLeft aria-hidden="true" className="h-4 w-4 mr-2" />Chaînes</Button><span className="truncate text-sm text-neutral-300">{currentChannel?.name}</span>
+          {activeTab === 'player' && <div className="flex items-center gap-3 text-white min-w-0"><Button variant="outline" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900 shrink-0" onClick={() => {
+            if (searchResumeQuery.current) {
+              const q = searchResumeQuery.current;
+              searchResumeQuery.current = null;
+              setSearchQuery(q);
+              setSearchOpen(true);
+              setActiveTab(tabBeforeSearch.current);
+            } else {
+              setActiveTab('channels');
+            }
+          }}><ArrowLeft aria-hidden="true" className="h-4 w-4 mr-2" />Chaînes</Button><span className="truncate text-sm text-neutral-300">{currentChannel?.name}</span>
               <div className="ml-auto flex items-center gap-2 shrink-0">
                 {currentChannel && <Button variant="outline" size="sm" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" aria-label="Mosaïque" onClick={() => openMosaicPicker(currentChannel)}><Grid2X2 aria-hidden="true" className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Mosaïque</span></Button>}
                 {currentChannel && <Button variant="outline" size="sm" className="min-h-11 border-neutral-800 text-white hover:bg-neutral-900" aria-label="Enregistrer" onClick={() => { setRecordingsChannel(currentChannel); setRecordingsOpen(true); }}><CircleDot aria-hidden="true" className="h-4 w-4 sm:mr-1.5" /><span className="hidden sm:inline">Enregistrer</span></Button>}
@@ -1252,6 +1320,7 @@ export function IPTVPlayer() {
       </div>
       {settingsOpen && <Suspense fallback={null}><LazySettingsPanel
         open
+        tvMode={tvMode}
         onOpenChange={setSettingsOpen}
         currentSettings={appSettings}
         onSettingsChange={(s) => {
@@ -1310,21 +1379,32 @@ export function IPTVPlayer() {
         key={currentPlaylist.id}
         open
         onOpenChange={setHealthOpen}
+        playlist={currentPlaylist}
+        allPlaylists={allPlaylists}
+        onSelectPlaylist={playlist => {
+          setCurrentPlaylist(playlist);
+          StorageManager.setLastPlaylist(playlist.name);
+          void setMeta('lastPlaylistId', playlist.id).catch(() => {});
+        }}
+        groups={customizedGroups}
         visibleChannels={orderedChannels}
         favoriteIds={favoriteIds}
         hiddenChannelIds={hiddenChannels}
         onHide={ids => { updateHiddenChannels([...new Set([...hiddenChannels, ...ids])]); toast.success(`${ids.length} chaîne${ids.length > 1 ? 's' : ''} masquée${ids.length > 1 ? 's' : ''}.`); }}
         onShowAll={() => { updateHiddenChannels([]); toast.success('Toutes les chaînes sont à nouveau affichées.'); }}
+        tvMode={tvMode}
       /></Suspense>}
       {currentPlaylist && <FavoritesOrganizerDialog open={favoritesOrganizerOpen} onOpenChange={setFavoritesOrganizerOpen} channels={customizedGroups.flatMap(g => g.channels)} />}
       {searchOpen && <Suspense fallback={null}><LazyGlobalSearchDialog
         tvMode={tvMode}
         open
-        onOpenChange={setSearchOpen}
+        initialQuery={searchQuery}
+        onQueryChange={setSearchQuery}
+        onOpenChange={handleSearchOpenChange}
         playlist={currentPlaylist}
-        onSelectChannel={handleChannelSelect}
+        onSelectChannel={handleSearchSelectChannel}
         onSelectTab={setActiveTab}
-        onSelectVod={item => openSavedVod(item.kind, item)}
+        onSelectVod={handleSearchSelectVod}
         lockedGroups={parentalLockedGroups}
         unlocked={parentalUnlocked}
         parentalEnabled={appSettings.parentalControlEnabled === true}
@@ -1349,6 +1429,13 @@ export function IPTVPlayer() {
         </DialogContent>
       </Dialog>
       <MiniAudioPlayer showPaused={activeTab === 'podcasts'} tv={tvMode} onOpenPodcasts={() => setActiveTab('podcasts')} />
+      {isDesktopRuntime() && (
+        <>
+          <DesktopLivePreview />
+          <DesktopCinemaPlayer />
+          <DesktopMosaicPlayer />
+        </>
+      )}
     </div>
   );
 }

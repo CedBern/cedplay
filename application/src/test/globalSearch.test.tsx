@@ -1,13 +1,31 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import userEvent from '@testing-library/user-event';
 import { GlobalSearchDialog } from '@/components/GlobalSearchDialog';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import type { Channel, PlaylistInfo } from '@/types/channel';
 
 beforeEach(() => localStorage.clear());
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+function SearchWithRemote({ query = '' }: { query?: string }) {
+  useRemoteNavigation();
+  return <GlobalSearchDialog open tvMode initialQuery={query} onOpenChange={() => {}}
+    playlist={testPlaylist} onSelectChannel={() => {}} onSelectTab={() => {}} />;
+}
+
+function searchGeometry() {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    // La géométrie favoriserait l'ancienne recherche, à droite sous le champ.
+    const first = this.hasAttribute('data-recent-search-first');
+    const row = first || this.textContent === 'recente2' || this.hasAttribute('data-search-first-result');
+    const x = first ? 0 : this.matches('input') || row ? 200 : 500;
+    const y = this.matches('input') ? 0 : row ? 100 : 300;
+    return { x, y, left: x, top: y, right: x + 80, bottom: y + 40, width: 80, height: 40, toJSON() {} };
+  });
+}
 
 const channels: Channel[] = [
   { id: '1', name: 'TF1 HD', url: 'https://example.test/tf1', group: 'France', quality: 'HD' },
@@ -173,4 +191,82 @@ it('retire une recherche récente et peut effacer tout l’historique', async ()
 
   await user.click(screen.getByRole('button', { name: 'Effacer' }));
   expect(screen.queryByText('Recherches récentes')).toBeNull();
+});
+
+it('restaure initialQuery et notifie les changements de saisie via onQueryChange', async () => {
+  const onQueryChange = vi.fn();
+  const user = userEvent.setup();
+
+  render(
+    <GlobalSearchDialog
+      open={true}
+      initialQuery="France"
+      onQueryChange={onQueryChange}
+      onOpenChange={() => {}}
+      playlist={testPlaylist}
+      onSelectChannel={() => {}}
+      onSelectTab={() => {}}
+    />
+  );
+
+  const input = screen.getByRole('textbox', { name: 'Rechercher' });
+  expect(input).toHaveValue('France');
+  expect(onQueryChange).toHaveBeenCalledWith('France');
+
+  await user.type(input, ' 3');
+  expect(onQueryChange).toHaveBeenCalledWith('France 3');
+});
+
+it('en mode TV : la croix de suppression de l’historique est exclue du D-pad et Flèche bas descend sur le premier terme', async () => {
+  localStorage.setItem('cedplay_search_history', JSON.stringify(['recente1', 'recente2']));
+
+  render(
+    <GlobalSearchDialog
+      open={true}
+      tvMode={true}
+      onOpenChange={() => {}}
+      playlist={testPlaylist}
+      onSelectChannel={() => {}}
+      onSelectTab={() => {}}
+    />
+  );
+
+  const removeBtns = screen.getAllByRole('button', { name: /Retirer «/ });
+  expect(removeBtns.length).toBe(2);
+  // En mode TV, la croix ne doit pas prendre le focus spatial (tabIndex -1 et non cliquable télécommande)
+  removeBtns.forEach(btn => {
+    expect(btn).toHaveAttribute('tabindex', '-1');
+    expect(btn.className).toContain('pointer-events-none');
+  });
+
+  const firstRecent = screen.getByRole('button', { name: 'recente1' });
+  expect(firstRecent).toHaveAttribute('data-recent-search-first', 'true');
+});
+
+it('avec la navigation globale active, Bas choisit la recherche récente et Haut revient au champ', () => {
+  localStorage.setItem('cedplay_search_history', JSON.stringify(['recente1', 'recente2']));
+  searchGeometry();
+  render(<SearchWithRemote />);
+  const input = screen.getByRole('textbox', { name: 'Rechercher' });
+  const recent = screen.getByRole('button', { name: 'recente1' });
+  input.focus();
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(recent).toHaveFocus();
+  fireEvent.keyDown(recent, { key: 'ArrowRight' });
+  expect(screen.getByRole('button', { name: 'recente2' })).toHaveFocus();
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' });
+  expect(input).toHaveFocus();
+  expect(screen.getByRole('button', { name: 'recente1' })).toBeInTheDocument();
+});
+
+it('avec la navigation globale active, Bas entre dans les résultats et Haut revient au champ', async () => {
+  searchGeometry();
+  render(<SearchWithRemote query="France 2" />);
+  const input = screen.getByRole('textbox', { name: 'Rechercher' });
+  const result = await screen.findByRole('button', { name: /France 2 FHD/ });
+  input.focus();
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(result).toHaveFocus();
+  fireEvent.keyDown(result, { key: 'ArrowUp' });
+  expect(input).toHaveFocus();
 });

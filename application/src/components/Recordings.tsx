@@ -5,6 +5,15 @@ import { Input } from '@/components/ui/input';
 import {
   RecordingsBridge, LocalLibraryBridge, type LocalMedia, type ScheduledRecording,
 } from '@/utils/nativePlayer';
+import {
+  isDesktopRuntime,
+  onDesktopServerEvent,
+  startDesktopRecording,
+  stopDesktopRecording,
+  subscribeDesktopUi,
+  type ActiveDvrRecording,
+} from '@/utils/desktopBridge';
+import { getActiveUserAgent } from '@/utils/userAgent';
 import { formatFileSize } from '@/utils/localLibrary';
 import type { Channel } from '@/types/channel';
 import {
@@ -58,6 +67,13 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
   const [startLocal, setStartLocal] = useState('');
   const [durationMin, setDurationMin] = useState(60);
   const [submitting, setSubmitting] = useState(false);
+  const [activeRecs, setActiveRecs] = useState<ActiveDvrRecording[]>([]);
+  const desktop = isDesktopRuntime();
+
+  useEffect(() => {
+    if (!desktop) return;
+    return subscribeDesktopUi((snap) => setActiveRecs(snap.activeRecordings));
+  }, [desktop]);
 
   // Marges d'enregistrement depuis le guide et séries suivies.
   const [prefs, setPrefs] = useState<RecordingPrefs>(DEFAULT_RECORDING_PREFS);
@@ -95,6 +111,11 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
     void refresh().finally(() => { if (!cancelled) setInitialized(true); });
     return () => { cancelled = true; };
   }, [refresh]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    return onDesktopServerEvent('recordingStopped', () => { void refresh(); });
+  }, [desktop, refresh]);
 
   const pick = async () => {
     const f = await RecordingsBridge.pickFolder();
@@ -198,17 +219,58 @@ export function Recordings({ channels, initialChannel }: RecordingsProps) {
             />
           </div>
 
-          <div className="flex items-end">
+          <div className="flex flex-wrap items-end gap-2">
             <Button
               onClick={() => { void submitSchedule(); }}
               disabled={submitting || !channelId || !startLocal || !folder}
-              className="w-full gap-2"
+              className="flex-1 gap-2"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
               Programmer
             </Button>
+            {desktop && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!channelId}
+                onClick={() => {
+                  const ch = channels.find(c => c.id === channelId || c.variants?.some(v => v.id === channelId));
+                  const picked = ch?.variants?.find(v => v.id === channelId) ?? ch;
+                  if (!picked) return;
+                  void startDesktopRecording(picked.url, picked.name, getActiveUserAgent()).then(started => {
+                    if (started) { toast.success(`Enregistrement démarré : ${picked.name}`); void refresh(); }
+                    else toast.error('Impossible de démarrer l’enregistrement.');
+                  });
+                }}
+                className="gap-1.5"
+              >
+                <CircleDot className="h-4 w-4 text-red-400" aria-hidden="true" /> Enregistrer
+              </Button>
+            )}
           </div>
         </div>
+
+        {desktop && activeRecs.length > 0 && (
+          <ul className="divide-y divide-red-950/60 rounded-lg border border-red-500/30 bg-red-950/20" aria-label="Enregistrements en cours">
+            {activeRecs.map(rec => (
+              <li key={rec.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span className="flex items-center gap-2 min-w-0">
+                  <CircleDot className="h-4 w-4 shrink-0 text-red-400 animate-pulse" aria-hidden="true" />
+                  <span className="truncate font-medium text-white">{rec.title}</span>
+                  <span className="text-xs text-red-200/80">En cours…</span>
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => { void stopDesktopRecording(rec.id).then(() => void refresh()); }}
+                >
+                  Arrêter
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
 
         {!folder && <p className="text-xs text-amber-300">Choisis d’abord le dossier de destination ci-dessous pour programmer un enregistrement.</p>}
 

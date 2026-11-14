@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TvVodScreen, type TvVodScreenProps } from '@/components/TvVodScreen';
 import { clearVodCategoryCache } from '@/utils/vodPosterCache';
+import { MainNavigation } from '@/components/MainNavigation';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import { VodLibrary } from '@/components/VodLibrary';
 import type { CatalogItem } from '@/utils/xtreamCatalog';
 import type { PlaylistInfo } from '@/types/channel';
@@ -56,7 +59,7 @@ it('borne la hauteur dès le premier rendu : la grille garde une fenêtre défil
   const root = document.querySelector<HTMLElement>('[data-tv-vod]');
   // Sans hauteur au premier rendu, la rangée de grille prend la hauteur du contenu et la
   // zone défilante n'a plus rien à faire défiler : les flèches changent la sélection hors écran.
-  expect(root?.style.height).toMatch(/^calc\(\d+px/);
+  expect(root?.style.height).toMatch(/^\d+px$/);
 });
 
 it('arrive sur la grille, se déplace et OK ouvre la fiche', () => {
@@ -413,4 +416,20 @@ it('Pour toi : droite sur la catégorie déjà retenue quitte aussi les suggesti
   expect(active()).toHaveTextContent('Action');
   key('ArrowRight');
   expect(onSelectCategory).toHaveBeenCalledWith('c1');
+});
+
+it('Gauche des catégories VOD rejoint le rail et Droite revient à la même catégorie', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x:0,y:0,left:0,top:0,right:80,bottom:40,width:80,height:40,toJSON(){} });
+  function Page() {
+    useRemoteNavigation();
+    return <Tabs value="movies" activationMode="manual"><MainNavigation tv onNavigate={()=>{}} />
+      <TabsContent value="movies"><TvVodScreen kind="movie" playlistId="rail-vod" categories={[{id:'c1',name:'Action'}]} category="c1" onSelectCategory={()=>{}} items={items} loading={false} error="" onRetry={()=>{}} hasMore={false} onLoadMore={()=>{}} showWatchlistOnly={false} onToggleWatchlistOnly={()=>{}} watchlistCount={0} watchlistIds={new Set()} onOpen={()=>{}} onRefresh={()=>{}} progress={()=>({label:'Regarder',saved:false})} /></TabsContent>
+    </Tabs>;
+  }
+  render(<Page/>);
+  const category=screen.getByRole('button',{name:'Action'});
+  act(() => category.focus()); key('ArrowLeft');
+  expect(screen.getByRole('tab',{name:'Films'})).toHaveFocus();
+  key('ArrowRight'); expect(category).toHaveFocus();
+  vi.restoreAllMocks();
 });

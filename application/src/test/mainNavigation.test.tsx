@@ -1,5 +1,6 @@
+import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, within, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
 import type { Channel } from '@/types/channel';
@@ -98,4 +99,27 @@ it('transmet le même zapping depuis une carte et le lecteur et revient aux cha�
   expect(vi.mocked(NativePlayerBridge.open).mock.calls[1][2]).toEqual(cardContext);
   expect(await screen.findByText('Liste des chaînes test')).toBeVisible();
   expect(screen.queryByText('Lecteur de Canal test')).toBeNull();
+});
+
+it('la gestion des listes TV appartient à Plus et Droite retrouve son action après Gauche', async () => {
+  window.history.replaceState({}, '', '/?tv=1');
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ x:0,y:0,left:0,top:0,right:80,bottom:40,width:80,height:40,toJSON(){} });
+  function Page() { useRemoteNavigation(); return <IPTVPlayer />; }
+  try {
+    render(<Page/>);
+    await screen.findByText('Reprise test');
+    await userEvent.click(screen.getByRole('tab', {name:'Plus'}));
+    await userEvent.click(screen.getByRole('button', {name:/Mes listes/}));
+    const management = screen.getByRole('region', {name:'Gestion des listes'});
+    expect(management.closest('[role="tabpanel"]')).toHaveAttribute('data-state','active');
+    const back = within(management).getByRole('button', {name:'Retour'});
+    back.focus();
+    fireEvent.keyDown(back, {key:'ArrowLeft'});
+    expect(screen.getByRole('tab', {name:'Plus'})).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, {key:'ArrowRight'});
+    expect(back).toHaveFocus();
+  } finally {
+    window.history.replaceState({}, '', '/');
+    vi.restoreAllMocks();
+  }
 });

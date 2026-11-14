@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 
 export interface SubtitleCue {
   id: number;
@@ -141,7 +142,11 @@ async function translateChunk(
     const headers = { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `DeepL-Auth-Key ${deeplApiKey.trim()}` };
 
     let data: { translations?: { text?: string }[] };
-    if (Capacitor.isNativePlatform()) {
+    if (isDesktopRuntime()) {
+      const res = await desktopHttp<unknown>({ url: endpoint, method: 'POST', body: params.toString(), headers, responseType: 'json' });
+      if (res.status < 200 || res.status >= 300) throw new Error('Traduction indisponible');
+      data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data as { translations?: { text?: string }[] };
+    } else if (Capacitor.isNativePlatform()) {
       const res = await CapacitorHttp.post({ url: endpoint, data: params.toString(), headers });
       if (res.status < 200 || res.status >= 300) throw new Error('Traduction indisponible');
       data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
@@ -163,7 +168,18 @@ async function translateChunk(
   const langCode = targetLang.toLowerCase().startsWith('fr') ? 'fr' : targetLang;
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(langCode)}&dt=t&q=${encodeURIComponent(text)}`;
 
-  if (Capacitor.isNativePlatform()) {
+  if (isDesktopRuntime()) {
+    const res = await desktopHttp<unknown>({
+      url,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      responseType: 'json',
+      timeoutMs: 15_000,
+    });
+    const data = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
+    if (Array.isArray(data) && Array.isArray(data[0])) {
+      return data[0].map((x: unknown) => (Array.isArray(x) && typeof x[0] === 'string' ? x[0] : '')).join('');
+    }
+  } else if (Capacitor.isNativePlatform()) {
     const res = await CapacitorHttp.get({
       url,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },

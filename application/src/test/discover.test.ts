@@ -22,14 +22,14 @@ const vod = (id: string, over: Partial<PlayHistoryEntry> = {}): PlayHistoryEntry
 } as PlayHistoryEntry);
 
 describe('ordre des rangées de Découvrir', () => {
-  it('met Reprendre en tête, puis une rangée par famille, puis le reste groupé par famille', () => {
+  it('met Reprendre en tête, puis Chaînes récentes et Direct, les films et séries (pour toi, ma liste), puis les podcasts', () => {
     const rows = orderRows(all('resume', 'live-now', 'recent-channels', 'for-you', 'my-list', 'new-episodes', 'to-listen'), ['direct', 'video', 'podcasts'], 'all');
-    expect(rows).toEqual(['resume', 'live-now', 'for-you', 'new-episodes', 'recent-channels', 'my-list', 'to-listen']);
+    expect(rows).toEqual(['resume', 'recent-channels', 'live-now', 'for-you', 'my-list', 'new-episodes', 'to-listen']);
   });
 
-  it('suit l’ordre des familles venu de l’usage', () => {
+  it('dans Tout, les chaînes récentes et les vidéos priment toujours sur les podcasts', () => {
     const rows = orderRows(all('live-now', 'for-you', 'my-list', 'to-listen'), ['video', 'direct', 'podcasts'], 'all');
-    expect(rows).toEqual(['for-you', 'live-now', 'to-listen', 'my-list']);
+    expect(rows).toEqual(['live-now', 'for-you', 'my-list', 'to-listen']);
   });
 
   it('masque les rangées vides et réserve Direct au filtre Tout', () => {
@@ -40,13 +40,19 @@ describe('ordre des rangées de Découvrir', () => {
 });
 
 describe('Reprendre', () => {
-  it('mélange films et podcasts du plus récent au plus ancien, sans terminé ni retiré', () => {
+  it('place la reprise audio après toutes les vidéos, même sans vidéo en cours', () => {
+    expect(orderRows(all('resume-podcasts', 'for-you', 'my-list'), ['podcasts', 'video', 'direct'], 'all'))
+      .toEqual(['for-you', 'my-list', 'resume-podcasts']);
+    expect(orderRows(all('resume-podcasts', 'my-list'), ['video', 'podcasts', 'direct'], 'movies'))
+      .toEqual(['my-list']);
+  });
+  it('place les films avant les podcasts dans Tout, sans terminé ni retiré', () => {
     const items = resumeItems(
       [vod('a', { ts: NOW - 3 * DAY }), vod('fini', { status: 'completed' }), vod('retire', { hiddenFromContinue: true }), vod('survol', { positionMs: 5_000 })],
       { e1: prog('e1', 'f', { positionMs: 60_000, updatedAt: NOW - DAY }), e2: prog('e2', 'f', { positionMs: 60_000, completed: true }) },
       'all',
     );
-    expect(items.map(i => i.key)).toEqual(['pod:e1', 'vod:pl:movie:a']);
+    expect(items.map(i => i.key)).toEqual(['vod:pl:movie:a']);
   });
 
   it('ne garde que le type du filtre', () => {

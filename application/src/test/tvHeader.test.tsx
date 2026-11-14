@@ -6,9 +6,8 @@ import { IPTVPlayer } from '@/components/IPTVPlayer';
 import { TvVodScreen } from '@/components/TvVodScreen';
 import type { CatalogItem } from '@/utils/xtreamCatalog';
 
-// Parcours complet de l'en-tête TV dans l'application réelle : rubriques sur une ligne,
-// repli quand la télécommande entre dans la grille, retour aux rubriques par Haut.
-// L'animation elle-même (CSS) n'existe pas dans jsdom : on vérifie l'état qui la pilote.
+// Parcours du rail TV dans l’application réelle : icônes au repos, noms au focus.
+// Les positions et la transparence sont vérifiées séparément dans un navigateur.
 
 const fixture = vi.hoisted(() => {
   const channel = { id: 'c', name: 'Canal test', url: 'https://example.test/test.m3u8' };
@@ -46,7 +45,7 @@ const root = document.documentElement;
 beforeEach(() => { root.classList.add('remote-navigation'); });
 afterEach(() => { cleanup(); root.classList.remove('remote-navigation', 'tv-chrome-hidden', 'tv-mode'); root.style.removeProperty('--tv-header-shift'); });
 
-const header = () => document.querySelector<HTMLElement>('[data-app-header]')!;
+const rail = () => document.querySelector<HTMLElement>('[data-tv-navigation]')!;
 const focused = () => document.activeElement as HTMLElement;
 
 it('Films : le menu reste visible dans la grille et Haut rejoint la rubrique', async () => {
@@ -54,39 +53,42 @@ it('Films : le menu reste visible dans la grille et Haut rejoint la rubrique', a
   render(<IPTVPlayer />);
   await screen.findByText('Reprise test');
 
-  // Une seule ligne : les rubriques sont dans l'en-tête, Films et Séries séparés.
-  const navigation = within(header()).getByRole('tablist', { name: 'Rubriques' });
+  // Le rail conserve Films et Séries séparés et une orientation verticale.
+  const navigation = within(rail()).getByRole('tablist', { name: 'Rubriques' });
   expect(within(navigation).getAllByRole('tab').map(t => t.textContent)).toEqual(['Découvrir', 'Direct', 'Films', 'Séries', 'Écouter', 'Plus']);
+  expect(navigation).toHaveAttribute('aria-orientation', 'vertical');
+  expect(document.querySelector('[data-app-header]')).toBeNull();
   expect(screen.queryByRole('group', { name: 'Type de contenu' })).toBeNull();
 
   await user.click(within(navigation).getByRole('tab', { name: 'Films' }));
-  // L'écran place le focus sur la première affiche : l'en-tête se replie.
+  // Le rail se replie quand le contenu prend le focus.
   const poster = await waitForPoster();
   act(() => poster.focus());
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
-  expect(header()).toBeVisible();
+  expect(rail()).toHaveAttribute('data-expanded', 'false');
 
-  // Haut depuis la première ligne : la rubrique active reprend le focus et l'en-tête revient.
+  // Haut reste un raccourci vers la rubrique active, avec les noms déployés.
   fireEvent.keyDown(poster, { key: 'ArrowUp' });
   expect(focused()).toBe(within(navigation).getByRole('tab', { name: 'Films' }));
-  expect(header().contains(focused())).toBe(true);
+  expect(rail().contains(focused())).toBe(true);
+  expect(rail()).toHaveAttribute('data-expanded', 'true');
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
 
   // Retour dans la grille : le menu reste visible.
   act(() => poster.focus());
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
 
-  // Direct n'a pas de repli : changer de rubrique rend l'en-tête.
+  // Direct reste accessible depuis le rail.
   await user.click(within(navigation).getByRole('tab', { name: 'Direct' }));
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
 });
 
-it('au toucher ou à la souris (sans télécommande), l’en-tête reste affiché dans la grille', async () => {
+it('au toucher ou à la souris le rail reste présent et replié dans la grille', async () => {
   root.classList.remove('remote-navigation');
   const user = userEvent.setup();
   render(<IPTVPlayer />);
   await screen.findByText('Reprise test');
-  await user.click(within(header()).getByRole('tab', { name: 'Séries' }));
+  await user.click(within(rail()).getByRole('tab', { name: 'Séries' }));
   const poster = await waitForPoster();
   act(() => poster.focus());
   expect(root.classList.contains('tv-chrome-hidden')).toBe(false);
@@ -100,9 +102,9 @@ it('le menu ne propose qu’une entrée pour la sélection officielle déjà enr
     const user = userEvent.setup();
     render(<IPTVPlayer />);
     await screen.findByText('Reprise test');
-    // TV : l'en-tête ne garde que les rubriques ; la liste se change depuis « Plus ».
-    expect(within(header()).queryByRole('button', { name: 'Changer de liste' })).toBeNull();
-    await user.click(within(header()).getByRole('tab', { name: 'Plus' }));
+    // TV : la liste se change depuis « Plus ».
+    expect(within(rail()).queryByRole('button', { name: 'Changer de liste' })).toBeNull();
+    await user.click(within(rail()).getByRole('tab', { name: 'Plus' }));
     const button = await screen.findByRole('button', { name: 'Changer de liste' });
     expect(button).toHaveAttribute('title', 'Chaînes gratuites');
     await user.click(button);
@@ -148,7 +150,7 @@ it('Retour des catégories Films rejoint le menu, puis Séries s’ouvre avec OK
   window.dispatchEvent(back);
   expect(back.defaultPrevented).toBe(true);
   expect(screen.getByRole('tab', { name: 'Films' })).toHaveFocus();
-  expect(header()).toBeVisible();
+  expect(rail()).toBeVisible();
   // Le gestionnaire global vit dans App, pas dans IPTVPlayer : on simule ici son
   // déplacement vers l'onglet voisin ; l'activation par OK reste celle de Radix.
   act(() => screen.getByRole('tab', { name: 'Séries' }).focus());

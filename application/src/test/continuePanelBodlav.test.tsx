@@ -1,0 +1,68 @@
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { ContinuePanel } from '@/components/ContinuePanel';
+import { useBodlavDocumentaries } from '@/hooks/useBodlavDocumentaries';
+import { NativePlayerBridge } from '@/utils/nativePlayer';
+import { setMeta } from '@/utils/idb';
+import { orderRows } from '@/utils/discover';
+import { clearPodcastStorageForTests } from '@/utils/podcastStorage';
+vi.mock('@/hooks/useBodlavDocumentaries', () => ({ useBodlavDocumentaries: vi.fn() }));
+vi.mock('@/hooks/useOfficialDocumentaries', () => ({ useOfficialDocumentaries: () => [] }));
+const item = { id: '321', title: 'Océan documentaire', url: 'https://bodlav.com/new-prefix/b/bodlav/321', image: 'https://image.tmdb.org/t/p/w300/poster.jpg', year: '2026', language: 'VOSTFR' };
+const playlist = { id: 'bodlav-ui', name: 'Liste test', channels: [], groups: [] };
+const props = { playlist, onChannelSelect: vi.fn(), onOpenVod: vi.fn(), tvMode: true };
+beforeEach(async () => {
+  localStorage.clear(); clearPodcastStorageForTests();
+  await setMeta('playHistory', []); await setMeta('vod_watchlist', []); await setMeta('favorites', []);
+  vi.mocked(useBodlavDocumentaries).mockImplementation(() => [item]);
+});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+it('place la rangée entre Ma liste et plateformes, seulement dans Tout et Films', () => {
+  const present = new Set(['my-list', 'bodlav-documentaries', 'platforms'] as const);
+  expect(orderRows(present, ['video', 'direct', 'podcasts'], 'all')).toEqual(['my-list', 'bodlav-documentaries', 'platforms']);
+  expect(orderRows(present, ['video', 'direct', 'podcasts'], 'movies')).toContain('bodlav-documentaries');
+  expect(orderRows(present, ['video', 'direct', 'podcasts'], 'series')).not.toContain('bodlav-documentaries');
+  expect(orderRows(present, ['video', 'direct', 'podcasts'], 'podcasts')).not.toContain('bodlav-documentaries');
+});
+it('affiche affiche et métadonnées, ouvre la fiche Web sans VOD', async () => {
+  const tab = { opener: {} }; const open = vi.spyOn(window, 'open').mockReturnValue(tab as Window);
+  vi.spyOn(NativePlayerBridge, 'isAvailable').mockReturnValue(false);
+  render(<ContinuePanel {...props} />);
+  const row = await screen.findByRole('region', { name: 'Documentaires Bodlav' });
+  expect(row.querySelector('img')).toHaveAttribute('src', item.image);
+  expect(within(row).getByText('2026 · VOSTFR · Bodlav')).toBeVisible();
+  const card = within(row).getByRole('button', { name: 'Ouvrir Océan documentaire sur Bodlav' });
+  expect(card).toHaveAttribute('data-discover-card'); expect(card).toHaveAttribute('data-remote-entry');
+  fireEvent.focus(card); fireEvent.click(card);
+  expect(open).toHaveBeenCalledWith(item.url, '_blank', 'noopener,noreferrer'); expect(tab.opener).toBeNull();
+  expect(props.onOpenVod).not.toHaveBeenCalled();
+});
+it('ouvre la fiche exacte par le pont Android', async () => {
+  vi.spyOn(NativePlayerBridge, 'isAvailable').mockReturnValue(true);
+  const open = vi.spyOn(NativePlayerBridge, 'openWeb').mockResolvedValue(true);
+  render(<ContinuePanel {...props} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Ouvrir Océan documentaire sur Bodlav' }));
+  expect(open).toHaveBeenCalledWith(item.url, item.title);
+});
+it('retire carte et héros des Séries/Podcasts, suspend le chargement sous verrou', async () => {
+  const view = render(<ContinuePanel {...props} />);
+  const card = await screen.findByRole('button', { name: 'Ouvrir Océan documentaire sur Bodlav' });
+  fireEvent.focus(card);
+  expect(screen.getByRole('region', { name: 'Contenu sélectionné' })).toHaveTextContent(item.title);
+  fireEvent.click(screen.getByRole('button', { name: 'Films' }));
+  expect(screen.getByRole('region', { name: 'Documentaires Bodlav' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Séries' }));
+  expect(screen.queryByText(item.title)).toBeNull();
+  expect(vi.mocked(useBodlavDocumentaries).mock.lastCall?.[0]).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Podcasts' }));
+  expect(screen.queryByRole('region', { name: 'Documentaires Bodlav' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Tout' }));
+  expect(vi.mocked(useBodlavDocumentaries).mock.lastCall?.[0]).toBe(true);
+  view.rerender(<ContinuePanel {...props} parentalEnabled unlocked={false} />);
+  expect(vi.mocked(useBodlavDocumentaries).mock.lastCall?.[0]).toBe(false);
+  expect(screen.queryByText(item.title)).toBeNull();
+  expect(view.container.querySelector('[data-remote-entry][data-discover-card]')).toBeNull();
+  view.rerender(<ContinuePanel {...props} parentalEnabled unlocked />);
+  expect(screen.getByRole('region', { name: 'Documentaires Bodlav' })).toBeVisible();
+});

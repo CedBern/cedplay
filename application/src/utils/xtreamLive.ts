@@ -3,6 +3,7 @@ import { v5 as uuidv5 } from 'uuid';
 import { Capacitor } from '@capacitor/core';
 import { getProxyBase } from '@/utils/proxy';
 import { httpGetJson } from '@/utils/userAgent';
+import { isDesktopRuntime } from '@/utils/desktopBridge';
 import type { Channel, ChannelGroup, PlaylistInfo } from '@/types/channel';
 
 /**
@@ -31,7 +32,7 @@ function liveApiUrl(account: XtreamLiveAccount, action: 'categories' | 'streams'
   const user = encodeURIComponent(account.username);
   const pass = encodeURIComponent(account.password);
   const category = categoryId !== undefined ? `&category_id=${encodeURIComponent(categoryId)}` : '';
-  if (Capacitor.isNativePlatform()) {
+  if (Capacitor.isNativePlatform() || isDesktopRuntime()) {
     const apiAction = action === 'categories' ? 'get_live_categories' : 'get_live_streams';
     return `${account.server}/player_api.php?username=${user}&password=${pass}&action=${apiAction}${category}`;
   }
@@ -65,6 +66,7 @@ export function buildLiveChannel(account: XtreamLiveAccount, stream: RawStream, 
     name: `${name} (${fallback.toUpperCase()})`,
     url: `${base}.${fallback}`,
     group,
+    ...(stream.stream_icon ? { logo: stream.stream_icon } : {}),
     ...(quality ? { quality } : {}),
     isFavorite: false,
   };

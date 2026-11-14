@@ -62,9 +62,46 @@ function getDb(): Promise<IDBPDatabase<IPTVPlayerDB>> {
   return dbPromise;
 }
 
-export async function savePlaylistToDB(playlist: PlaylistInfo): Promise<void> {
+const REGENERABLE_CACHE_PREFIXES = ['epgCache_', 'epgParsed_', 'tmdb_', 'sub_', 'replayIndex_'];
+
+function isQuotaExceededError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: unknown; code?: unknown };
+  return e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014;
+}
+
+async function evictRegenerableCaches(preserveKey?: string): Promise<number> {
   const db = await getDb();
-  await db.put(PLAYLIST_STORE_NAME, playlist);
+  const tx = db.transaction(META_STORE_NAME, 'readwrite');
+  const keys = await tx.store.getAllKeys();
+  let removed = 0;
+  for (const rawKey of keys) {
+    if (typeof rawKey !== 'string' || rawKey === preserveKey) continue;
+    if (REGENERABLE_CACHE_PREFIXES.some(prefix => rawKey.startsWith(prefix))) {
+      void tx.store.delete(rawKey);
+      removed += 1;
+    }
+  }
+  await tx.done;
+  return removed;
+}
+
+async function withQuotaEviction<T>(op: () => Promise<T>, preserveKey?: string): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    if (!isQuotaExceededError(err)) throw err;
+    const evicted = await evictRegenerableCaches(preserveKey);
+    if (evicted === 0) throw err;
+    return await op();
+  }
+}
+
+export async function savePlaylistToDB(playlist: PlaylistInfo): Promise<void> {
+  await withQuotaEviction(async () => {
+    const db = await getDb();
+    await db.put(PLAYLIST_STORE_NAME, playlist);
+  });
 }
 
 export async function getPlaylistsFromDB(): Promise<PlaylistInfo[]> {
@@ -301,18 +338,22 @@ export async function restoreBackupToDB(backup: Backup): Promise<{ added: number
 
 // --- Meta (favorites, settings, lastChannel) helpers ---
 export async function setMeta<T>(key: string, value: T): Promise<void> {
-  const db = await getDb();
-  await db.put(META_STORE_NAME, { key, value });
+  await withQuotaEviction(async () => {
+    const db = await getDb();
+    await db.put(META_STORE_NAME, { key, value });
+  }, key);
 }
 
 /** Écrit plusieurs clés dans UNE transaction (6 écritures = 1 transaction au lieu de 6). */
 export async function setMetaMany(entries: Array<{ key: string; value: unknown }>): Promise<void> {
-  const db = await getDb();
-  const tx = db.transaction(META_STORE_NAME, 'readwrite');
-  for (const { key, value } of entries) {
-    void tx.store.put({ key, value });
-  }
-  await tx.done;
+  await withQuotaEviction(async () => {
+    const db = await getDb();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    for (const { key, value } of entries) {
+      void tx.store.put({ key, value });
+    }
+    await tx.done;
+  });
 }
 
 export async function getMeta<T>(key: string): Promise<T | undefined> {
@@ -384,11 +425,20 @@ export interface PlayHistoryEntry {
   poster?: string;
   episodeName?: string;
   hiddenFromContinue?: boolean;
+  hiddenAt?: number;
   status?: 'started' | 'completed';
   positionMs?: number;
   durationMs?: number;
   /** Identifiant TMDB : clé de jointure entre catalogue, « Vu ailleurs » et profil de goût. */
   tmdbId?: number;
+  /** Identifiant TMDB de l'épisode (pour les séries). */
+  episodeTmdbId?: number;
+  /** Identifiant d'origine d'un visionnage externe avant rapprochement catalogue. */
+  originChannelId?: string;
+  /** Numéro de saison structuré (pour les séries). */
+  season?: number;
+  /** Numéro d'épisode structuré (pour les séries). */
+  episode?: number;
   /** Plateforme d'origine (netflix, prime, youtube…) pour un visionnage hors CedPlay. */
   platform?: string;
 }
@@ -412,15 +462,41 @@ export function prunePlayHistory(entries: PlayHistoryEntry[]): PlayHistoryEntry[
 }
 
 export async function pushPlayHistory(entry: PlayHistoryEntry): Promise<void> {
-  const db = await getDb();
-  const tx = db.transaction(META_STORE_NAME, 'readwrite');
-  const saved = await tx.store.get(PLAY_HISTORY_KEY) as { value: PlayHistoryEntry[] } | undefined;
-  const previous = entry.kind === 'vod' ? saved?.value?.find(e => e.channelId === entry.channelId) : undefined;
-  await tx.store.put({ key: PLAY_HISTORY_KEY, value: prunePlayHistory([{ ...previous, hiddenFromContinue: false, ...entry }, ...(saved?.value || [])]) });
-  await tx.done;
+  await withQuotaEviction(async () => {
+    const db = await getDb();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    const saved = await tx.store.get(PLAY_HISTORY_KEY) as { value: PlayHistoryEntry[] } | undefined;
+    const previous = entry.kind === 'vod' ? saved?.value?.find(e => e.channelId === entry.channelId) : undefined;
+    const mergedEntry: PlayHistoryEntry = { ...previous, hiddenFromContinue: false, ...entry };
+    if (!mergedEntry.hiddenFromContinue) delete mergedEntry.hiddenAt;
+    await tx.store.put({ key: PLAY_HISTORY_KEY, value: prunePlayHistory([mergedEntry, ...(saved?.value || [])]) });
+    await tx.done;
+  }, PLAY_HISTORY_KEY);
 }
 export async function getPlayHistory(): Promise<PlayHistoryEntry[]> {
   return prunePlayHistory((await getMeta<PlayHistoryEntry[]>(PLAY_HISTORY_KEY)) || []);
+}
+
+export async function replaceVodPlayHistory(nextVodEntries: PlayHistoryEntry[]): Promise<boolean> {
+  let changed = false;
+  await withQuotaEviction(async () => {
+    const db = await getDb();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    const saved = await tx.store.get(PLAY_HISTORY_KEY) as { value: PlayHistoryEntry[] } | undefined;
+    const currentAll = Array.isArray(saved?.value) ? saved.value : [];
+    const currentLive = currentAll.filter(e => e.kind !== 'vod');
+    const currentVod = currentAll.filter(e => e.kind === 'vod');
+    const nextVod = prunePlayHistory(nextVodEntries.filter(e => e.kind === 'vod'));
+    if (JSON.stringify(currentVod) !== JSON.stringify(nextVod)) {
+      changed = true;
+      await tx.store.put({
+        key: PLAY_HISTORY_KEY,
+        value: prunePlayHistory([...nextVod, ...currentLive]),
+      });
+    }
+    await tx.done;
+  }, PLAY_HISTORY_KEY);
+  return changed;
 }
 
 // « Vu ailleurs » : films et séries vus sur d'autres plateformes. Conservés à part
@@ -475,8 +551,13 @@ export async function manageContinueEntry(channelId: string, action: 'hide' | 'c
   const entries = saved?.value || [];
   const entry = entries.find(e => e.kind === 'vod' && e.channelId === channelId);
   if (entry) {
-    if (action === 'hide') entry.hiddenFromContinue = true;
-    else { entry.status = 'completed'; entry.ts = Date.now(); }
+    if (action === 'hide') {
+      entry.hiddenFromContinue = true;
+      entry.hiddenAt = Date.now();
+    } else {
+      entry.status = 'completed';
+      entry.ts = Date.now();
+    }
     await tx.store.put({ key: PLAY_HISTORY_KEY, value: prunePlayHistory(entries) });
   }
   await tx.done;
@@ -570,13 +651,37 @@ export interface VodWatchlistItem {
   playlistId: string;
   addedAt: number;
   extension?: string;
+  tmdbId?: number;
 }
 
 const VOD_WATCHLIST_KEY = 'vod_watchlist';
+const VOD_WATCHLIST_TOMBSTONES_KEY = 'vod_watchlist_tombstones';
+export const WATCHLIST_TOMBSTONE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+
+export function watchlistItemKey(item: Pick<VodWatchlistItem, 'playlistId' | 'kind' | 'id'>): string {
+  return `${item.playlistId}:${item.kind}:${item.id}`;
+}
+
+export function pruneWatchlistTombstones(
+  tombstones: Record<string, number>,
+  now = Date.now(),
+): Record<string, number> {
+  const cutoff = now - WATCHLIST_TOMBSTONE_MAX_AGE_MS;
+  const pruned: Record<string, number> = {};
+  for (const [key, ts] of Object.entries(tombstones)) {
+    if (typeof ts === 'number' && Number.isFinite(ts) && ts >= cutoff) pruned[key] = ts;
+  }
+  return pruned;
+}
 
 export async function getVodWatchlistFromDB(): Promise<VodWatchlistItem[]> {
   const list = await getMeta<VodWatchlistItem[]>(VOD_WATCHLIST_KEY);
   return Array.isArray(list) ? list : [];
+}
+
+export async function getVodWatchlistTombstonesFromDB(): Promise<Record<string, number>> {
+  const raw = await getMeta<Record<string, number>>(VOD_WATCHLIST_TOMBSTONES_KEY);
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? pruneWatchlistTombstones(raw) : {};
 }
 
 export async function saveVodWatchlistToDB(list: VodWatchlistItem[]): Promise<void> {
@@ -584,34 +689,51 @@ export async function saveVodWatchlistToDB(list: VodWatchlistItem[]): Promise<vo
   if (typeof window !== 'undefined') window.dispatchEvent(new Event('vod-watchlist-updated'));
 }
 
+export async function saveVodWatchlistTombstonesToDB(tombstones: Record<string, number>): Promise<void> {
+  await setMeta(VOD_WATCHLIST_TOMBSTONES_KEY, pruneWatchlistTombstones(tombstones));
+}
+
 export async function toggleVodWatchlist(item: Omit<VodWatchlistItem, 'addedAt'>): Promise<boolean> {
-  const db = await getDb();
-  const tx = db.transaction(META_STORE_NAME, 'readwrite');
-  const saved = await tx.store.get(VOD_WATCHLIST_KEY) as { value: VodWatchlistItem[] } | undefined;
-  const current = Array.isArray(saved?.value) ? saved.value : [];
-  const index = current.findIndex(w => w.id === item.id && w.kind === item.kind && w.playlistId === item.playlistId);
-  let isAdded: boolean;
-  let updated: VodWatchlistItem[];
-  if (index >= 0) {
-    updated = current.filter((_, i) => i !== index);
-    isAdded = false;
-  } else {
-    const newItem: VodWatchlistItem = {
-      id: item.id,
-      name: item.name,
-      kind: item.kind,
-      playlistId: item.playlistId,
-      addedAt: Date.now(),
-      ...(item.poster ? { poster: item.poster } : {}),
-      ...(item.rating ? { rating: item.rating } : {}),
-      ...(item.categoryId ? { categoryId: item.categoryId } : {}),
-      ...(item.extension ? { extension: item.extension } : {}),
-    };
-    updated = [newItem, ...current];
-    isAdded = true;
-  }
-  await tx.store.put({ key: VOD_WATCHLIST_KEY, value: updated });
-  await tx.done;
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event('vod-watchlist-updated'));
-  return isAdded;
+  return await withQuotaEviction(async () => {
+    const db = await getDb();
+    const tx = db.transaction(META_STORE_NAME, 'readwrite');
+    const saved = await tx.store.get(VOD_WATCHLIST_KEY) as { value: VodWatchlistItem[] } | undefined;
+    const savedTombstones = await tx.store.get(VOD_WATCHLIST_TOMBSTONES_KEY) as { value: Record<string, number> } | undefined;
+    const current = Array.isArray(saved?.value) ? saved.value : [];
+    const tombstones = pruneWatchlistTombstones(
+      savedTombstones?.value && typeof savedTombstones.value === 'object' && !Array.isArray(savedTombstones.value)
+        ? savedTombstones.value
+        : {},
+    );
+    const key = watchlistItemKey(item);
+    const index = current.findIndex(w => w.id === item.id && w.kind === item.kind && w.playlistId === item.playlistId);
+    const now = Date.now();
+    let isAdded: boolean;
+    let updated: VodWatchlistItem[];
+    if (index >= 0) {
+      updated = current.filter((_, i) => i !== index);
+      tombstones[key] = now;
+      isAdded = false;
+    } else {
+      const newItem: VodWatchlistItem = {
+        id: item.id,
+        name: item.name,
+        kind: item.kind,
+        playlistId: item.playlistId,
+        addedAt: now,
+        ...(item.poster ? { poster: item.poster } : {}),
+        ...(item.rating ? { rating: item.rating } : {}),
+        ...(item.categoryId ? { categoryId: item.categoryId } : {}),
+        ...(item.extension ? { extension: item.extension } : {}),
+      };
+      updated = [newItem, ...current];
+      delete tombstones[key];
+      isAdded = true;
+    }
+    await tx.store.put({ key: VOD_WATCHLIST_KEY, value: updated });
+    await tx.store.put({ key: VOD_WATCHLIST_TOMBSTONES_KEY, value: tombstones });
+    await tx.done;
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('vod-watchlist-updated'));
+    return isAdded;
+  }, VOD_WATCHLIST_KEY);
 }

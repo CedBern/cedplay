@@ -1,6 +1,6 @@
 {
   "name": "cedplay",
-  "version": "1.12.48",
+  "version": "1.12.64",
   "packageManager": "pnpm@8.10.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5178 --strictPort",
@@ -8,7 +8,10 @@
     "lint": "eslint --quiet ./src",
     "preview": "vite preview --host 127.0.0.1 --port 5178 --strictPort",
     "proxy": "node proxy-server.mjs",
+    "desktop": "node ../desktop/server.mjs",
     "test": "vitest run",
+    "test:desktop": "node --test ../desktop/desktop.test.mjs ../desktop/audit-regression.test.mjs",
+    "verify:desktop": "pnpm verify && pnpm test:desktop",
     "test:ui": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
@@ -40,6 +43,7 @@
     "idb": "^8.0.3",
     "lucide-react": "^0.462.0",
     "mpegts.js": "^1.8.2",
+    "qrcode-generator": "2.0.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",

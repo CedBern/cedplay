@@ -150,7 +150,7 @@ export function ProgramSheet({ playlistId, target, onClose, epgData, channels, c
                 key={action.id}
                 type="button"
                 autoFocus={index === 0}
-                disabled={busy}
+                aria-disabled={busy}
                 onClick={() => { void run(action); }}
                 className={`flex min-h-12 items-center gap-2 rounded-lg border px-3 text-left text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${action.tone === 'danger' ? 'border-red-500/40 bg-red-500/10 hover:bg-red-500/20' : 'border-neutral-800 bg-white/5 hover:bg-white/10'}`}
               >

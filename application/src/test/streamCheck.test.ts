@@ -2,7 +2,13 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMeta } from '@/utils/idb';
 import {
-  describeFailure, loadHiddenChannels, probeStreams, saveHiddenChannels,
+  clearChannelHealth,
+  describeFailure,
+  loadChannelHealth,
+  loadHiddenChannels,
+  probeStreams,
+  saveChannelHealth,
+  saveHiddenChannels,
 } from '@/utils/streamCheck';
 
 // Le pont natif est enregistré au chargement du module : on le remplace par un
@@ -152,5 +158,54 @@ describe('streamCheck — chaînes masquées', () => {
   it('renvoie une liste vide quand le stockage est illisible', async () => {
     await setMeta('hiddenChannels:p4', 'pas un tableau');
     await expect(loadHiddenChannels('p4')).resolves.toEqual([]);
+  });
+});
+
+describe('streamCheck — concurrence par hôte', () => {
+  it('limite la concurrence vers le même serveur à deux requêtes simultanées', async () => {
+    let active = 0;
+    let maxObserved = 0;
+    const fetcher = vi.fn().mockImplementation(async () => {
+      active++;
+      if (active > maxObserved) maxObserved = active;
+      await new Promise(r => setTimeout(r, 15));
+      active--;
+      return streamResponse('ok');
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    await probeStreams([
+      'http://same-server.test/1.ts',
+      'http://same-server.test/2.ts',
+      'http://same-server.test/3.ts',
+      'http://same-server.test/4.ts',
+    ]);
+
+    expect(maxObserved).toBeLessThanOrEqual(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('streamCheck — santé des chaînes (persistance)', () => {
+  it('enregistre, relit et vide la santé par playlist', async () => {
+    const recordA = { channelId: 'a', url: 'http://cdn/a.ts', ok: true, status: 200, checkedAt: 1000 };
+    const recordB = { channelId: 'b', url: 'http://cdn/b.ts', ok: false, status: 500, checkedAt: 2000 };
+    await saveChannelHealth('p1', { a: recordA, b: recordB });
+    const loaded = await loadChannelHealth('p1');
+    expect(loaded).toEqual({ a: recordA, b: recordB });
+
+    await clearChannelHealth('p1');
+    const cleared = await loadChannelHealth('p1');
+    expect(cleared).toEqual({});
+  });
+
+  it('ignore les enregistrements corrompus ou invalides', async () => {
+    await setMeta('channelHealth:corrupted', {
+      valid: { url: 'http://cdn/v.ts', ok: true, status: 200, checkedAt: 500 },
+      invalid: 'pas un objet',
+      noUrl: { ok: false, status: 0 },
+    });
+    const loaded = await loadChannelHealth('corrupted');
+    expect(Object.keys(loaded)).toEqual(['valid']);
   });
 });

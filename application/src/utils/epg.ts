@@ -6,6 +6,7 @@ import { getXtreamAccount } from '@/utils/xtreamCatalog';
 import { listXmltvChannels } from '@/utils/epgXmltv';
 import { getMeta, setMeta } from '@/utils/idb';
 import { getProxyBase } from '@/utils/proxy';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 import { AppSettings } from '@/utils/storage';
 import { packEPGData, unpackEPGData, type PackedEPGData } from '@/utils/epgPacked';
 import { assertImportSize, assertXmltvTextSize, decodeImportText } from '@/utils/textImport';
@@ -50,6 +51,21 @@ async function decompressGzip(bytes: Uint8Array): Promise<string> {
 
 /** Télécharge le XMLTV (gzip accepté). Web : proxy local 127.0.0.1:5179 ; natif : CapacitorHttp. */
 async function downloadXmltv(rawUrl: string): Promise<string> {
+  if (isDesktopRuntime()) {
+    const response = await desktopHttp<string>({
+      url: rawUrl,
+      headers: { 'User-Agent': getActiveUserAgent(), 'Accept-Encoding': 'gzip' },
+      responseType: 'base64',
+      timeoutMs: MAX_FETCH_MS,
+    });
+    if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
+    const base64 = response.data;
+    if (typeof base64 !== 'string') throw new Error('Réponse inattendue du serveur.');
+    const bytes = base64ToUint8Array(base64);
+    assertImportSize(bytes.length, 'xmltv');
+    const isGzip = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+    return isGzip ? decompressGzip(bytes) : decodeImportText(bytes, 'xmltv');
+  }
   if (Capacitor.isNativePlatform()) {
     const response = await CapacitorHttp.get({
       url: rawUrl,

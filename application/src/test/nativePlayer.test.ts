@@ -349,3 +349,85 @@ it('transmet les logos au plugin et les omet quand aucune chaîne n’en porte',
   await NativePlayerBridge.open(withoutLogo[0].url, withoutLogo[0].name, zapWithoutLogo);
   expect(mocks.open.mock.lastCall?.[0]).not.toHaveProperty('channelLogos');
 });
+
+it('transmet le playedMs propre à chaque épisode lors d’un enchaînement VOD Android', async () => {
+  const trakt = await import('@/utils/trakt');
+  const scrobbleSpy = vi.spyOn(trakt, 'maybeScrobbleTrakt').mockResolvedValue(true);
+  mocks.openVod.mockResolvedValueOnce({
+    mediaId: 'ep2',
+    positionMs: 120000,
+    durationMs: 1800000,
+    completed: false,
+    playedMs: 42000,
+    progress: [
+      { mediaId: 'ep1', positionMs: 1750000, durationMs: 1800000, completed: false, playedMs: 12000 },
+      { mediaId: 'ep2', positionMs: 120000, durationMs: 1800000, completed: false, playedMs: 30000 },
+    ],
+    stats: { playedMs: 42000 },
+  });
+
+  await NativePlayerBridge.openVod(
+    'https://example.test/ep1.mp4',
+    'Série Test · S01E01',
+    'ep1',
+    false,
+    undefined,
+    {
+      urls: ['https://example.test/ep1.mp4', 'https://example.test/ep2.mp4'],
+      titles: ['Série Test · S01E01', 'Série Test · S01E02'],
+      ids: ['ep1', 'ep2'],
+      index: 0,
+      history: [{ mediaId: 'ep2', name: 'Série Test · S01E02', seriesId: 's1', season: 1, episode: 2 }],
+    },
+    { name: 'Série Test · S01E01', mediaKind: 'series', season: 1, episode: 1 },
+  );
+
+  await vi.waitFor(() => expect(scrobbleSpy).toHaveBeenCalledTimes(2));
+  expect(scrobbleSpy.mock.calls[0]?.[0].channelId).toBe('vod:ep1');
+  expect(scrobbleSpy.mock.calls[0]?.[8]).toBe(12000);
+  expect(scrobbleSpy.mock.calls[1]?.[0].channelId).toBe('vod:ep2');
+  expect(scrobbleSpy.mock.calls[1]?.[8]).toBe(30000);
+  scrobbleSpy.mockRestore();
+});
+
+it('rend la main sans attendre Trakt tout en séquençant les scrobbles en arrière-plan', async () => {
+  const trakt = await import('@/utils/trakt');
+  let resolveFirst!: (v: boolean) => void;
+  const firstPromise = new Promise<boolean>(r => { resolveFirst = r; });
+  const scrobbleSpy = vi.spyOn(trakt, 'maybeScrobbleTrakt')
+    .mockImplementationOnce(() => firstPromise)
+    .mockResolvedValueOnce(true);
+
+  mocks.openVod.mockResolvedValueOnce({
+    mediaId: 'ep2',
+    positionMs: 120000,
+    durationMs: 1800000,
+    completed: false,
+    progress: [
+      { mediaId: 'ep1', positionMs: 1750000, durationMs: 1800000, completed: false, playedMs: 12000 },
+      { mediaId: 'ep2', positionMs: 120000, durationMs: 1800000, completed: false, playedMs: 30000 },
+    ],
+  });
+
+  const ok = await NativePlayerBridge.openVod(
+    'https://example.test/ep1.mp4',
+    'Série Test · S01E01',
+    'ep1',
+    false,
+    undefined,
+    {
+      urls: ['https://example.test/ep1.mp4', 'https://example.test/ep2.mp4'],
+      titles: ['Série Test · S01E01', 'Série Test · S01E02'],
+      ids: ['ep1', 'ep2'],
+      index: 0,
+      history: [{ mediaId: 'ep2', name: 'Série Test · S01E02', seriesId: 's1', season: 1, episode: 2 }],
+    },
+    { name: 'Série Test · S01E01', mediaKind: 'series', season: 1, episode: 1 },
+  );
+
+  expect(ok).toBe(true);
+  expect(scrobbleSpy).toHaveBeenCalledTimes(1);
+  resolveFirst(true);
+  await vi.waitFor(() => expect(scrobbleSpy).toHaveBeenCalledTimes(2));
+  scrobbleSpy.mockRestore();
+});

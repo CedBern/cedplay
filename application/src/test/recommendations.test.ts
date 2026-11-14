@@ -29,6 +29,7 @@ describe('recommendForHistory', () => {
     const recs = recommendForHistory(history, items, { playlistId: '1', nowMs: now });
     expect(recs.map((r) => r.item.id)).toEqual(['1', '2', '3']);
     expect(recs[0].score).toBeGreaterThan(recs[2].score);
+    expect(recs[0].sourceId).toBe(history[0].channelId);
     // Titanic : autre catégorie et aucun mot commun → non recommandé
   });
 

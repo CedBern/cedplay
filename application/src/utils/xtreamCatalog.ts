@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import type { PlaylistInfo } from '@/types/channel';
 import { getProxyBase } from '@/utils/proxy';
 import { getActiveUserAgent } from '@/utils/userAgent';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 
 export interface XtreamAccount { server: string; username: string; password: string }
 export interface CatalogCategory { id: string; name: string }
@@ -49,17 +50,21 @@ export function getXtreamAccount(playlist: PlaylistInfo): XtreamAccount | null {
         // Restored playlists already contain Xtream live paths, even without the login form's storage.
         // Require a single account across all recognized paths; mixed-source lists stay unlinked.
         const inferred = new Map<string, XtreamAccount>();
+        let matched = 0;
         for (const channel of playlist.channels) {
           try {
             const url = new URL(channel.url);
             const match = url.pathname.match(/^(.*)\/live\/([^/]+)\/([^/]+)\/\d+\.(?:ts|m3u8)$/i);
             if (!match || !['http:', 'https:'].includes(url.protocol)) continue;
             const candidate = { server: url.origin + match[1], username: decodeURIComponent(match[2]), password: decodeURIComponent(match[3]) };
+            matched += 1;
             inferred.set(JSON.stringify(candidate), candidate);
             if (inferred.size > 1) break;
           } catch { /* non-Xtream URL */ }
         }
-        if (inferred.size === 1) result = [...inferred.values()][0];
+        // Une liste publique contient parfois quelques flux en /live/x/y/n.m3u8 : ce n'est un
+        // abonnement que si ces adresses forment la majorité de la liste.
+        if (inferred.size === 1 && matched * 2 > playlist.channels.length) result = [...inferred.values()][0];
       }
     }
   } catch { /* unavailable local storage */ }
@@ -117,7 +122,16 @@ export async function catalogRequest(account: XtreamAccount, action: string, par
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
   try {
-    if (Capacitor.isNativePlatform()) {
+    if (isDesktopRuntime()) {
+      const response = await desktopHttp<unknown>({
+        url: `${account.server}/player_api.php?${query}`,
+        headers: { 'User-Agent': getActiveUserAgent() },
+        responseType: 'json',
+        timeoutMs: CATALOG_TIMEOUT_MS,
+      });
+      if (response.status < 200 || response.status >= 300) throw new Error();
+      data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+    } else if (Capacitor.isNativePlatform()) {
       const response = await CapacitorHttp.get({ url: `${account.server}/player_api.php?${query}`, headers: { 'User-Agent': getActiveUserAgent() }, responseType: 'json', connectTimeout: 15000, readTimeout: CATALOG_TIMEOUT_MS });
       if (response.status < 200 || response.status >= 300) throw new Error();
       data = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;

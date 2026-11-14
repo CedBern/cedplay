@@ -16,7 +16,7 @@ const entries: { key: MoreDestination; label: string; hint: string; Icon: Lucide
 
 /** Rubrique « Plus » : tout ce qui ne sert pas à chaque visionnage. */
 export function MorePanel({ onOpen, children }: { onOpen: (destination: MoreDestination) => void; children?: ReactNode }) {
-  return <nav aria-label="Autres rubriques" className="mx-auto max-w-2xl">
+  return <nav data-more-panel aria-label="Autres rubriques" className="mx-auto max-w-2xl">
     <h2 className="mb-3 px-1 text-[26px] font-semibold tracking-tight text-foreground">Plus</h2>
     {/* TV : la liste en cours et son menu, sortis de l'en-tête. */}
     {children && <div className="mb-3">{children}</div>}

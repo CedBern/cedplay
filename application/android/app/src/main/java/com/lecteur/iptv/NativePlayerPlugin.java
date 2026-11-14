@@ -248,6 +248,14 @@ public class NativePlayerPlugin extends Plugin {
                         ArrayList<String> idList = new ArrayList<>();
                         for (int i = 0; i < ids.length(); i++) idList.add(ids.optString(i, ""));
                         intent.putStringArrayListExtra("episodeIds", idList);
+                        JSArray epPositions = call.getArray("episodeStartPositions", null);
+                        if (epPositions != null && epPositions.length() == urlList.size()) {
+                            long[] posArray = new long[epPositions.length()];
+                            for (int i = 0; i < epPositions.length(); i++) {
+                                posArray[i] = Math.max(0L, epPositions.optLong(i, 0L));
+                            }
+                            intent.putExtra("episodeStartPositions", posArray);
+                        }
                     }
                 }
             }
@@ -268,6 +276,7 @@ public class NativePlayerPlugin extends Plugin {
                 call.getData().remove("channelUrls");
                 call.getData().remove("channelTitles");
                 call.getData().remove("episodeIds");
+                call.getData().remove("episodeStartPositions");
                 call.getData().remove("subtitleContent");
             }
             launchPlayer(call, intent);
@@ -451,6 +460,10 @@ public class NativePlayerPlugin extends Plugin {
     @PluginMethod
     public void removeFolder(PluginCall call) {
         String uri = call.getString("uri");
+        if (uri == null || uri.trim().isEmpty()) {
+            call.reject("Missing folder uri");
+            return;
+        }
         org.json.JSONArray stored = loadLocalFolders();
         org.json.JSONArray next = new org.json.JSONArray();
         for (int i = 0; i < stored.length(); i++) {
@@ -810,6 +823,7 @@ public class NativePlayerPlugin extends Plugin {
             value.put("durationMs", data.getLongExtra("durationMs", 0));
             value.put("completed", data.getBooleanExtra("completed", false));
             value.put("mediaId", data.getStringExtra("mediaId"));
+            if (data.hasExtra("playedMs")) value.put("playedMs", data.getLongExtra("playedMs", 0));
             try { value.put("progress", new JSArray(data.getStringExtra("progress"))); } catch (Exception ignored) {}
             putStats(value, data);
             call.resolve(value);
@@ -1032,7 +1046,151 @@ public class NativePlayerPlugin extends Plugin {
         AudioPlaybackService.removeListener(audioListener);
         getContext().unregisterReceiver(favoriteReceiver);
         if (preview != null) preview.hide();
+        stopPairingServer();
+        stopLanSyncServer();
         super.handleOnDestroy();
+    }
+
+    // ── Appairage par QR code (connexion de l'abonnement depuis le téléphone) ──
+
+    private PairingServer pairing;
+    private static final class PairingReceipt {
+        final java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(1);
+        volatile boolean accepted;
+    }
+    private final java.util.concurrent.ConcurrentHashMap<String, PairingReceipt> pairingReceipts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @PluginMethod
+    public void acknowledgePairing(PluginCall call) {
+        String id = call.getString("requestId");
+        PairingReceipt receipt = id == null ? null : pairingReceipts.remove(id);
+        if (receipt != null) {
+            receipt.accepted = Boolean.TRUE.equals(call.getBoolean("accepted"));
+            receipt.ready.countDown();
+        }
+        call.resolve();
+    }
+
+    private synchronized void stopPairingServer() {
+        if (pairing != null) pairing.stop();
+        pairing = null;
+    }
+
+    /** Ouvre le serveur d'appairage sur le réseau local et renvoie l'adresse à afficher en QR code. */
+    @PluginMethod
+    public synchronized void startPairing(PluginCall call) {
+        stopPairingServer();
+        java.net.InetAddress address = PairingServer.lanAddress();
+        if (address == null) { call.reject("Aucun réseau local"); return; }
+        try {
+            pairing = PairingServer.start(address, (server, username, password) -> {
+                String id = java.util.UUID.randomUUID().toString();
+                PairingReceipt receipt = new PairingReceipt();
+                pairingReceipts.put(id, receipt);
+                JSObject data = new JSObject();
+                data.put("requestId", id);
+                data.put("server", server);
+                data.put("username", username);
+                data.put("password", password);
+                try {
+                    notifyListeners("pairingCredentials", data);
+                    return receipt.ready.await(4, java.util.concurrent.TimeUnit.SECONDS) && receipt.accepted;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                } finally { pairingReceipts.remove(id); }
+            });
+            JSObject result = new JSObject();
+            result.put("url", pairing.url());
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Appairage indisponible");
+        }
+    }
+
+    /** Ferme l'appairage désigné par son adresse : un autre, rouvert entre-temps, reste ouvert. */
+    @PluginMethod
+    public synchronized void stopPairing(PluginCall call) {
+        if (pairing != null && pairing.url().equals(call.getString("url"))) stopPairingServer();
+        call.resolve();
+    }
+
+    // ── Synchronisation réseau local (progression VOD + Ma liste) ──
+
+    private LanSyncServer lanSync;
+    private static final class LanSyncReceipt {
+        final java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(1);
+        volatile String mergedJson;
+    }
+    private final java.util.concurrent.ConcurrentHashMap<String, LanSyncReceipt> lanSyncReceipts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private synchronized void stopLanSyncServer() {
+        if (lanSync != null) lanSync.stop();
+        lanSync = null;
+    }
+
+    @PluginMethod
+    public void acknowledgeLanSync(PluginCall call) {
+        String id = call.getString("requestId");
+        LanSyncReceipt receipt = id == null ? null : lanSyncReceipts.remove(id);
+        if (receipt != null) {
+            boolean ok = Boolean.TRUE.equals(call.getBoolean("ok"));
+            String mergedJson = call.getString("mergedJson");
+            receipt.mergedJson = (ok && mergedJson != null && !mergedJson.isEmpty()) ? mergedJson : null;
+            receipt.ready.countDown();
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public synchronized void startLanSync(PluginCall call) {
+        stopLanSyncServer();
+        String token = call.getString("token");
+        if (!LanSyncServer.isValidToken(token)) {
+            call.reject("Jeton de synchronisation invalide");
+            return;
+        }
+        java.net.InetAddress address = PairingServer.lanAddress();
+        if (address == null) {
+            call.reject("Aucun réseau local");
+            return;
+        }
+        Integer requestedPort = call.getInt("port");
+        int preferredPort = requestedPort != null ? requestedPort : LanSyncServer.DEFAULT_PORT;
+        try {
+            lanSync = LanSyncServer.start(address, token, preferredPort, payloadJson -> {
+                String id = java.util.UUID.randomUUID().toString();
+                LanSyncReceipt receipt = new LanSyncReceipt();
+                lanSyncReceipts.put(id, receipt);
+                JSObject data = new JSObject();
+                data.put("requestId", id);
+                data.put("payload", payloadJson);
+                try {
+                    notifyListeners("lanSyncRequest", data);
+                    if (!receipt.ready.await(8, java.util.concurrent.TimeUnit.SECONDS)) return null;
+                    return receipt.mergedJson;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
+                } finally {
+                    lanSyncReceipts.remove(id);
+                }
+            });
+            JSObject result = new JSObject();
+            result.put("url", lanSync.url());
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Synchronisation locale indisponible");
+        }
+    }
+
+    @PluginMethod
+    public synchronized void stopLanSync(PluginCall call) {
+        String targetUrl = call.getString("url");
+        if (lanSync != null && (targetUrl == null || lanSync.url().equals(targetUrl))) {
+            stopLanSyncServer();
+        }
+        call.resolve();
     }
 
     // ── Lecture audio en arrière-plan (podcasts) ────────────────────────

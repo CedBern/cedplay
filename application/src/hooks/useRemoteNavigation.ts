@@ -6,6 +6,7 @@ export function useRemoteNavigation() {
   useEffect(() => {
     let remote = false;
     let lastFocused: HTMLElement | null = null;
+    const contentFocus = new WeakMap<HTMLElement, HTMLElement>();
     const scope = () => document.querySelector<HTMLElement>('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]') ?? document;
     const initial = () => {
       const targets = remoteTargets(scope());
@@ -15,6 +16,8 @@ export function useRemoteNavigation() {
       if (!(event.target instanceof HTMLElement)) return;
       const target = event.target;
       lastFocused = target;
+      const panel = target.closest<HTMLElement>('[role="tabpanel"]');
+      if (panel && !target.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) contentFocus.set(panel, target);
       // Un moteur TV peut encore viser un conteneur : rejoindre son action sans appui supplémentaire.
       if (!remote || !target.matches('[tabindex], [role="tabpanel"]')) return;
       // Écrans qui gèrent eux-mêmes leurs flèches (Direct TV, catalogue) : ils posent le focus
@@ -52,12 +55,35 @@ export function useRemoteNavigation() {
         return;
       }
       if (!event.key.startsWith('Arrow')) return;
-      // La saisie garde gauche/droite ; haut/bas permet de quitter un champ simple.
-      if (editing && (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || active?.matches('textarea, select, input[type="range"], input[type="number"], [contenteditable="true"], [role="slider"]'))) return;
+      // Les curseurs horizontaux (range, slider) gardent gauche/droite pour modifier la valeur ;
+      // haut/bas doit impérativement déplacer le focus vers le contrôle du dessus ou du dessous.
+      const isSlider = active?.matches('input[type="range"], [role="slider"]');
+      if (isSlider) {
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') return;
+      } else if (editing && (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || active?.matches('textarea, select, input[type="number"], [contenteditable="true"]'))) {
+        return;
+      }
       if (active?.closest('[role="menu"], [role="listbox"]')) return;
       // Sortie explicite des rubriques : une télécommande doit pouvoir descendre même
       // quand la géométrie (barre fixe, défilement ou écran étroit) n'offre aucun voisin.
       const navigation = active?.closest('[data-main-navigation]');
+      if (navigation?.hasAttribute('data-tv-navigation')) {
+        event.preventDefault(); event.stopPropagation();
+        const items = Array.from(navigation.querySelectorAll<HTMLElement>('button:not(:disabled)'));
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          const index = items.indexOf(active!);
+          const next = items[index + (event.key === 'ArrowDown' ? 1 : -1)];
+          if (next) focusRemote(next);
+        } else if (event.key === 'ArrowRight') {
+          const selected = navigation.querySelector('[role="tab"][aria-selected="true"]');
+          const panel = document.getElementById(selected?.getAttribute('aria-controls') ?? '');
+          const remembered = panel ? contentFocus.get(panel) : undefined;
+          const next = remembered?.isConnected && panel?.contains(remembered) && !remembered.matches(':disabled, [aria-disabled="true"]') && !remembered.closest('[hidden], [inert], [aria-hidden="true"]')
+            ? remembered : panel?.querySelector<HTMLElement>('[data-remote-entry]') ?? (panel ? remoteTargets(panel)[0] : undefined);
+          if (next) focusRemote(next);
+        }
+        return;
+      }
       // La rangée de rubriques a un ordre explicite : aucun scan géométrique de
       // tout le catalogue pour un simple déplacement horizontal.
       if (navigation && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -77,6 +103,13 @@ export function useRemoteNavigation() {
         const next = panel?.querySelector<HTMLElement>('[data-remote-entry]') ?? (panel ? remoteTargets(panel)[0] : undefined);
         if (next) {
           event.preventDefault(); event.stopPropagation(); focusRemote(next); return;
+        }
+      }
+      if (event.key === 'ArrowLeft' && active?.hasAttribute('data-remote-entry') && document.querySelector('[data-tv-navigation]')) {
+        const panel = active.closest('[role="tabpanel"]');
+        const tab = document.getElementById(panel?.getAttribute('aria-labelledby') ?? '');
+        if (tab?.closest('[data-tv-navigation]')) {
+          event.preventDefault(); event.stopPropagation(); focusRemote(tab); return;
         }
       }
       // La première action de l'écran rend Haut à sa rubrique, sans chercher une

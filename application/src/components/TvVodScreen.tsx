@@ -4,6 +4,7 @@ import { Bookmark, BookmarkCheck, ChevronDown, HardDrive, RefreshCw, Search, Spa
 import type { CatalogCategory, CatalogItem } from '@/utils/xtreamCatalog';
 import { VodPoster } from '@/components/VodPoster';
 import { prefetchPosters } from '@/utils/vodPosterCache';
+import { TV_SAFE_BOTTOM } from '@/utils/tvSafeArea';
 
 type Column = 'cat' | 'grid';
 type CatItem =
@@ -248,24 +249,17 @@ export function TvVodScreen({
     if (positionRef.current) storeVodPosition(playlistId, kind, positionRef.current);
   }, [playlistId, kind]);
 
-  // Hauteur : tout l'espace restant sous les rubriques, sans défilement de page.
-  // Estimée dès le premier rendu à partir de l'en-tête déjà monté : sans hauteur, la
-  // rangée de grille prend la taille du contenu et la zone défilante n'a plus rien à
-  // faire défiler (les flèches changent la sélection hors de l'écran).
-  // Mesurée en-tête déplié ; l'en-tête replié (télécommande) ajoute sa hauteur par la
-  // variable CSS --tv-vod-extra, animée en même temps que lui.
+  // Hauteur bornée dès le premier rendu : la grille conserve sa fenêtre défilante.
+  // Le rail reste latéral ; toute la hauteur sous l'horloge est disponible.
   const [height, setHeight] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null;
-    const header = document.querySelector('[data-app-header]');
-    const top = header?.getBoundingClientRect().bottom ?? 96;
-    return Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - 12));
+    const top = document.querySelector('[data-tv-navigation]') ? 42 : document.querySelector('[data-app-header]')?.getBoundingClientRect().bottom ?? 96;
+    return Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - TV_SAFE_BOTTOM));
   });
   useLayoutEffect(() => {
     const measure = () => {
-      const root = document.documentElement;
-      const shift = root.classList.contains('tv-chrome-hidden') ? parseFloat(getComputedStyle(root).getPropertyValue('--tv-header-shift')) || 0 : 0;
-      const top = (rootRef.current?.getBoundingClientRect().top ?? 0) + shift;
-      setHeight(Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - 12)));
+      const top = rootRef.current?.getBoundingClientRect().top ?? 0;
+      setHeight(Math.max(320, Math.floor(window.innerHeight - Math.max(0, top) - TV_SAFE_BOTTOM)));
     };
     measure();
     window.addEventListener('resize', measure);
@@ -373,28 +367,31 @@ export function TvVodScreen({
       // c'est OK qui ouvre la fiche, en un seul appui depuis n'importe quelle affiche.
       else handled = (row % COLS < COLS - 1 && moveRow(1)) || true;
     } else if (key === 'ArrowLeft') {
-      handled = column === 'grid' ? (row % COLS === 0 ? go('cat') : moveRow(-1)) || true : true;
+      handled = column === 'grid' ? (row % COLS === 0 ? go('cat') : moveRow(-1)) || true : focusMainNavigation(rootRef.current) || true;
     } else if (key === 'PageDown' || key === 'ChannelDown') handled = column === 'grid' ? moveRow(PAGE_ROWS * COLS) || true : moveCat(PAGE) || true;
     else if (key === 'PageUp' || key === 'ChannelUp') handled = column === 'grid' ? moveRow(-PAGE_ROWS * COLS) || true : moveCat(-PAGE) || true;
     if (handled) { e.preventDefault(); e.stopPropagation(); }
   };
 
   // Retour : grille → catégories → navigation générale, puis le comportement habituel (Accueil).
+  const backActionRef = useRef<(event: Event) => void>(() => {});
+  backActionRef.current = (event: Event) => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !rootRef.current?.contains(active)) return;
+    if (column === 'grid') { event.preventDefault(); go('cat'); }
+    else if (column === 'cat' && focusMainNavigation(rootRef.current)) event.preventDefault();
+  };
   useEffect(() => {
-    const onBack = (event: Event) => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLElement) || !rootRef.current?.contains(active)) return;
-      if (column === 'grid') { event.preventDefault(); go('cat'); }
-      else if (column === 'cat' && focusMainNavigation(rootRef.current)) event.preventDefault();
-    };
+    const onBack = (event: Event) => backActionRef.current(event);
     window.addEventListener('tv-vod-back', onBack);
     return () => window.removeEventListener('tv-vod-back', onBack);
-  });
+  }, []);
 
   // Entrer dans l'écran à la télécommande : rejoindre la colonne active, pas la plus proche.
   const onFocusCapture = (e: React.FocusEvent) => {
     const from = e.relatedTarget;
     if (from instanceof Node && rootRef.current?.contains(from)) return;
+    if (from instanceof Element && from.closest('[data-tv-navigation]')) return;
     if (!document.documentElement.classList.contains('remote-navigation')) return;
     const target = e.target as HTMLElement;
     const col: Column | null = target.closest('[data-tv-col="cat"]') ? 'cat' : target.closest('[data-tv-col="grid"]') ? 'grid' : null;
@@ -456,7 +453,7 @@ export function TvVodScreen({
       data-tv-vod
       data-tv-column={column}
       className="tv-vod grid gap-3 text-foreground"
-      style={height ? { height: `calc(${height}px + var(--tv-vod-extra, 0px))` } : undefined}
+      style={height ? { height } : undefined}
       onKeyDown={onKeyDown}
       onFocusCapture={onFocusCapture}
     >

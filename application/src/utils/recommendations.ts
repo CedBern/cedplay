@@ -9,6 +9,7 @@ export interface Recommendation {
   score: number;
   /** Justifications affichées sous l'affiche : au plus deux, la plus forte d'abord. */
   reasons: string[];
+  sourceId?: string;
 }
 
 export interface RecommendationOptions {
@@ -63,6 +64,7 @@ interface ScoredItem {
   item: CatalogItem;
   base: number;
   reasons: string[];
+  sourceId: string;
 }
 
 /**
@@ -111,6 +113,7 @@ export function recommendForHistory(
   const watchedMeta = works.map((w) => {
     const name = normalizeForCompare(normalizeTitle(w.name as string).title);
     return {
+      sourceId: w.originChannelId ?? w.channelId,
       categoryId: w.categoryId,
       recency: Math.exp(-Math.LN2 * Math.max(0, now - w.ts) / RECENCY_HALF_LIFE_MS),
       name,
@@ -126,6 +129,7 @@ export function recommendForHistory(
     let score = 0;
     let bestWeight = 0;
     let bestReason = '';
+    let sourceId = '';
     for (const w of watchedMeta) {
       let s = 0;
       let categoryPart = 0;
@@ -137,19 +141,20 @@ export function recommendForHistory(
       // Le visionnage qui pèse le plus porte la justification : c'est lui qui explique
       // le mieux pourquoi ce titre ressort.
       if (weighted > bestWeight) {
+        sourceId = w.sourceId;
         bestWeight = weighted;
         bestReason = titlePart >= categoryPart
           ? `Proche de « ${w.label} »`
           : `Même catégorie que « ${w.label} »`;
       }
     }
-    if (score > 0) scored.push({ item, base: score, reasons: bestReason ? [bestReason] : [] });
+    if (score > 0) scored.push({ item, base: score, reasons: bestReason ? [bestReason] : [], sourceId });
   }
   scored.sort((a, b) => b.base - a.base);
 
   const { profile, detailsByItemId } = options;
   if (!profile?.sampleSize || !detailsByItemId?.size) {
-    return scored.slice(0, limit).map(entry => ({ item: entry.item, score: entry.base, reasons: entry.reasons }));
+    return scored.slice(0, limit).map(entry => ({ item: entry.item, score: entry.base, reasons: entry.reasons, sourceId: entry.sourceId }));
   }
 
   const pool = scored.slice(0, Math.max(limit, options.pool ?? DEFAULT_POOL));
@@ -163,6 +168,7 @@ export function recommendForHistory(
     for (const reason of entry.reasons) if (!reasons.includes(reason)) reasons.push(reason);
     return {
       item: entry.item,
+      sourceId: entry.sourceId,
       score: baseNormalized + tasteNormalized * TASTE_WEIGHT,
       reasons: reasons.slice(0, 2),
     };

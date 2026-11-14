@@ -1,5 +1,8 @@
-import { Clapperboard, Compass, Film, Headphones, House, Ellipsis, LayoutGrid, MonitorPlay, Tv2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { BrandMark } from '@/components/BrandMark';
+import { Clapperboard, Compass, Film, Headphones, House, Ellipsis, LayoutGrid, MonitorPlay, Search, Tv2 } from 'lucide-react';
 import { TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { isDesktopRuntime } from '@/utils/desktopBridge';
 
 export type NavSection = 'continue' | 'channels' | 'vod' | 'movies' | 'series' | 'podcasts' | 'more';
 
@@ -38,24 +41,50 @@ export function navSectionFor(screen: string, tv = false): NavSection | '' {
  * Navigation principale « Salle obscure ».
  * - Mobile : barre fixe en bas d'écran, onglet actif en ambre avec un trait en haut.
  * - À partir de sm : barre en pilule sous l'en-tête, onglet actif sur fond élevé.
- * - TV : rubriques en texte dans la ligne d'en-tête, l'active soulignée d'un trait orange.
+ * - TV : rail translucide à gauche, déployé au focus sans déplacer le contenu.
  */
-export function MainNavigation({ onNavigate, tv = false }: { onNavigate: (section: NavSection) => void; tv?: boolean }) {
-  if (tv) return <TabsList
-    aria-label="Rubriques"
+export function MainNavigation({ onNavigate, tv = false, onSearch }: { onNavigate: (section: NavSection) => void; tv?: boolean; onSearch?: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const pointerInteracting = useRef(false);
+  const pointerHovered = useRef(false);
+  const desktop = isDesktopRuntime();
+  if (tv) return <nav
+    aria-label="Navigation principale"
     data-main-navigation
-    className="tv-nav !mt-0 flex h-auto min-w-0 gap-0.5 bg-transparent p-0 text-muted-foreground"
+    data-tv-navigation
+    data-expanded={expanded}
+    className="tv-sidebar"
+    onMouseEnter={() => { pointerHovered.current = true; setExpanded(true); }}
+    onMouseLeave={() => { pointerHovered.current = false; setExpanded(false); }}
+    onPointerDownCapture={() => {
+      pointerInteracting.current = true;
+      window.setTimeout(() => { pointerInteracting.current = false; }, 0);
+    }}
+    onFocusCapture={event => {
+      if (desktop && pointerInteracting.current) return;
+      if (desktop) {
+        try { if (!(event.target as HTMLElement).matches(':focus-visible')) return; } catch { /* ignore */ }
+      }
+      setExpanded(true);
+    }}
+    onBlurCapture={event => { if (!(desktop && pointerHovered.current) && !event.currentTarget.contains(event.relatedTarget as Node | null)) setExpanded(false); }}
   >
-    {tvSections.map(({ value, label, Icon }) => <TabsTrigger
-      key={value}
-      value={value}
-      onClick={() => onNavigate(value)}
-      className="tv-nav-tab relative h-10 gap-2 rounded-full bg-transparent px-3.5 text-[17px] font-medium text-foreground/75 shadow-none ring-offset-0 transition-colors duration-200 hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
-    >
-      <Icon aria-hidden="true" className="h-[19px] w-[19px] shrink-0 stroke-[1.8]" />
-      <span>{label}</span>
-    </TabsTrigger>)}
-  </TabsList>;
+    <div className="tv-sidebar-brand" aria-label="CedPlay"><BrandMark className="h-8 w-8 shrink-0" /><span className="tv-nav-label">Ced<span className="text-[#FF5A36]">Play</span></span></div>
+    {onSearch && <button type="button" onClick={event => { onSearch(); if (desktop) { setExpanded(false); event.currentTarget.blur(); } }} className="tv-nav-tab tv-sidebar-search" aria-label="Recherche unifiée">
+      <Search aria-hidden="true" /><span className="tv-nav-label">Rechercher</span>
+    </button>}
+    <TabsList aria-label="Rubriques" className="tv-nav !mt-0 h-auto bg-transparent p-0">
+      {tvSections.map(({ value, label, Icon }) => <TabsTrigger
+        key={value}
+        value={value}
+        aria-label={label}
+        onClick={event => { onNavigate(value); if (desktop) { setExpanded(false); event.currentTarget.blur(); } }}
+        className="tv-nav-tab relative bg-transparent shadow-none ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+      >
+        <Icon aria-hidden="true" /><span className="tv-nav-label">{label}</span>
+      </TabsTrigger>)}
+    </TabsList>
+  </nav>;
   return <TabsList
     aria-label="Rubriques"
     data-main-navigation

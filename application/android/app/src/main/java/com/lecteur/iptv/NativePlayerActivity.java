@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -370,6 +371,9 @@ public class NativePlayerActivity extends AppCompatActivity {
     private final RebufferTracker rebuffer = new RebufferTracker(SystemClock::elapsedRealtime);
     /** Temps de lecture effective, versé au journal d'usage de Découvrir (pauses et chargements exclus). */
     private final PlayTimeMeter playMeter = new PlayTimeMeter(SystemClock::elapsedRealtime);
+    private long totalPlayedMs;
+    /** Temps de lecture effective cumulé par mediaId (épisodes enchaînés dans une même session VOD). */
+    private final HashMap<String, Long> playedMsByMedia = new HashMap<>();
     private long droppedFrames;
     private int errorCount;
     private String lastErrorCode;
@@ -507,16 +511,34 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (savedInstanceState != null) {
             positionMs = savedInstanceState.getLong("positionMs", positionMs);
             playWhenReady = savedInstanceState.getBoolean("playWhenReady", true);
+            totalPlayedMs = savedInstanceState.getLong("totalPlayedMs", 0L);
             try {
                 JSONArray progress = new JSONArray(savedInstanceState.getString("visitedProgress", "[]"));
                 for (int i = 0; i < progress.length(); i++) {
                     JSONObject entry = progress.getJSONObject(i);
-                    visitedProgress.put(entry.getString("mediaId"), entry);
+                    String id = entry.getString("mediaId");
+                    visitedProgress.put(id, entry);
+                    long epPlayedMs = entry.optLong("playedMs", 0L);
+                    if (epPlayedMs > 0) playedMsByMedia.put(id, epPlayedMs);
                 }
             } catch (Exception ignored) {}
         } else if (vod && mediaId != null) {
-            if (getIntent().getBooleanExtra("restart", false)) getSharedPreferences("vod", MODE_PRIVATE).edit().remove(mediaId).apply();
-            else positionMs = getSharedPreferences("vod", MODE_PRIVATE).getLong(mediaId, positionMs);
+            SharedPreferences vodPrefs = getSharedPreferences("vod", MODE_PRIVATE);
+            boolean restart = getIntent().getBooleanExtra("restart", false);
+            boolean hasStartPos = getIntent().hasExtra("startPositionMs");
+            positionMs = VodPositionResolver.resolveInitialPosition(vodPrefs, mediaId, positionMs, hasStartPos, restart);
+            long[] epPositions = getIntent().getLongArrayExtra("episodeStartPositions");
+            if (episodeIds != null && epPositions != null && episodeIds.size() == epPositions.length) {
+                SharedPreferences.Editor epEditor = vodPrefs.edit();
+                for (int i = 0; i < episodeIds.size(); i++) {
+                    String epId = episodeIds.get(i);
+                    if (epId == null || epId.isEmpty() || epId.equals(mediaId)) continue;
+                    long epPos = Math.max(0L, epPositions[i]);
+                    if (epPos > 0) epEditor.putLong(epId, epPos);
+                    else epEditor.remove(epId);
+                }
+                epEditor.apply();
+            }
         }
         if (streamTitle == null || streamTitle.isEmpty()) {
             streamTitle = getString(R.string.app_name);
@@ -2509,7 +2531,23 @@ public class NativePlayerActivity extends AppCompatActivity {
         if (code == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
             || code == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
             || code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW
-            || code == PlaybackException.ERROR_CODE_TIMEOUT) return true;
+            || code == PlaybackException.ERROR_CODE_TIMEOUT
+            || code == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+            || code == PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED) return true;
+        Throwable t = error;
+        while (t != null) {
+            if (t instanceof java.net.UnknownHostException
+                || t instanceof java.net.ConnectException
+                || t instanceof java.net.SocketException
+                || t instanceof java.net.SocketTimeoutException
+                || t instanceof java.net.NoRouteToHostException
+                || t instanceof java.io.InterruptedIOException
+                || t instanceof javax.net.ssl.SSLException
+                || t instanceof HttpDataSource.HttpDataSourceException) {
+                return true;
+            }
+            t = t.getCause() == t ? null : t.getCause();
+        }
         return false;
     }
 
@@ -2550,8 +2588,10 @@ public class NativePlayerActivity extends AppCompatActivity {
      *  et à la fin de session (finish). */
     private void attachStats(Intent result) {
         try {
+            recordPlayTime(playMeter.flush());
             JSONObject stats = new JSONObject();
             stats.put("durationMs", Math.max(0, SystemClock.elapsedRealtime() - sessionStartedAtMs));
+            stats.put("playedMs", totalPlayedMs);
             stats.put("zaps", zapCount);
             stats.put("rebuffers", rebuffer.count());
             stats.put("rebufferMs", rebuffer.totalMs());
@@ -2563,6 +2603,13 @@ public class NativePlayerActivity extends AppCompatActivity {
     }
 
     private void recordPlayTime(long playedMs) {
+        if (playedMs > 0) {
+            totalPlayedMs += playedMs;
+            if (vod && mediaId != null) {
+                Long prev = playedMsByMedia.get(mediaId);
+                playedMsByMedia.put(mediaId, (prev != null ? prev : 0L) + playedMs);
+            }
+        }
         UsageJournalStore.record(getApplicationContext(), vod ? UsageJournal.VOD : UsageJournal.LIVE, playedMs);
     }
 
@@ -2583,7 +2630,7 @@ public class NativePlayerActivity extends AppCompatActivity {
 
     private boolean canRecoverLive() {
         return !vod && !archive && !casting && streamUrl != null && playWhenReady && pausedAtMs == 0
-            && player != null && player.getPlayWhenReady()
+            && (player == null || player.getPlayWhenReady())
             && (resumed || isInPipMode()) && !isFinishing() && !isDestroyed();
     }
 
@@ -2619,11 +2666,26 @@ public class NativePlayerActivity extends AppCompatActivity {
             networkConnected = connected;
             android.util.Log.i("IPTV-Playback", "live_reconnect_network connected=" + connected);
             liveReconnect.onNetworkChanged(connected);
+            if (connected && (resumed || isInPipMode()) && !isFinishing() && !isDestroyed() && streamUrl != null) {
+                if (vod) {
+                    if (player == null || isErrorPanelShown()) {
+                        hideError();
+                        autoRetriesLeft = AUTO_RETRY_MAX;
+                        initPlayer(streamUrl);
+                    }
+                } else if (canRecoverLive()) {
+                    if (player == null || isErrorPanelShown()) {
+                        hideError();
+                        if (player != null) prepareMedia(streamUrl);
+                        else initPlayer(streamUrl);
+                    }
+                }
+            }
         });
     }
 
     private void startConnectivityMonitoring() {
-        if (vod || connectivityCallback != null) return;
+        if (connectivityCallback != null) return;
         connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         if (connectivityManager == null) return;
         try {
@@ -2663,7 +2725,18 @@ public class NativePlayerActivity extends AppCompatActivity {
         hideSystemUI();
         startConnectivityMonitoring();
         if (casting) return; // la lecture continue sur le Chromecast
-        if (streamUrl != null && playerView != null && player == null) initPlayer(streamUrl);
+        if (streamUrl != null && playerView != null && player == null) {
+            if (activeNetworkConnected()) {
+                initPlayer(streamUrl);
+            } else {
+                loadingBar.setVisibility(View.VISIBLE);
+                reconnectHandler.postDelayed(() -> {
+                    if (resumed && !isFinishing() && !isDestroyed() && player == null && streamUrl != null) {
+                        initPlayer(streamUrl);
+                    }
+                }, 2500);
+            }
+        }
     }
 
     @Override
@@ -2748,6 +2821,7 @@ public class NativePlayerActivity extends AppCompatActivity {
         state.putInt("orientationMode", orientationMode);
         state.putString("lastUsedKey", lastUsedKey);
         state.putString("visitedProgress", new JSONArray(visitedProgress.values()).toString());
+        state.putLong("totalPlayedMs", totalPlayedMs);
         super.onSaveInstanceState(state);
     }
 
@@ -2782,17 +2856,21 @@ public class NativePlayerActivity extends AppCompatActivity {
             || (durationMs > 0 && durationMs - positionMs < 30000);
         result.putExtra("completed", completed);
         result.putExtra("mediaId", mediaId);
+        // Actualiser totalPlayedMs et playedMsByMedia via playMeter.flush() avant de copier les compteurs.
+        attachStats(result);
         if (mediaId != null) {
             try {
                 JSONObject progress = new JSONObject();
                 progress.put("mediaId", mediaId); progress.put("positionMs", positionMs);
                 progress.put("durationMs", durationMs); progress.put("completed", completed);
+                Long mediaPlayed = playedMsByMedia.get(mediaId);
+                progress.put("playedMs", mediaPlayed != null ? mediaPlayed : 0L);
                 visitedProgress.put(mediaId, progress);
                 result.putExtra("progress", new JSONArray(visitedProgress.values()).toString());
             } catch (Exception ignored) {}
         }
         result.putExtra("positionMs", positionMs); result.putExtra("durationMs", durationMs);
-        attachStats(result);
+        result.putExtra("playedMs", totalPlayedMs);
         setResult(RESULT_OK, result);
     }
 

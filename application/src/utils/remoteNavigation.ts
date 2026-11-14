@@ -6,9 +6,9 @@ export function remoteTargets(root: ParentNode): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(el => {
     if (!el.matches(controls) || el.matches(':disabled, [aria-disabled="true"], [role="tabpanel"]') || el.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
     if (el.tabIndex < 0 && !el.matches('[role="tab"], [role^="menuitem"]')) return false;
-    const rect = el.getBoundingClientRect();
+    const rect = el.getBoundingClientRect?.();
     const style = getComputedStyle(el);
-    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    return (rect?.width ?? 0) > 0 && (rect?.height ?? 0) > 0 && style.display !== 'none' && style.visibility !== 'hidden';
   });
 }
 
@@ -36,6 +36,8 @@ export function remoteNeighbor(current: HTMLElement, targets: HTMLElement[], key
 
 export function focusRemote(el: HTMLElement): void {
   el.focus({ preventScroll: true });
+  // Le rail fixe se déploie sur place : préserver la rangée de contenu derrière lui.
+  if (el.closest('[data-tv-navigation]')) return;
   if (document.documentElement.classList.contains('tv-mode') && el.closest('[data-main-navigation]')) {
     document.documentElement.classList.remove('tv-chrome-hidden');
     if (document.scrollingElement) document.scrollingElement.scrollTop = 0;

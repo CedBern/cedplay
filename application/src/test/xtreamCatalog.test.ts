@@ -41,6 +41,12 @@ describe('Catalogues Xtream', () => {
     expect(getXtreamAccount(playlist)).toEqual({ server: 'https://provider.test', username: 'user', password: 'password' });
     expect(getXtreamAccount({ ...playlist, channels: [...playlist.channels, { id: '2', name: 'B', url: 'https://provider.test/live/other/password/2.ts' }] })).toBeNull();
   });
+  it('ne prend pas une liste publique pour un abonnement à cause de quelques adresses en /live/', () => {
+    const free = Array.from({ length: 20 }, (_, i) => ({ id: `f${i}`, name: `Libre ${i}`, url: `https://cdn${i}.test/chaine/index.m3u8` }));
+    const lookalike = [31, 49, 13].map(n => ({ id: `s${n}`, name: `S ${n}`, url: `http://tv.streambox.test/live/demo/demo/${n}.m3u8` }));
+    const playlist: PlaylistInfo = { id: 'cedplay-public-v1', name: 'Chaînes gratuites', groups: [], channels: [...free, ...lookalike] };
+    expect(getXtreamAccount(playlist)).toBeNull();
+  });
   it('utilise HTTP natif sur Android, masque les erreurs privées et ignore les retours annulés', async () => {
     mocks.native = true;
     mocks.get.mockResolvedValue({ status: 200, data: [{ category_id: '1' }] });
@@ -93,4 +99,14 @@ describe('Catalogues Xtream', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+});
+
+ it.each([1, 2, 3])('inférence : exige une majorité stricte (%i flux Xtream sur quatre)', count => {
+  const channels = Array.from({ length: 4 }, (_, i) => ({ id: String(i), name: 'Test', url: i < count ? `https://provider.test/live/user/password/${i}.ts` : `https://free.test/${i}.m3u8` }));
+  const result = getXtreamAccount({ id: 'mixed', name: 'Mixte', groups: [], channels });
+  expect(result).toEqual(count > 2 ? { server: 'https://provider.test', username: 'user', password: 'password' } : null);
+});
+it('un compte explicitement enregistré reste prioritaire dans une liste mixte', () => {
+  localStorage.setItem('xtream_account_linked', JSON.stringify(account));
+  expect(getXtreamAccount({ id: 'linked', name: 'Mixte', groups: [], channels: [{ id: 'free', name: 'Libre', url: 'https://free.test/live.m3u8' }] })).toEqual(account);
 });

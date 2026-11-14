@@ -1,4 +1,4 @@
-import { Bookmark, BookmarkCheck, RefreshCw } from 'lucide-react';
+import { Bookmark, BookmarkCheck, HardDrive, ListVideo, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebounce } from '@/hooks/useDebounce';
 import { Button } from '@/components/ui/button';
@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { TvVodScreen, storedVodPosition } from '@/components/TvVodScreen';
 import { TvSeriesFiche } from '@/components/TvSeriesFiche';
+import { TvStarter, type TvStarterAction } from '@/components/TvStarter';
 import { VodPoster } from '@/components/VodPoster';
 import type { PlaylistInfo } from '@/types/channel';
 import { NativePlayerBridge } from '@/utils/nativePlayer';
@@ -22,6 +23,7 @@ import { externalSeeds, externalSummary } from '@/utils/externalWatch';
 import { ExternalWatchDialog } from '@/components/ExternalWatchDialog';
 import { normalizeTitle, normalizeForCompare } from '@/utils/titleNormalize';
 import { normalizeWatchRegion } from '@/data/watchRegions';
+import { maybeScrobbleTrakt } from '@/utils/trakt';
 import { TmdbPanel } from '@/components/TmdbPanel';
 import { SubtitleSelector, type ReadySubtitle } from '@/components/SubtitleSelector';
 import { PlatformLogo } from '@/components/PlatformLogo';
@@ -33,12 +35,47 @@ import { toast } from 'sonner';
 
 import { categoryCatalogCache } from '@/utils/vodPosterCache';
 
-function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { url: string; title: string; mediaId: string; restart: boolean; subtitleVtt?: string; onEnded?: () => void }) {
+function WebVodPlayer({
+  url,
+  title,
+  mediaId,
+  restart,
+  subtitleVtt,
+  onEnded,
+  name,
+  mediaKind,
+  episodeName,
+  season,
+  episode,
+  tmdbId,
+  year,
+}: {
+  url: string;
+  title: string;
+  mediaId: string;
+  restart: boolean;
+  subtitleVtt?: string | undefined;
+  onEnded?: (() => void) | undefined;
+  name?: string | undefined;
+  mediaKind?: 'movie' | 'series' | undefined;
+  episodeName?: string | undefined;
+  season?: number | undefined;
+  episode?: number | undefined;
+  tmdbId?: number | undefined;
+  year?: string | undefined;
+}) {
   const ref = useRef<HTMLVideoElement>(null);
   // Référence mutable : le callback d'enchaînement ne doit pas relancer l'effet
   // d'attachement du flux (il ne dépend que de l'URL et du média).
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
+  const titleRef = useRef(title);
+  titleRef.current = title;
+  const metaRef = useRef({ name, mediaKind, episodeName, season, episode, tmdbId, year });
+  metaRef.current = { name, mediaKind, episodeName, season, episode, tmdbId, year };
+  // Session de scrobble stable et date de début de lecture
+  const sessionIdRef = useRef(`web:${mediaId}:${Date.now()}`);
+  const startedAtRef = useRef(Date.now());
   useEffect(() => {
     const video = ref.current;
     if (!video || !subtitleVtt) return;
@@ -61,13 +98,66 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { 
     if (!video) return;
     let cancelled = false;
     let engine: { destroy(): void } | undefined;
-    const save = () => {
+
+    let watchedMs = 0;
+    let lastPlayingAt: number | null = null;
+    const flushPlaying = () => {
+      if (lastPlayingAt !== null) {
+        const now = performance.now();
+        watchedMs += Math.max(0, now - lastPlayingAt);
+        // Ne continue la mesure que si le flux produit activement des images (ni pause, ni fin, données suffisantes)
+        lastPlayingAt = (!video.paused && !video.ended && video.readyState >= 3) ? now : null;
+      }
+    };
+    const onPlaying = () => {
+      if (lastPlayingAt !== null) {
+        watchedMs += Math.max(0, performance.now() - lastPlayingAt);
+      }
+      lastPlayingAt = performance.now();
+    };
+    const onStopOrBuffering = () => {
+      if (lastPlayingAt !== null) {
+        watchedMs += Math.max(0, performance.now() - lastPlayingAt);
+        lastPlayingAt = null;
+      }
+    };
+
+    const save = (isClosed = false) => {
+      flushPlaying();
+      // Seul l'événement DOM 'playing' atteste de la lecture active : ne jamais redémarrer le compteur ici
+      // pendant les périodes d'attente/chargement (où video.paused reste faux).
       const position = video.currentTime * 1000, duration = Number.isFinite(video.duration) ? video.duration * 1000 : 0;
       saveVodProgress(mediaId, position, duration);
       void updateVodHistoryProgress(mediaId, position, duration, video.ended).catch(() => {});
+      const m = metaRef.current;
+      const isSeries = m.mediaKind === 'series' || mediaId.includes(':series:');
+      const workName = m.name || (isSeries ? undefined : titleRef.current) || titleRef.current;
+      const effectiveWatchedMs = video.ended ? Math.max(5000, Math.round(watchedMs)) : Math.round(watchedMs);
+
+      void maybeScrobbleTrakt(
+        {
+          channelId: `vod:${mediaId}`,
+          name: workName,
+          mediaKind: isSeries ? 'series' : 'movie',
+          ...(isSeries ? { episodeName: m.episodeName || titleRef.current } : {}),
+          ...(m.season !== undefined ? { season: m.season } : {}),
+          ...(m.episode !== undefined ? { episode: m.episode } : {}),
+          ...(m.tmdbId ? { tmdbId: m.tmdbId } : {}),
+          ...(m.year ? { year: m.year } : {}),
+          ts: startedAtRef.current,
+        },
+        position,
+        duration,
+        video.ended,
+        StorageManager.getCachedSettings(),
+        sessionIdRef.current,
+        undefined,
+        isClosed,
+        effectiveWatchedMs,
+      ).catch(() => {});
     };
-    const ended = () => { save(); onEndedRef.current?.(); };
-    const stop = () => { save(); cancelled = true; engine?.destroy(); video.pause(); video.removeAttribute('src'); video.load(); };
+    const ended = () => { onStopOrBuffering(); save(false); onEndedRef.current?.(); };
+    const stop = () => { onStopOrBuffering(); save(true); cancelled = true; engine?.destroy(); video.pause(); video.removeAttribute('src'); video.load(); };
     const unsubscribe = onPlaybackDelegated(stop);
     // Reprise fiable en HLS : duration vaut Infinity tant que les segments ne sont
     // pas indexés — on réessaie à chaque durationchange jusqu'à ce qu'elle soit connue.
@@ -78,11 +168,18 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { 
       seekTarget = null;
     };
     const metadata = () => { seekTarget = restart ? 0 : readVodProgress(mediaId)?.positionMs || 0; applyPosition(); };
+    const onPause = () => { onStopOrBuffering(); save(false); };
     video.addEventListener('loadedmetadata', metadata);
     video.addEventListener('durationchange', applyPosition);
-    video.addEventListener('pause', save);
+    video.addEventListener('pause', onPause);
     video.addEventListener('ended', ended);
-    const timer = window.setInterval(save, 15_000);
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('waiting', onStopOrBuffering);
+    video.addEventListener('seeking', onStopOrBuffering);
+    video.addEventListener('stalled', onStopOrBuffering);
+    video.addEventListener('emptied', onStopOrBuffering);
+    video.addEventListener('error', onStopOrBuffering);
+    const timer = window.setInterval(() => { save(false); }, 15_000);
     const detachUsage = attachUsageMeter(video, 'vod');
     const start = async () => {
       const playbackUrl = getPlaybackUrl(url);
@@ -95,7 +192,22 @@ function WebVodPlayer({ url, title, mediaId, restart, subtitleVtt, onEnded }: { 
       void video.play().catch(() => {});
     };
     void start().catch(() => toast.error('Lecture indisponible dans ce navigateur.'));
-    return () => { clearInterval(timer); detachUsage(); unsubscribe(); video.removeEventListener('loadedmetadata', metadata); video.removeEventListener('durationchange', applyPosition); video.removeEventListener('pause', save); video.removeEventListener('ended', ended); stop(); };
+    return () => {
+      clearInterval(timer);
+      detachUsage();
+      unsubscribe();
+      video.removeEventListener('loadedmetadata', metadata);
+      video.removeEventListener('durationchange', applyPosition);
+      video.removeEventListener('pause', onPause);
+      video.removeEventListener('ended', ended);
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('waiting', onStopOrBuffering);
+      video.removeEventListener('seeking', onStopOrBuffering);
+      video.removeEventListener('stalled', onStopOrBuffering);
+      video.removeEventListener('emptied', onStopOrBuffering);
+      video.removeEventListener('error', onStopOrBuffering);
+      stop();
+    };
   }, [url, mediaId, restart]);
   return <div className="space-y-2"><p>{title}</p><video ref={ref} controls playsInline className="w-full max-h-[65vh] bg-black" onError={() => toast.error('Ce format ne peut pas être lu ici. Essaie le lecteur Android.')} /></div>;
 }
@@ -121,13 +233,16 @@ export interface VodLibraryProps {
   onSearch?: (() => void) | undefined;
   /** TV, films : ouvrir la bibliothèque USB/SD depuis la colonne de gauche. */
   onShowLocal?: (() => void) | undefined;
+  /** TV, liste sans abonnement : ouvrir la connexion Xtream depuis l'écran vide. */
+  onConnect?: (() => void) | undefined;
   /** Contrôle parental actif : les catégories adultes du catalogue sont masquées. */
   parentalEnabled?: boolean | undefined;
   /** Code parental saisi pour la session. */
   parentalUnlocked?: boolean | undefined;
+  onCloseDetails?: (() => void) | undefined;
 }
 
-export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResumeHandled, tvMode = false, onSearch, onShowLocal, parentalEnabled = false, parentalUnlocked = false }: VodLibraryProps) {
+export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResumeHandled, tvMode = false, onSearch, onShowLocal, onConnect, parentalEnabled = false, parentalUnlocked = false, onCloseDetails }: VodLibraryProps) {
   const account = useMemo(() => getXtreamAccount(playlist), [playlist]);
   const [categories, setCategories] = useState<CatalogCategory[]>([]);
   // Verdict du filtre parental : « idle »/« loading » = catégories pas encore
@@ -152,7 +267,20 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   const [season, setSeason] = useState('');
   const [subtitleEpisodeId, setSubtitleEpisodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [playing, setPlaying] = useState<{ url: string; title: string; mediaId: string; restart: boolean; subtitleVtt?: string } | null>(null);
+  const [playing, setPlaying] = useState<{
+    url: string;
+    title: string;
+    mediaId: string;
+    restart: boolean;
+    subtitleVtt?: string | undefined;
+    name?: string | undefined;
+    mediaKind?: 'movie' | 'series' | undefined;
+    episodeName?: string | undefined;
+    season?: number | undefined;
+    episode?: number | undefined;
+    tmdbId?: number | undefined;
+    year?: string | undefined;
+  } | null>(null);
   // Enchaînement web : prochain épisode de la saison, proposé à la fin de la
   // lecture (miroir web du zapContext natif). ctx reporte l'identité de la
   // série dans l'historique même après fermeture de la fiche.
@@ -205,7 +333,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   useEffect(() => {
     let cancelled = false;
     void getVodWatchlistFromDB().then(wl => { if (!cancelled) setWatchlist(wl); }).catch(() => {});
-    const update = () => { void getVodWatchlistFromDB().then(wl => { if (!cancelled) setWatchlist(wl); }); };
+    const update = () => { void getVodWatchlistFromDB().then(wl => { if (!cancelled) setWatchlist(wl); }).catch(() => {}); };
     window.addEventListener('vod-watchlist-updated', update);
     return () => { cancelled = true; window.removeEventListener('vod-watchlist-updated', update); };
   }, []);
@@ -384,12 +512,15 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
   // Découvrir affiche « Pour toi » sans recharger le catalogue : on y mémorise le dernier calcul.
   useEffect(() => {
     if (!recsWanted || visibleAllMovies.length === 0) return;
-    saveForYouSnapshot(playlist.id, recommendations.map(({ item, reasons }) => ({
+    saveForYouSnapshot(playlist.id, recommendations.map(({ item, reasons, sourceId }) => ({
       id: item.id,
       name: item.name,
+      availability: 'library',
+      ...(item.tmdbId ? { tmdbId: item.tmdbId } : {}),
       ...(item.poster ? { poster: item.poster } : {}),
       ...(item.categoryId ? { categoryId: item.categoryId } : {}),
       ...(reasons[0] ? { reason: reasons[0] } : {}),
+      ...(sourceId ? { sourceId } : {}),
     })), kind);
   }, [recsWanted, visibleAllMovies.length, recommendations, playlist.id, kind]);
   // TV : première justification affichée dans la fiche éclair de l'affiche surlignée.
@@ -578,6 +709,18 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       const seriesRef = ctx || (selected ? { name: selected.name, poster: selected.poster, seriesId: selected.id, categoryId: selected.categoryId } : undefined);
       const entryName = kind === 'series' && seriesRef?.name ? seriesRef.name : title;
       const entryYear = normalizeTitle(entryName).year;
+      const entryTmdbId = selected?.tmdbId || details?.tmdbId;
+
+      // Prochain épisode de la saison (chemin natif et web partagent ce calcul).
+      const seasonEpisodes = (kind === 'series' && details?.episodes)
+        ? details.episodes.filter(e => e.season === season && e.extension)
+        : [];
+      const episodeIdx = seasonEpisodes.findIndex(e => e.id === id);
+      const currentEpisode = kind === 'series' && episodeIdx >= 0 ? seasonEpisodes[episodeIdx] : undefined;
+      const parsedSeason = parseInt(season, 10);
+      const currentSeasonNum = kind === 'series' ? (Number.isNaN(parsedSeason) ? (currentEpisode?.season ? parseInt(currentEpisode.season, 10) || undefined : undefined) : parsedSeason) : undefined;
+      const currentEpisodeNum = currentEpisode?.number;
+
       await pushPlayHistory({
         channelId: `vod:${playlist.id}:${kind}:${id}`,
         ts: Date.now(),
@@ -588,12 +731,10 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
         ...(kind === 'series' && seriesRef?.seriesId ? { seriesId: seriesRef.seriesId } : {}),
         ...(seriesRef?.categoryId ? { categoryId: seriesRef.categoryId } : {}),
         ...(entryYear ? { year: entryYear } : {}),
+        ...(entryTmdbId ? { tmdbId: entryTmdbId } : {}),
+        ...(currentSeasonNum !== undefined ? { season: currentSeasonNum } : {}),
+        ...(currentEpisodeNum !== undefined ? { episode: currentEpisodeNum } : {}),
       }).catch(() => { /* l'historique ne doit jamais bloquer la lecture */ });
-      // Prochain épisode de la saison (chemin natif et web partagent ce calcul).
-      const seasonEpisodes = (kind === 'series' && details?.episodes)
-        ? details.episodes.filter(e => e.season === season && e.extension)
-        : [];
-      const episodeIdx = seasonEpisodes.findIndex(e => e.id === id);
       const nextEpisode = (kind === 'series' && episodeIdx >= 0 && episodeIdx + 1 < seasonEpisodes.length)
         ? seasonEpisodes[episodeIdx + 1]
         : undefined;
@@ -609,7 +750,20 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           titles: seasonEpisodes.map(e => `${e.number}. ${e.name}`),
           ids: seasonEpisodes.map(e => mediaKey(e.id)),
           index: episodeIdx,
-          history: seasonEpisodes.map(e => ({ mediaId: mediaKey(e.id), name: selected?.name || e.name, seriesId: selected?.id, poster: selected?.poster, episodeName: e.name })),
+          history: seasonEpisodes.map(e => {
+            const epSeasonNum = parseInt(e.season, 10) || undefined;
+            return {
+              mediaId: mediaKey(e.id),
+              name: selected?.name || e.name,
+              seriesId: selected?.id,
+              poster: selected?.poster,
+              episodeName: e.name,
+              ...(epSeasonNum !== undefined ? { season: epSeasonNum } : {}),
+              ...(e.number !== undefined ? { episode: e.number } : {}),
+              ...(entryTmdbId ? { tmdbId: entryTmdbId } : {}),
+              ...(entryYear ? { year: entryYear } : {}),
+            };
+          }),
         } : undefined;
         // Suivre l'épisode joué pour la recherche de sous-titres (saison + épisode).
         if (subOpt || zapContext) {
@@ -624,6 +778,13 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           title,
           mediaId: key,
           restart,
+          name: entryName,
+          mediaKind: kind,
+          ...(kind === 'series' ? { episodeName: title } : {}),
+          ...(currentSeasonNum !== undefined ? { season: currentSeasonNum } : {}),
+          ...(currentEpisodeNum !== undefined ? { episode: currentEpisodeNum } : {}),
+          ...(entryTmdbId ? { tmdbId: entryTmdbId } : {}),
+          ...(entryYear ? { year: entryYear } : {}),
           ...(currentSub?.vttContent && (kind === 'movie' || subtitleEpisodeId === id) ? { subtitleVtt: currentSub.vttContent } : {}),
         });
         setQueueNext(nextEpisode ? {
@@ -769,15 +930,28 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
       ...(item.rating ? { rating: item.rating } : {}),
       ...(item.categoryId ? { categoryId: item.categoryId } : {}),
       ...(item.extension ? { extension: item.extension } : {}),
+      ...(item.tmdbId ? { tmdbId: item.tmdbId } : {}),
     });
     toast.success(added ? 'Ajouté à Ma Liste' : 'Retiré de Ma Liste');
   }, [kind, playlist.id]);
+  if (!account && tvMode) {
+    const actions: TvStarterAction[] = [
+      ...(onConnect ? [{ key: 'connect', label: 'Connecter un abonnement', hint: 'Serveur, identifiant et mot de passe de ton fournisseur', Icon: ListVideo, onSelect: onConnect }] : []),
+      ...(onShowLocal ? [{ key: 'local', label: 'Lire une clé USB ou une carte SD', hint: 'Tes propres films, sans abonnement', Icon: HardDrive, onSelect: onShowLocal }] : []),
+    ];
+    return <TvStarter
+      eyebrow="Pas encore de catalogue"
+      title={kind === 'movie' ? 'Les films viennent de ton abonnement' : 'Les séries viennent de ton abonnement'}
+      text={`Aucun catalogue de films ou séries associé à la liste « ${playlist.name} ». Connecte un abonnement Xtream pour voir ici ${kind === 'movie' ? 'ses films' : 'ses séries'}.`}
+      actions={actions}
+    />;
+  }
   if (!account) return <section className="space-y-3 text-white"><h2 className="text-xl font-semibold">{kind === 'movie' ? 'Films' : 'Séries'}</h2><p className="text-neutral-300">Pour accéder au catalogue, importe ta liste depuis « Ajouter » → « Connexion Xtream ». Les identifiants doivent correspondre à la liste active.</p></section>;
   // Fiche série TV : détails en haut, puis saison / épisodes / options pilotés par
   // TvSeriesFiche (une seule règle Haut-Bas-Gauche-Droite). Le reste de la fiche
   // partagée garde sa mise en page mobile.
   const tvSeriesFiche = tvMode && kind === 'series' && !shownTitle;
-  const ficheDialog = <Dialog open={!!selected} onOpenChange={open => { if (!open) setSelected(null); }}><DialogContent
+  const ficheDialog = <Dialog open={!!selected} onOpenChange={open => { if (!open) { setSelected(null); onCloseDetails?.(); } }}><DialogContent
     onOpenAutoFocus={e => {
       // Mode TV : le focus entre par le bouton principal (lecture), pas par la croix de
       // fermeture. S'il n'existe pas encore (épisodes en cours de chargement), le
@@ -874,6 +1048,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
           variant="outline"
           size="sm"
           onClick={async () => {
+            const wlTmdbId = selected.tmdbId || details?.tmdbId;
             const added = await toggleVodWatchlist({
               id: selected.id,
               name: selected.name,
@@ -883,6 +1058,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
               ...(selected.rating ? { rating: selected.rating } : {}),
               ...(selected.categoryId ? { categoryId: selected.categoryId } : {}),
               ...(selected.extension ? { extension: selected.extension } : {}),
+              ...(wlTmdbId ? { tmdbId: wlTmdbId } : {}),
             });
             toast.success(added ? 'Ajouté à Ma Liste' : 'Retiré de Ma Liste');
           }}
@@ -951,7 +1127,7 @@ export function VodLibrary({ playlist, kind, tmdbApiKey, resumeRequest, onResume
     </div>}
     </>}
   </DialogContent></Dialog>;
-  const playingDialog = <Dialog open={!!playing} onOpenChange={open => { if (!open) { setPlaying(null); setQueueNext(null); setAutoNextCountdown(null); } }}><DialogContent className="bg-neutral-950 text-white sm:max-w-4xl"><DialogHeader><DialogTitle>Lecture</DialogTitle><DialogDescription>Pause, déplacement et reprise de lecture.</DialogDescription></DialogHeader>{playing && <div className="relative">
+  const playingDialog = <Dialog open={!!playing} onOpenChange={open => { if (!open) { setPlaying(null); setQueueNext(null); setAutoNextCountdown(null); onCloseDetails?.(); } }}><DialogContent className="bg-neutral-950 text-white sm:max-w-4xl"><DialogHeader><DialogTitle>Lecture</DialogTitle><DialogDescription>Pause, déplacement et reprise de lecture.</DialogDescription></DialogHeader>{playing && <div className="relative">
     {autoNextCountdown !== null && queueNext && <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center" data-testid="next-episode-overlay">
       <p className="text-sm">Épisode suivant : <span className="font-semibold">{queueNext.title}</span> dans {autoNextCountdown} s</p>
       <div className="flex gap-2">

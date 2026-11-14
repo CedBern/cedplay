@@ -6,12 +6,33 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { getActiveUserAgent } from '@/utils/userAgent';
 import { assertImportSize, decodeImportText } from '@/utils/textImport';
+import { desktopHttp, isDesktopRuntime } from '@/utils/desktopBridge';
 
 export class CORSProxy {
   static async fetchWithProxy(url: string, options: RequestInit = {}): Promise<string> {
     let target: URL;
     try { target = new URL(url); } catch { throw new Error('Adresse de playlist invalide.'); }
     if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Utilisez une adresse HTTP ou HTTPS.');
+    if (isDesktopRuntime()) {
+      try {
+        const response = await desktopHttp<string>({
+          url: target.href,
+          method: (options.method as 'GET' | 'HEAD') ?? 'GET',
+          headers: { 'User-Agent': getActiveUserAgent() },
+          responseType: 'text',
+          timeoutMs: 60000,
+        });
+        if (response.status < 200 || response.status >= 300) {
+          throw new Error(`Import impossible : HTTP ${response.status}. Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.`);
+        }
+        const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+        assertImportSize(text.length, 'playlist');
+        return text;
+      } catch (err) {
+        if (err instanceof Error && (err.message.startsWith('Import impossible : HTTP') || err.message.startsWith('Liste trop volumineuse'))) throw err;
+        throw new Error('Import impossible (connexion ou accès). Téléchargez puis importez le fichier M3U. Aucun relais public utilisé.');
+      }
+    }
     if (Capacitor.isNativePlatform()) {
       try {
         // request() et non get() : l'implémentation Android de get() force GET,

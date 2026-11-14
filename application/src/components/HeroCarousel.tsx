@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Play } from 'lucide-react';
+import { Info, Play } from 'lucide-react';
 
 export interface HeroItem {
   key: string;
@@ -18,18 +18,18 @@ export interface HeroItem {
   progress?: number | null | undefined;
   actionLabel: string;
   onPlay: () => void;
+  /** Action secondaire facultative : ouvrir la fiche du titre. */
+  detailsLabel?: string | undefined;
+  onDetails?: (() => void) | undefined;
 }
 
-const AUTO_ADVANCE_MS = 7000;
-
 /**
- * Bandeau d'accueil plein cadre : images en fondu vers le fond, défilement
- * aimanté au doigt, points de pagination et avance automatique douce.
+ * Bandeau d'accueil du téléphone : affiche en fondu vers le fond, défilement aimanté
+ * au doigt et points de pagination. Il ne tourne jamais seul : rien ne bouge pendant qu'on lit.
  */
 export function HeroCarousel({ items }: { items: HeroItem[] }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
 
   // Diapositive visible d'après la position de défilement.
   useEffect(() => {
@@ -44,15 +44,6 @@ export function HeroCarousel({ items }: { items: HeroItem[] }) {
     return () => { el.removeEventListener('scroll', onScroll); cancelAnimationFrame(frame); };
   }, []);
 
-  // Avance automatique, suspendue au toucher et si l'utilisateur limite les animations.
-  useEffect(() => {
-    if (items.length < 2 || paused) return;
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-    const id = window.setTimeout(() => goTo((index + 1) % items.length), AUTO_ADVANCE_MS);
-    return () => window.clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, paused, items.length]);
-
   const goTo = (i: number) => {
     const el = scroller.current;
     if (!el) return;
@@ -60,19 +51,16 @@ export function HeroCarousel({ items }: { items: HeroItem[] }) {
   };
 
   if (!items.length) return null;
-  return <section aria-roledescription="carrousel" aria-label="À la une" className="relative -mx-2 -mt-[68px] sm:mx-0 sm:mt-0 sm:overflow-hidden sm:rounded-[28px]">
+  return <section aria-roledescription="carrousel" aria-label="À la une" className="relative overflow-hidden rounded-2xl sm:rounded-[28px]">
     <div
       ref={scroller}
       className="hero-scroller flex snap-x snap-mandatory overflow-x-auto"
-      onPointerDown={() => setPaused(true)}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
     >
       {items.map((item, i) => <article
         key={item.key}
         aria-roledescription="diapositive"
         aria-label={`${i + 1} sur ${items.length} : ${item.title}`}
-        className="relative h-[min(68vh,560px)] min-h-[420px] w-full shrink-0 snap-center overflow-hidden sm:h-[420px] sm:min-h-0"
+        className="relative h-[372px] w-full shrink-0 snap-center overflow-hidden sm:h-[420px]"
       >
         {/* Fond : affiche plein cadre, ou halo coloré tiré du logo de la chaîne. */}
         {item.image
@@ -98,12 +86,19 @@ export function HeroCarousel({ items }: { items: HeroItem[] }) {
           {typeof item.progress === 'number' && <div className="mt-3 h-0.5 w-40 overflow-hidden rounded-full bg-foreground/20"><div className="h-full bg-primary" style={{ width: `${item.progress}%` }} /></div>}
           <button
             type="button"
-            {...(i === 0 ? { 'data-remote-start': true } : {})}
             onClick={item.onPlay}
             className="press mt-5 inline-flex min-h-12 items-center gap-2.5 rounded-full bg-foreground px-6 text-[15px] font-semibold text-background transition-colors hover:bg-foreground/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             <Play aria-hidden="true" className="h-4 w-4 fill-current" />{item.actionLabel}
           </button>
+          {item.onDetails && <button
+            type="button"
+            aria-label={item.detailsLabel ?? `Fiche de ${item.title}`}
+            onClick={item.onDetails}
+            className="press ml-3 mt-5 inline-flex h-12 w-12 items-center justify-center rounded-full border border-foreground/30 align-top text-foreground transition-colors hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            <Info aria-hidden="true" className="h-5 w-5" />
+          </button>}
         </div>
       </article>)}
     </div>
@@ -113,7 +108,7 @@ export function HeroCarousel({ items }: { items: HeroItem[] }) {
         type="button"
         aria-label={`Afficher ${item.title}`}
         aria-current={index === i}
-        onClick={() => { setPaused(true); goTo(i); }}
+        onClick={() => goTo(i)}
         className={`h-1.5 rounded-full transition-all duration-500 ease-out ${index === i ? 'w-6 bg-foreground' : 'w-1.5 bg-foreground/35 hover:bg-foreground/60'}`}
       />)}
     </div>}

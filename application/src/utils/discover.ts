@@ -7,13 +7,13 @@ import type { DiscoverFamily } from '@/utils/usageJournal';
  * Fonctions pures ; l'écran se contente d'afficher le résultat.
  */
 export type DiscoverFilter = 'all' | 'movies' | 'series' | 'podcasts';
-export type DiscoverRowId = 'resume' | 'live-now' | 'recent-channels' | 'for-you' | 'my-list' | 'new-episodes' | 'to-listen';
+export type DiscoverRowId = 'resume' | 'resume-podcasts' | 'live-now' | 'recent-channels' | 'for-you' | 'my-list' | 'new-episodes' | 'to-listen' | 'next-series' | 'because-watched' | 'platforms' | 'bodlav-documentaries' | 'tv5-documentaries' | 'imago-documentaries';
 
-/** Rangées de chaque famille, dans leur ordre interne. Reprendre n'appartient à aucune famille. */
+/** Rangées de chaque famille, dans leur ordre interne. Reprendre fait partie de Vidéo (et de Podcasts si filtré). */
 export const FAMILY_ROWS: Record<DiscoverFamily, DiscoverRowId[]> = {
-  direct: ['live-now', 'recent-channels'],
-  video: ['for-you', 'my-list'],
-  podcasts: ['new-episodes', 'to-listen'],
+  direct: ['recent-channels', 'live-now'],
+  video: ['resume', 'next-series', 'because-watched', 'for-you', 'my-list', 'bodlav-documentaries', 'tv5-documentaries', 'imago-documentaries', 'platforms'],
+  podcasts: ['resume-podcasts', 'new-episodes', 'to-listen'],
 };
 
 const FILTER_FAMILIES: Record<DiscoverFilter, DiscoverFamily[]> = {
@@ -35,24 +35,33 @@ export const NEW_EPISODE_WINDOW_MS = 14 * 24 * 3600 * 1000;
 export const RESUME_THRESHOLD_MS = 60_000;
 
 /**
- * Ordre des rangées : Reprendre en tête, puis la 1re rangée non vide de chaque famille
- * (dans l'ordre des familles), puis les autres rangées regroupées par famille.
- * Les rangées vides disparaissent ; Direct n'existe que dans Tout.
+ * Ordre des rangées : Reprendre toujours en tête quand un titre est en cours, puis
+ * Chaînes récentes et Direct, les films et séries (Pour toi, Ma liste), et les podcasts
+ * en fin de page. Les rangées vides disparaissent ; Direct n'existe que dans Tout.
  */
 export function orderRows(nonEmpty: ReadonlySet<DiscoverRowId>, familyOrder: readonly DiscoverFamily[], filter: DiscoverFilter): DiscoverRowId[] {
   const allowed = new Set(FILTER_FAMILIES[filter]);
-  const families = familyOrder.filter(f => allowed.has(f));
+  // Dans Tout : Direct d'abord, puis Vidéo (films et séries), puis Podcasts en dernier
+  const families = filter === 'all'
+    ? (['direct', 'video', 'podcasts'] as const)
+    : familyOrder.filter(f => allowed.has(f));
+
   const rows: DiscoverRowId[] = [];
-  if (nonEmpty.has('resume')) rows.push('resume');
-  const rest: DiscoverRowId[] = [];
+
+  // Reprendre avant de découvrir : ce qui est commencé passe devant tout le reste,
+  // dans Tout comme dans l'onglet Podcasts quand un épisode est en cours.
+  if ((filter === 'all' || filter === 'podcasts') && nonEmpty.has('resume')) {
+    rows.push('resume');
+  }
+
   for (const family of families) {
-    const present = FAMILY_ROWS[family].filter(r => nonEmpty.has(r));
-    if (present.length) {
-      rows.push(present[0]);
-      rest.push(...present.slice(1));
+    const present = FAMILY_ROWS[family].filter(r => nonEmpty.has(r) && (!r.endsWith('-documentaries') || filter === 'all' || filter === 'movies'));
+    for (const r of present) {
+      if (!rows.includes(r)) rows.push(r);
     }
   }
-  return [...rows, ...rest];
+
+  return rows;
 }
 
 export type ResumeItem =
@@ -61,7 +70,8 @@ export type ResumeItem =
 
 /**
  * Reprendre : films et épisodes commencés (au moins 1 min), non terminés, non retirés,
- * et épisodes de podcast en cours, du plus récent au plus ancien.
+ * et podcasts en cours uniquement pour le filtre Podcasts.
+ * Dans Tout, la reprise audio utilise une autre rangée après les vidéos.
  */
 export function resumeItems(
   vodHistory: PlayHistoryEntry[],
@@ -69,7 +79,7 @@ export function resumeItems(
   filter: DiscoverFilter,
   isHidden: (entry: PlayHistoryEntry) => boolean = () => false,
 ): ResumeItem[] {
-  const items: ResumeItem[] = [];
+  const vodItems: ResumeItem[] = [];
   if (filter !== 'podcasts') {
     const seen = new Set<string>();
     for (const entry of vodHistory) {
@@ -81,16 +91,23 @@ export function resumeItems(
       if (filter === 'series' && kind !== 'series') continue;
       if (isHidden(entry)) continue;
       seen.add(entry.channelId);
-      items.push({ kind: 'vod', key: entry.channelId, ts: entry.ts, entry });
+      vodItems.push({ kind: 'vod', key: entry.channelId, ts: entry.ts, entry });
     }
   }
-  if (filter === 'all' || filter === 'podcasts') {
+  const podItems: ResumeItem[] = [];
+  if (filter === 'podcasts') {
     for (const p of Object.values(podcastProgress)) {
       if (p.completed || !(p.positionMs > 0) || !p.audioUrl) continue;
-      items.push({ kind: 'podcast', key: `pod:${p.episodeId}`, ts: p.updatedAt || 0, progress: p });
+      podItems.push({ kind: 'podcast', key: `pod:${p.episodeId}`, ts: p.updatedAt || 0, progress: p });
     }
   }
-  return items.sort((a, b) => b.ts - a.ts).slice(0, MAX_RESUME);
+  vodItems.sort((a, b) => b.ts - a.ts);
+  podItems.sort((a, b) => b.ts - a.ts);
+
+  if (filter === 'podcasts') {
+    return podItems.slice(0, MAX_RESUME);
+  }
+  return vodItems.slice(0, MAX_RESUME);
 }
 
 export interface EpisodeSuggestion {
@@ -164,14 +181,19 @@ export function episodesToListen(
   return out;
 }
 
-/** Recommandation « Pour toi » mémorisée par Films (le calcul complet y reste). */
+/** Recommandation « Pour toi » mémorisée par Films ou l'accueil. */
 export interface ForYouSnapshotItem {
+  sourceId?: string;
   kind?: 'movie' | 'series';
   id: string;
   name: string;
   poster?: string;
   categoryId?: string;
   reason?: string;
+  /** Disponibilité : présent dans la bibliothèque (playlist/local) ou à découvrir ailleurs (TMDB). */
+  availability?: 'library' | 'discover';
+  tmdbId?: number;
+  year?: string;
 }
 
 /** Pour toi : sans ce qui est déjà en cours ou déjà gardé dans Ma liste. */
@@ -186,6 +208,7 @@ export function vodItemId(entry: PlayHistoryEntry): string {
 }
 
 const FOR_YOU_PREFIX = 'cedplay_foryou_v1_';
+const FOR_YOU_SIG_PREFIX = 'cedplay_foryou_sig_v1_';
 
 export function readForYouSnapshot(playlistId: string, kind: 'movie' | 'series' = 'movie'): ForYouSnapshotItem[] {
   try {
@@ -195,5 +218,20 @@ export function readForYouSnapshot(playlistId: string, kind: 'movie' | 'series' 
 }
 
 export function saveForYouSnapshot(playlistId: string, items: ForYouSnapshotItem[], kind: 'movie' | 'series' = 'movie'): void {
-  try { localStorage.setItem(FOR_YOU_PREFIX + playlistId + (kind === 'series' ? '_series' : ''), JSON.stringify(items.slice(0, MAX_FOR_YOU))); } catch { /* quota */ }
+  try {
+    localStorage.setItem(FOR_YOU_PREFIX + playlistId + (kind === 'series' ? '_series' : ''), JSON.stringify(items.slice(0, MAX_FOR_YOU)));
+    window.dispatchEvent(new Event('for-you-updated'));
+  } catch { /* quota */ }
+}
+
+export function readForYouSignature(playlistId: string, kind: 'movie' | 'series' = 'movie'): string | undefined {
+  try {
+    return localStorage.getItem(FOR_YOU_SIG_PREFIX + playlistId + (kind === 'series' ? '_series' : '')) ?? undefined;
+  } catch { return undefined; }
+}
+
+export function saveForYouSignature(playlistId: string, signature: string, kind: 'movie' | 'series' = 'movie'): void {
+  try {
+    localStorage.setItem(FOR_YOU_SIG_PREFIX + playlistId + (kind === 'series' ? '_series' : ''), signature);
+  } catch { /* quota */ }
 }

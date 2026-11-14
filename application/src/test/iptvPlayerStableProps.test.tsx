@@ -19,10 +19,12 @@ vi.mock('@/utils/storage', () => {
   const settings = { theme: 'dark', autoLoadLastPlaylist: true, autoplay: false, keyboardNavigation: false, interfaceMode: 'tv' };
   return { StorageManager: { getSettings: () => settings, getCachedSettings: () => settings, loadSettingsAsync: async () => settings, getLastPlaylist: () => 'Liste test', setLastPlaylist: vi.fn() } };
 });
-vi.mock('@/utils/idb', () => ({
+vi.mock('@/utils/idb', async () => ({
+  ...await vi.importActual<typeof import('@/utils/idb')>('@/utils/idb'),
   getPlaylistsFromDB: async () => [capture.playlist], getLastChannelForPlaylist: async () => capture.channel.id,
   getMeta: async () => undefined, setMeta: vi.fn(), savePlaylistToDB: vi.fn(),
   getFavoritesFromDB: async () => [], setLastChannelForPlaylist: async () => {}, pushPlayHistory: async () => {},
+  getVodWatchlistFromDB: async () => [],
 }));
 vi.mock('@/utils/nativePlayer', async () => ({ ...await vi.importActual<typeof import('@/utils/nativePlayer')>('@/utils/nativePlayer'), NativePlayerBridge: { open: vi.fn(), isAvailable: () => false, setChannelShortcuts: vi.fn(), setPlayerOptions: vi.fn(), setHomeFavorites: vi.fn(), addWatchNext: vi.fn(), isTelevision: async () => true } }));
 vi.mock('@/components/VideoPlayer', () => ({ VideoPlayer: () => <div>Lecteur test</div> }));
@@ -38,8 +40,29 @@ import { IPTVPlayer } from '@/components/IPTVPlayer';
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   capture.props.length = 0;
   document.documentElement.classList.remove('remote-navigation', 'tv-mode');
+});
+
+it('revient aux résultats après une chaîne puis permet de fermer la recherche normalement', async () => {
+  const user = userEvent.setup();
+  render(<IPTVPlayer />);
+  await screen.findByText('Reprise test');
+  await user.click(screen.getByRole('button', { name: 'Recherche unifiée' }));
+  const input = await screen.findByRole('textbox', { name: 'Rechercher' });
+  await user.click(input);
+  await user.type(input, 'Canal test');
+  await user.click(await screen.findByRole('button', { name: /Canal test/ }));
+  await screen.findByText('Lecteur test');
+  expect(screen.queryByRole('textbox', { name: 'Rechercher' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'Chaînes' }));
+  expect(await screen.findByRole('textbox', { name: 'Rechercher' })).toHaveValue('Canal test');
+  expect(await screen.findByRole('button', { name: /Canal test/ })).toBeInTheDocument();
+  await user.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Rechercher' })).toBeNull());
+  await user.click(screen.getByRole('button', { name: 'Recherche unifiée' }));
+  expect(await screen.findByRole('textbox', { name: 'Rechercher' })).toHaveValue('');
 });
 
 it('garde les mêmes callbacks du Direct quand le parent se re-rend', async () => {
@@ -47,7 +70,7 @@ it('garde les mêmes callbacks du Direct quand le parent se re-rend', async () =
   const { rerender } = render(<IPTVPlayer />);
   await screen.findByText('Reprise test');
 
-  const tabs = within(document.querySelector<HTMLElement>('[data-app-header]')!).getByRole('tablist', { name: 'Rubriques' });
+  const tabs = within(screen.getByRole('navigation', { name: 'Navigation principale' })).getByRole('tablist', { name: 'Rubriques' });
   await user.click(within(tabs).getByRole('tab', { name: 'Direct' }));
   await screen.findByText('Direct TV test');
   expect(capture.props.length).toBeGreaterThan(0);
@@ -61,4 +84,16 @@ it('garde les mêmes callbacks du Direct quand le parent se re-rend', async () =
   for (const key of ['onPlay', 'onSearch', 'onGuide', 'onMosaic', 'onRecord', 'onEdit', 'onOrganize', 'onToggleSort'] as const) {
     expect(after[key], key).toBe(before[key]);
   }
+});
+
+it('TV : Séries sans compte permet de rejoindre USB/SD puis de revenir au catalogue', async () => {
+  const user = userEvent.setup();
+  render(<IPTVPlayer />);
+  await screen.findByText('Reprise test');
+  const tabs = within(screen.getByRole('navigation', { name: 'Navigation principale' })).getByRole('tablist', { name: 'Rubriques' });
+  await user.click(within(tabs).getByRole('tab', { name: 'Séries' }));
+  await user.click(await screen.findByRole('button', { name: /clé USB ou une carte SD/ }));
+  expect(await screen.findByText('Bibliothèque locale test')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: /Catalogue/ }));
+  expect(await screen.findByRole('heading', { name: 'Les films viennent de ton abonnement' })).toBeInTheDocument();
 });

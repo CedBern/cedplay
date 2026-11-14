@@ -18,7 +18,10 @@ import type { PlaylistInfo } from '@/types/channel';
 import { fetchXtreamLimits, saveXtreamAccount } from '@/utils/xtreamCatalog';
 import { fetchLiveChannels, saveLiveSelection } from '@/utils/xtreamLive';
 import { httpGetJson } from '@/utils/userAgent';
+import { isDesktopRuntime } from '@/utils/desktopBridge';
 import { focusRemote } from '@/utils/remoteNavigation';
+import { openPairing, type PairedCredentials } from '@/utils/tvPairing';
+import { TvPairingCard } from '@/components/TvPairingCard';
 
 interface Category {
   category_id: string;
@@ -79,10 +82,10 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
     }
   }, [open, categories.length, busy]);
 
-  const fetchCategories = async () => {
-    const cleanServer = server.trim().replace(/\/+$/, '');
-    const cleanUser = username.trim();
-    const cleanPass = password.trim();
+  const fetchCategories = async (received?: PairedCredentials) => {
+    const cleanServer = (received?.server ?? server).trim().replace(/\/+$/, '');
+    const cleanUser = (received?.username ?? username).trim();
+    const cleanPass = (received?.password ?? password).trim();
     if (!cleanServer || !cleanUser || !cleanPass) {
       toast.error('Veuillez renseigner le serveur, l’identifiant et le mot de passe.');
       return;
@@ -96,7 +99,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
         localStorage.setItem('xtream_last_user', cleanUser);
         localStorage.setItem('xtream_last_pass', cleanPass);
       } catch { /* La connexion reste possible si le stockage local est indisponible. */ }
-      const isNative = Capacitor.isNativePlatform();
+      const isNative = Capacitor.isNativePlatform() || isDesktopRuntime();
 
       const url = isNative
         ? `${cleanServer}/player_api.php?username=${encodeURIComponent(cleanUser)}&password=${encodeURIComponent(cleanPass)}&action=get_live_categories`
@@ -132,6 +135,33 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
       setBusy(false);
     }
   };
+
+  // TV : QR code menant à une page servie par le téléviseur. Le téléphone y saisit les
+  // identifiants, la connexion part aussitôt : rien à taper à la télécommande.
+  const [pairingUrl, setPairingUrl] = useState<string | null>(null);
+  const credentialsStep = categories.length === 0;
+  const [pairingAttempt, setPairingAttempt] = useState(0);
+  const [pairingExpired, setPairingExpired] = useState(false);
+  const receivingPair = useRef(false);
+  const onPaired = useRef<(credentials: PairedCredentials) => boolean>(() => false);
+  onPaired.current = credentials => {
+    if (busy || receivingPair.current) return false;
+    receivingPair.current = true;
+    setServer(credentials.server);
+    setUsername(credentials.username);
+    setPassword(credentials.password);
+    toast.success('Identifiants reçus du téléphone.');
+    void fetchCategories(credentials).finally(() => { receivingPair.current = false; });
+    return true;
+  };
+  useEffect(() => {
+    if (!open || !tvMode || !credentialsStep) return;
+    setPairingExpired(false);
+    const close = openPairing(credentials => onPaired.current(credentials), setPairingUrl);
+    const expiry = setTimeout(() => { close(); setPairingUrl(null); setPairingExpired(true); }, 5 * 60 * 1000);
+    return () => { clearTimeout(expiry); close(); setPairingUrl(null); };
+  }, [open, tvMode, credentialsStep, pairingAttempt]);
+  const pairing = tvMode && credentialsStep ? pairingUrl : null;
 
   const selectFrenchOnly = () => {
     const frIds = categories.filter(c => /^FR\b|FRANCE/i.test(c.category_name)).map(c => c.category_id);
@@ -215,7 +245,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
           Connexion Xtream
         </Button>
       </DialogTrigger>}
-      <DialogContent className="max-w-xl bg-neutral-950 text-white border-neutral-800 max-h-[90vh] overflow-y-auto"
+      <DialogContent className={`${pairing ? 'max-w-4xl' : 'max-w-xl'} bg-neutral-950 text-white border-neutral-800 max-h-[90vh] overflow-y-auto`}
         onEscapeKeyDown={event => {
           if (tvMode && document.activeElement?.matches('input[data-remote-input]:not([readonly])')) event.preventDefault();
         }}
@@ -229,10 +259,13 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
         <DialogHeader>
           <DialogTitle>Connexion Xtream Codes</DialogTitle>
           <DialogDescription className="text-neutral-400">
-            {categories.length ? 'Choisis les catégories de ton abonnement. Tous les pays sont sélectionnés au départ.' : 'Connecte-toi à ton fournisseur, puis choisis les catégories à importer.'}
+            {categories.length ? 'Choisis les catégories de ton abonnement. Tous les pays sont sélectionnés au départ.' : pairing ? 'Scanne le code avec ton téléphone, ou saisis tes identifiants à la télécommande.' : 'Connecte-toi à ton fournisseur, puis choisis les catégories à importer.'}
           </DialogDescription>
         </DialogHeader>
 
+        <div className={pairing ? 'grid grid-cols-[250px_minmax(0,1fr)] items-start gap-5' : undefined}>
+        {pairing && <TvPairingCard url={pairing} />}
+        {tvMode && credentialsStep && pairingExpired && <Button disabled={busy} onClick={() => setPairingAttempt(n => n + 1)}>QR expiré — Afficher un nouveau code</Button>}
         <div className="space-y-4 text-sm">
           {categories.length === 0 && <>
           <div className="space-y-1">
@@ -248,7 +281,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
             />
           </div>
 
-          <div className="grid gap-3">
+          <div className={pairing ? 'grid grid-cols-2 gap-3' : 'grid gap-3'}>
             <div className="space-y-1">
               <label htmlFor={`${fieldId}-user`} className="text-xs text-neutral-300">Nom d'utilisateur</label>
               <Input
@@ -300,12 +333,12 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
                 MPEG-TS (.ts) — Standard
               </Button>
             </div>
-            <p className="text-[11px] text-neutral-400">
+            <p className={pairing ? 'hidden' : 'text-[11px] text-neutral-400'}>
               Choisis le format accepté par ton fournisseur. Le lecteur Android prend en charge HLS et MPEG-TS ; chaque chaîne conserve le format alternatif en secours.
             </p>
           </div>
 
-          <p className="rounded-md border border-neutral-800 p-3 text-xs text-neutral-400">
+          <p className={pairing ? 'hidden' : 'rounded-md border border-neutral-800 p-3 text-xs text-neutral-400'}>
             Le nombre de lectures simultanées dépend de ton abonnement. En cas d’échec, vérifie les identifiants, la connexion réseau et les connexions déjà ouvertes.
           </p>
           </>}
@@ -327,7 +360,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
             <Button
               className="w-full bg-blue-600 hover:bg-blue-500"
               disabled={busy || !server.trim() || !username.trim() || !password.trim()}
-              onClick={fetchCategories}
+              onClick={() => void fetchCategories()}
             >
               {busy ? 'Connexion en cours…' : 'Se connecter & charger les catégories'}
             </Button>
@@ -441,6 +474,7 @@ export function XtreamLoginDialog({ onPlaylistLoaded, open: controlledOpen, onOp
               </div>
             </div>
           )}
+        </div>
         </div>
       </DialogContent>
     </Dialog>

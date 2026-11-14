@@ -49,6 +49,8 @@ vi.mock('@/utils/idb', () => ({
   toggleVodWatchlist: vi.fn(async () => []),
   historyScope: vi.fn((raw: unknown) => raw),
   manageContinueEntry: vi.fn(async () => {}),
+  getExternalWatches: vi.fn(async () => []),
+  saveExternalWatches: vi.fn(async () => {}),
 }));
 
 vi.mock('@/utils/publicPlaylist', () => ({

@@ -1,7 +1,7 @@
 import { historyScope, type PlayHistoryEntry } from '@/utils/idb';
 import type { LocalWork } from '@/utils/localLibrary';
 import { buildTasteProfile, type TasteProfile, type TasteSource } from '@/utils/tasteProfile';
-import { fetchTmdbDetails, pickBestMatch, searchTmdb, TmdbAuthenticationError, type TmdbDetails, type TmdbKind } from '@/utils/tmdb';
+import { fetchTmdbDetails, pickBestMatch, searchTmdb, TmdbAuthenticationError, type TmdbDetails, type TmdbKind, type TmdbSimilar } from '@/utils/tmdb';
 import { normalizeForCompare, normalizeTitle } from '@/utils/titleNormalize';
 import type { CatalogItem } from '@/utils/xtreamCatalog';
 
@@ -27,11 +27,20 @@ const CONCURRENCY = 3;
 
 const VOD_CHANNEL = /^vod:(.+):(movie|series):([^:]+)$/;
 
+export interface DiscoverSimilarCandidate {
+  sourceId: string;
+  sourceTitle: string;
+  kind: 'movie' | 'series';
+  item: TmdbSimilar;
+}
+
 export interface TasteEnrichment {
   playlistId: string;
   profile: TasteProfile;
   /** Fiches TMDB des candidats reclassables, par identifiant catalogue. */
   detailsByItemId: Map<string, TmdbDetails>;
+  /** Titres similaires TMDB issus des œuvres sources (pour « à découvrir ailleurs »). */
+  discoverCandidates?: DiscoverSimilarCandidate[];
   /** Fiches exploitées pour le profil (diagnostic et tests). */
   sampleSize: number;
   /** Dont fiches issues de « Vu ailleurs » (badge d'interface). */
@@ -40,10 +49,11 @@ export interface TasteEnrichment {
   localSampleSize: number;
 }
 
-async function eachPool<T>(values: T[], limit: number, task: (value: T) => Promise<void>): Promise<void> {
+async function eachPool<T>(values: T[], limit: number, task: (value: T) => Promise<void>, signal?: AbortSignal): Promise<void> {
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
     for (;;) {
+      if (signal?.aborted) return;
       const index = next++;
       if (index >= values.length) return;
       const value = values[index];
@@ -58,12 +68,18 @@ async function resolveDetails(
   input: { name: string; year?: string; tmdbId?: number },
   kind: TmdbKind,
   apiKey: string,
+  signal?: AbortSignal,
 ): Promise<TmdbDetails | null> {
+  if (signal?.aborted) return null;
   if (input.tmdbId && input.tmdbId > 0) {
     try {
-      return stampKind(await fetchTmdbDetails(input.tmdbId, kind, apiKey), kind);
+      const details = signal
+        ? await fetchTmdbDetails(input.tmdbId, kind, apiKey, signal)
+        : await fetchTmdbDetails(input.tmdbId, kind, apiKey);
+      return stampKind(details, kind);
     } catch (error) {
       if (error instanceof TmdbAuthenticationError) throw error;
+      if (signal?.aborted) return null;
       // Identifiant fournisseur périmé : on retombe sur la recherche par titre.
     }
   }
@@ -72,10 +88,15 @@ async function resolveDetails(
   const year = input.year || normalized.year;
   if (!query) return null;
   try {
-    const results = await searchTmdb(query, year, kind, apiKey);
+    const results = signal
+      ? await searchTmdb(query, year, kind, apiKey, signal)
+      : await searchTmdb(query, year, kind, apiKey);
     const best = pickBestMatch(query, results, year);
     if (!best) return null;
-    return stampKind(await fetchTmdbDetails(best.id, kind, apiKey), kind);
+    const details = signal
+      ? await fetchTmdbDetails(best.id, kind, apiKey, signal)
+      : await fetchTmdbDetails(best.id, kind, apiKey);
+    return stampKind(details, kind);
   } catch (error) {
     if (error instanceof TmdbAuthenticationError) throw error;
     return null;
@@ -138,6 +159,7 @@ export interface EnrichInput {
   playlistId: string;
   apiKey: string;
   nowMs?: number;
+  signal?: AbortSignal;
 }
 
 /** Construit le profil de goût puis résout les fiches des meilleurs candidats. */
@@ -157,6 +179,7 @@ export async function enrichRecommendations(input: EnrichInput): Promise<TasteEn
 
   const catalogById = new Map(input.movies.map(item => [item.id, item]));
   const sources: TasteSource[] = [];
+  const discoverCandidates: DiscoverSimilarCandidate[] = [];
   // Un même film vu ici et ailleurs ne doit pas compter deux fois dans le profil.
   // Identité = type + titre + année de la fiche résolue (celle de l'import) :
   // un titre seul fusionnerait deux remakes ou un film et sa série homonyme.
@@ -180,11 +203,20 @@ export async function enrichRecommendations(input: EnrichInput): Promise<TasteEn
       },
       tmdbKind,
       apiKey,
+      input.signal,
     );
     if (!details) return;
     seenWorks.add(workKey(details, tmdbKind));
     sources.push({ details, ts: entry.ts });
-  });
+    for (const similarItem of details.similar) {
+      discoverCandidates.push({
+        sourceId: entry.channelId,
+        sourceTitle: details.title || entry.name || '',
+        kind: mediaKind,
+        item: similarItem,
+      });
+    }
+  }, input.signal);
 
   let externalSampleSize = 0;
   await eachPool(sampleExternalWatches(input.external ?? []), CONCURRENCY, async (entry) => {
@@ -197,6 +229,7 @@ export async function enrichRecommendations(input: EnrichInput): Promise<TasteEn
       },
       kind,
       apiKey,
+      input.signal,
     );
     if (!details) return;
     const key = workKey(details, kind);
@@ -204,7 +237,17 @@ export async function enrichRecommendations(input: EnrichInput): Promise<TasteEn
     seenWorks.add(key);
     sources.push({ details, ts: entry.ts });
     externalSampleSize += 1;
-  });
+    if ((kind === 'tv' ? 'series' : 'movie') === mediaKind) {
+      for (const similarItem of details.similar) {
+        discoverCandidates.push({
+          sourceId: entry.channelId,
+          sourceTitle: details.title || entry.name || '',
+          kind: mediaKind,
+          item: similarItem,
+        });
+      }
+    }
+  }, input.signal);
 
   let localSampleSize = 0;
   await eachPool((input.local ?? []).slice(0, LOCAL_SAMPLE), CONCURRENCY, async (work) => {
@@ -213,6 +256,7 @@ export async function enrichRecommendations(input: EnrichInput): Promise<TasteEn
       { name: work.title, ...(work.year ? { year: work.year } : {}) },
       kind,
       apiKey,
+      input.signal,
     );
     if (!details) return;
     const key = workKey(details, kind);
@@ -220,21 +264,22 @@ export async function enrichRecommendations(input: EnrichInput): Promise<TasteEn
     seenWorks.add(key);
     sources.push({ details, ts: work.lastModified, weight: LOCAL_WEIGHT });
     localSampleSize += 1;
-  });
+  }, input.signal);
   // Les œuvres possédées n'ont pas de date de visionnage : leur poids fixe
   // remplace la décroissance par récence dans le profil.
   const profile = buildTasteProfile(sources, input.nowMs);
   const detailsByItemId = new Map<string, TmdbDetails>();
-  if (profile.sampleSize > 0) {
+  if (profile.sampleSize > 0 && !input.signal?.aborted) {
     await eachPool(input.candidates.slice(0, CANDIDATE_SAMPLE), CONCURRENCY, async (item) => {
       const details = await resolveDetails(
         { name: item.name, ...(item.tmdbId ? { tmdbId: item.tmdbId } : {}) },
         tmdbKind,
         apiKey,
+        input.signal,
       );
       if (details) detailsByItemId.set(item.id, details);
-    });
+    }, input.signal);
   }
 
-  return { playlistId: input.playlistId, profile, detailsByItemId, sampleSize: profile.sampleSize, externalSampleSize, localSampleSize };
+  return { playlistId: input.playlistId, profile, detailsByItemId, discoverCandidates, sampleSize: profile.sampleSize, externalSampleSize, localSampleSize };
 }

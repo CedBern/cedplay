@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { PlatformLogo } from '@/components/PlatformLogo';
 import { matchStreamingPlatformOrNetwork } from '@/utils/platformLogos';
 
@@ -17,6 +17,7 @@ interface ChannelLogoProps {
 const ChannelLogoBase: React.FC<ChannelLogoProps> = ({ src, name, compact }) => {
   const [loaded, setLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
   const sizeClass = compact ? 'w-8 h-8' : 'w-12 h-12';
 
   // Default logo path for fallback
@@ -28,8 +29,15 @@ const ChannelLogoBase: React.FC<ChannelLogoProps> = ({ src, name, compact }) => 
     platformCache.set(name, detectedPlatformId);
   }
 
-  // Ligne recyclée avec une autre chaîne : repartir du fond animé le temps du chargement.
-  useEffect(() => { setLoaded(false); }, [src]);
+  // Ligne recyclée avec une autre chaîne ou image déjà en mémoire cache
+  useEffect(() => {
+    setImageError(false);
+    if (imgRef.current?.complete && imgRef.current?.naturalWidth > 0) {
+      setLoaded(true);
+    } else {
+      setLoaded(false);
+    }
+  }, [src]);
 
   // If no src provided or error occurred, check if name matches a known platform/channel logo
   if (!src || failedLogos.has(src) || imageError) {
@@ -55,18 +63,24 @@ const ChannelLogoBase: React.FC<ChannelLogoProps> = ({ src, name, compact }) => 
       {!loaded && (
         <div className={`absolute inset-0 rounded-lg bg-muted animate-pulse`} />
       )}
-      {/* Chargement paresseux et décodage asynchrones gérés par le navigateur :
-          plus d'observateur d'intersection par instance (coût au défilement). */}
       {/* object-contain (et non cover) : les logos rectangulaires ou circulaires doivent
-          rester entiers — cover rognerait les bords et couperait les logos arrondis. */}
+          rester entiers — cover rognerait les bords et couperait les logos arrondis.
+          referrerPolicy="no-referrer" et crossOrigin="anonymous" : empêchent le blocage 403
+          anti-hotlinking des serveurs IPTV sur les requêtes d'images avec Referer localhost.
+          Chargement direct sans loading="lazy" bloquant dans les conteneurs horizontaux de l'accueil. */}
       <img
+        ref={imgRef}
         src={src}
         data-src={src}
         alt="" aria-hidden="true"
-        loading="lazy"
+        referrerPolicy="no-referrer"
+        crossOrigin="anonymous"
         decoding="async"
         className={`object-contain rounded-lg p-0.5 w-full h-full transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
-        onLoad={() => setLoaded(true)}
+        onLoad={() => {
+          setLoaded(true);
+          setImageError(false);
+        }}
         onError={(e) => {
           const url = (e.currentTarget.getAttribute('data-src') || src) as string;
           if (url && url !== defaultLogo) {

@@ -9,6 +9,8 @@ import { useEffect, useState } from 'react';
 import { globalTelemetryLogger } from '@/utils/telemetry/logger';
 import { StorageManager, AppSettings } from '@/utils/storage';
 import { useRemoteNavigation } from '@/hooks/useRemoteNavigation';
+import { createExitGuard, EXIT_CONFIRM_MS } from '@/utils/tvExitGuard';
+import { toast } from 'sonner';
 
 const App = () => {
   useRemoteNavigation();
@@ -20,7 +22,18 @@ const App = () => {
     const mirror = StorageManager.getThemeMirror();
     return mirror ? { ...initial, theme: mirror } : initial;
   });
-  useEffect(() => { (async () => { const s = await StorageManager.loadSettingsAsync(); setSettings(s); if (s.telemetryPersistence !== false) globalTelemetryLogger.enablePersistence(); })(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const s = await StorageManager.loadSettingsAsync();
+        if (cancelled) return;
+        setSettings(s);
+        if (s.telemetryPersistence !== false) globalTelemetryLogger.enablePersistence();
+      } catch { /* fallback synchronisé déjà en place */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   // Apply theme class when settings change
   useEffect(() => {
     const root = document.documentElement;
@@ -29,10 +42,12 @@ const App = () => {
     StorageManager.setThemeMirror(settings.theme);
   }, [settings.theme]);
   // Bouton retour Android : ferme le plein écran ou le dialogue ouvert, sinon
-  // revient dans l'historique, sinon quitte l'app.
+  // revient dans l'historique, sinon quitte l'app. Sur TV, la sortie demande un second appui :
+  // un Retour de trop depuis l'Accueil ne doit pas fermer l'application.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let disposed = false;
+    const confirmExit = createExitGuard();
     let remove: (() => void) | undefined;
     void import('@capacitor/app').then(async ({ App: CapApp }) => {
       if (disposed) return;
@@ -54,7 +69,8 @@ const App = () => {
         window.dispatchEvent(back);
         if (back.defaultPrevented) return;
         if (canGoBack) window.history.back();
-        else CapApp.exitApp();
+        else if (!document.documentElement.classList.contains('tv-mode') || confirmExit()) CapApp.exitApp();
+        else toast('Appuie encore sur Retour pour quitter CedPlay', { id: 'exit-confirm', duration: EXIT_CONFIRM_MS });
       });
       if (disposed) void listener.remove();
       else remove = () => { void listener.remove(); };

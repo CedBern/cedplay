@@ -46,5 +46,15 @@ describe('ChannelLogo', () => {
     // Les logos arrondis/rectangulaires doivent rester visibles intégralement.
     expect(img?.className).toContain('object-contain');
     expect(img?.className).not.toContain('object-cover');
+    // Sécurité Referer pour serveurs IPTV distants (anti-403)
+    expect(img).toHaveAttribute('referrerpolicy', 'no-referrer');
+    expect(img).toHaveAttribute('crossorigin', 'anonymous');
+  });
+
+  it('ne bloque pas le chargement par un loading="lazy" dans les rails horizontaux', () => {
+    const { container } = render(<ChannelLogo src="https://example.com/m6.png" name="M6" compact />);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img).not.toHaveAttribute('loading', 'lazy');
   });
 });

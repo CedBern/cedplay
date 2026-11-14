@@ -10,6 +10,7 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { getMeta, setMeta } from '@/utils/idb';
+import { isDesktopRuntime, syncDesktopReminders } from '@/utils/desktopBridge';
 import { getReminders, type EpgReminder } from '@/utils/reminders';
 
 const CHANNEL_ID = 'epg-reminders';
@@ -79,7 +80,14 @@ async function getScheduled(): Promise<ScheduledRef[]> {
  * écartée).
  */
 export async function syncNativeReminders(now: number = Date.now()): Promise<void> {
-  if (!isNative()) return;
+  if (!isNative()) {
+    if (isDesktopRuntime()) {
+      const reminders = await getReminders();
+      const pending = reminders.filter(r => r.startTime > now - 90_000);
+      await syncDesktopReminders(pending);
+    }
+    return;
+  }
   const [reminders, scheduled] = await Promise.all([getReminders(), getScheduled()]);
   const future = new Map<number, EpgReminder>();
   for (const r of reminders) if (r.startTime > now) future.set(notificationId(r), r);

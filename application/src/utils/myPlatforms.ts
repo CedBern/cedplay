@@ -17,6 +17,7 @@ export function readMyPlatforms(): string[] {
 export function writeMyPlatforms(ids: string[]): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(ids.filter(id => known.has(id))));
+    window.dispatchEvent(new Event('my-platforms-updated'));
   } catch {
     /* stockage indisponible : le choix vaut pour la session */
   }

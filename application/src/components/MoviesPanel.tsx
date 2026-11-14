@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Film, HardDrive } from 'lucide-react';
 import { VodLibrary, type VodResumeRequest } from '@/components/VodLibrary';
 import { LocalLibrary } from '@/components/LocalLibrary';
-import { getXtreamAccount } from '@/utils/xtreamCatalog';
 import type { PlaylistInfo } from '@/types/channel';
 
 interface MoviesPanelProps {
@@ -18,24 +17,28 @@ interface MoviesPanelProps {
   parentalUnlocked?: boolean | undefined;
   /** Source pilotée par le parent (mobile : sélecteur Films · Séries · USB/SD sur une ligne). */
   source?: 'catalog' | 'local' | undefined;
+  onCloseDetails?: (() => void) | undefined;
+  onLocalHandled?: (() => void) | undefined;
+  localRequest?: number | undefined;
+  onConnect?: (() => void) | undefined;
 }
 
 /**
  * Rubrique « Films » : catalogue VOD de la liste + bibliothèque locale (USB/SD).
  * Le choix de source est une sous-catégorie, pas un onglet dédié.
  */
-export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandled, tvMode, onSearch, parentalEnabled, parentalUnlocked, source: controlledSource }: MoviesPanelProps) {
-  const [ownSource, setSource] = useState<'catalog' | 'local'>('catalog');
+export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandled, tvMode, onSearch, parentalEnabled, parentalUnlocked, source: controlledSource, onCloseDetails, onConnect, localRequest, onLocalHandled }: MoviesPanelProps) {
+  const [ownSource, setSource] = useState<'catalog' | 'local'>(localRequest ? 'local' : 'catalog');
+  useEffect(() => { if (localRequest) { setSource('local'); onLocalHandled?.(); } }, [localRequest, onLocalHandled]);
   const source = controlledSource ?? ownSource;
   const pill = (active: boolean) => tvMode
     ? `tv-chip inline-flex h-10 items-center gap-2 rounded-full px-4 text-[14px] font-medium transition-colors ${active ? 'is-current text-foreground' : 'text-muted-foreground'}`
     : `inline-flex min-h-9 items-center gap-2 rounded-full border px-3.5 text-[13px] font-medium transition-colors ${active ? 'border-foreground bg-foreground text-background' : 'border-neutral-800 text-muted-foreground hover:text-foreground'}`;
-  const hasCatalog = useMemo(() => getXtreamAccount(playlist) !== null, [playlist]);
   // TV : la source se choisit depuis la colonne de gauche du catalogue (ligne « USB / SD ») ;
   // le sélecteur ne reparaît qu'en bibliothèque locale, pour revenir au catalogue.
-  // Sans compte Xtream, pas de catalogue ni de colonne : le sélecteur reste le seul accès à USB/SD.
   // Source pilotée par le parent : son sélecteur remplace celui-ci.
-  const showSwitch = controlledSource === undefined && (!tvMode || source === 'local' || !hasCatalog);
+  // TV sans compte : l'écran vide du catalogue propose lui-même USB/SD, le sélecteur ne sert qu'au retour.
+  const showSwitch = controlledSource === undefined && (tvMode ? source === 'local' : true);
   return (
     <div className="space-y-4">
       {showSwitch && <div role="group" aria-label="Source des films" className="flex items-center gap-2">
@@ -47,7 +50,7 @@ export function MoviesPanel({ playlist, tmdbApiKey, resumeRequest, onResumeHandl
         </button>
       </div>}
       {source === 'catalog'
-        ? <VodLibrary key={`${playlist.id}:movie`} playlist={playlist} kind="movie" tmdbApiKey={tmdbApiKey ?? undefined} resumeRequest={resumeRequest} onResumeHandled={onResumeHandled} tvMode={tvMode} onSearch={onSearch} onShowLocal={tvMode ? () => setSource('local') : undefined} parentalEnabled={parentalEnabled} parentalUnlocked={parentalUnlocked} />
+        ? <VodLibrary key={`${playlist.id}:movie`} playlist={playlist} kind="movie" tmdbApiKey={tmdbApiKey ?? undefined} resumeRequest={resumeRequest} onResumeHandled={onResumeHandled} tvMode={tvMode} onSearch={onSearch} onShowLocal={tvMode ? () => setSource('local') : undefined} parentalEnabled={parentalEnabled} parentalUnlocked={parentalUnlocked} onCloseDetails={onCloseDetails} onConnect={onConnect} />
         : <LocalLibrary tmdbApiKey={tmdbApiKey ?? null} />}
     </div>
   );

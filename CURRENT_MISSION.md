@@ -1,4 +1,518 @@
+## Résolution des réserves de contre-vérification Desktop — 14 novembre 2026 (correctifs GUI/DVR/notifications/EPG + preuves complètes, APK 1.12.63 inchangé)
+
+- **Causes racines isolées et corrigées** (suite au rapport [CONTRE_VERIFICATION_DESKTOP_2026-11-14.md](CONTRE_VERIFICATION_DESKTOP_2026-11-14.md)) :
+  1. **Fermeture GUI `CedPlay.exe` et arrêt du serveur (`desktop/CedPlayLauncher.cs`, `desktop/server.mjs`, `desktop/lanServers.mjs`)** : `browser.WaitForExit(1200)` dans `CedPlayLauncher.cs` considérait un code de sortie `0` rapide (< 1,2 s) comme un échec de lancement et affichait un `MessageBox` bloquant avant `finally { SetWindowLifecycle(port, "release"); }` ; de plus, les connexions HTTP `keep-alive` retardaient `server.close()` après `release` et la boucle CLI attendait sur des handles ouverts. Corrigé en ne relançant un autre navigateur que si `ExitCode != 0`, en ajoutant `--disable-background-mode` et `serverProc.WaitForExit(3500)` hors DVR actif, et en fermant les sockets oisifs (`closeIdleConnections` / `closeAllConnections` sous 500 ms) puis `onStop` -> `process.exit(0)`. Binaire `CedPlay.exe` recompilé (**15 872 octets**, SHA-256 `659C1699A2E9CCE4B436D3EF663C055EBE4922F50FA722A99C0AD14586163CE7`).
+  2. **Notifications Windows natives & persistance après redémarrage serveur (`desktop/notifications.mjs`, `desktop/config.mjs`, `desktop/localAndDvr.mjs`, `desktopBridge.ts`, `remindersNative.ts`, `useRemindersSync.ts`)** : ajout des notifications WinRT Toast (`ToastNotificationManager` / `ToastText02`, avec journal JSONL opt-in `CEDPLAY_NOTIFICATION_LOG` et désactivation opt-in `CEDPLAY_DISABLE_OS_NOTIFICATIONS=1` pour l'E2E), persistance des rappels EPG dans `desktop-state.json` (`reminders: []`), synchronisation `/api/desktop/reminders/sync` + `GET /api/desktop/reminders`, et déclenchement au démarrage/fin DVR et à l'échéance des rappels EPG même après redémarrage complet du processus serveur.
+  3. **Fermeture de `ProgramSheet` pendant l'enregistrement d'un rappel (`application/src/components/ProgramSheet.tsx`)** : `disabled={busy}` retirait le focus hors de `[role="dialog"]` vers `document.body` lors du clic asynchrone sur « Me le rappeler », empêchant `Escape` de fermer la fiche ; remplacé par `aria-disabled={busy}` (garde `if (busy) return` conservée dans `run()`).
+  4. **Capture DVR des flux HLS `.m3u8` et mise à jour de l'UI (`desktop/localAndDvr.mjs`, `application/src/components/Recordings.tsx`)** : `-reconnect 1 -reconnect_streamed 1` devant un `.m3u8` faisait bloquer le démuxeur HLS FFmpeg ~18 s (`Error during demuxing: I/O error`) et empêchait la création du fichier `.ts` avant le `SIGKILL` à 4 s lors de l'arrêt ; limité aux flux continus non-HLS (`!/\.m3u8(?:$|[?#])/i.test(url)`), et abonnement SSE `recordingStopped` -> `refresh()` ajouté dans `Recordings.tsx`.
+- **Vérifications rejouées après la dernière modification de code** :
+  - **Suite serveur Desktop & intégration GUI** (`node --test desktop/desktop.test.mjs desktop/audit-regression.test.mjs`, log [desktop-audit-final-backend.log](preuves/desktop-audit-final-backend.log)) : **20/20 passés** (`0 fail`, `0 skipped`, `13587 ms`), couvrant notamment le test réel de fermeture GUI `WM_CLOSE` sur la fenêtre chargée de `CedPlay.exe` (`CedPlay` quitté code `0` + serveur arrêté), l'envoi WinRT Toast natif Windows, la survie et le déclenchement DVR + rappel EPG après redémarrage complet du serveur, et la capture + arrêt d'un flux HLS live `.m3u8`.
+  - **Suite Web / TypeScript / ESLint / Vite** (`corepack pnpm verify`, log [desktop-audit-final-verify.log](preuves/desktop-audit-final-verify.log)) : `tsc` app & node **0 erreur**, `eslint ./src` **0 erreur / 15 avertissements préexistants**, Vitest **164/164 fichiers et 1 242/1 242 tests passés** (dont le test de synchro rappels dans `desktopBridge.test.tsx`), `vite build` propre en `8,53 s`.
+  - **Recette E2E Chrome `--app` complète** (`node desktop/e2e-verify.mjs`, log [desktop-audit-final-e2e.log](preuves/desktop-audit-final-e2e.log)) : **exit code 0, 0 erreur console, 0 exception page**, couvrant Xtream, `Découvrir`, rail souris, Direct + Mosaïque, **grille EPG XMLTV complète + fiche programme + rappel « Me le rappeler » synchronisé côté serveur + fermeture `Escape`**, VOD/MKV FFmpeg (`+10s`, 2e audio `fra`, `.fr.srt` + sous-titre embarqué), **DVR par clic UI (`Enregistrer` -> `Arrêter` -> fichier `.ts` > 1 Ko sur disque -> listing UI -> notifications `recordingStarted`/`recordingStopped`)**, podcast RSS/MP3 et Réglages `1920×1080`, avec inspection visuelle de [13-epg-grid.png](preuves/desktop-verification/13-epg-grid.png) et [14-dvr-recordings.png](preuves/desktop-verification/14-dvr-recordings.png).
+- **Périmètre non vérifiable localement (à tester manuellement par Céd)** :
+  - Abonnement IPTV fournisseur réel, flux externes géolocalisés/TLS réels, appairage QR / synchro LAN téléphone ↔ PC sur Wi-Fi réel et comportement après redémarrage complet du système Windows.
+
+## Résolution E2E Desktop & contre-vérification honnête — 13 novembre 2026 (correctifs source + tests + `preuves/desktop-audit-final-*.log`)
+
+- **Causes isolées et corrigées** (suite au rapport [VERIFICATION_BILAN_DESKTOP_2026-11-13.md](VERIFICATION_BILAN_DESKTOP_2026-11-13.md)) :
+  1. **Bug applicatif réel (`DesktopPlayerSurface.tsx` + `DesktopCinemaPlayer.tsx`)** : `DesktopPlayerSurface` ne portait pas `data-remote-self`, si bien que `useRemoteNavigation.ts` (écouteur capture sur `window`) interceptait `ArrowRight`, appelait `stopPropagation()` et déplaçait le focus UI au lieu de laisser `DesktopVodCinemaView` avancer de `+10s`. De plus, l'écouteur `keydown` de `DesktopVodCinemaView` se réenregistrait à chaque tick de position (`currentPosSec`), corrigé via `keyActionsRef`.
+  2. **Instabilités du harnais E2E (`desktop/e2e-verify.mjs`)** : port CDP aléatoire susceptible de collision (remplacé par allocation libre OS via `node:net`), événements clavier CDP sans `Page.bringToFront()` ni `code`/`windowsVirtualKeyCode` explicites (`Escape` / `ArrowRight`), et clic sur `Films` pouvant concourir avec le nettoyage `pointer-events` après fermeture du dialogue Mosaïque.
+- **Vérifications rejouées après la dernière modification de code** :
+  - **Tests serveur Node** (`node --test desktop/desktop.test.mjs desktop/audit-regression.test.mjs`, log [desktop-audit-final-backend.log](preuves/desktop-audit-final-backend.log)) : **16/16 passés** (0 échec, 0 ignoré).
+  - **Suite Web / TypeScript / ESLint / Vite** (`corepack pnpm verify`, log [desktop-audit-final-verify.log](preuves/desktop-audit-final-verify.log)) : `tsc` app & node 0 erreur, `eslint ./src` 0 erreur / 15 avertissements préexistants, Vitest **164/164 fichiers et 1 241/1 241 tests passés** (dont le test de non-régression `ArrowRight` + `Escape` avec `useRemoteNavigation` actif dans `desktopAuditPlayers.test.tsx`), `vite build` propre en ~8,8 s.
+  - **Recette E2E Chrome `--app`** (`node desktop/e2e-verify.mjs`, log [desktop-audit-final-e2e.log](preuves/desktop-audit-final-e2e.log)) : **5 exécutions consécutives passées** puis **1 rejeu propre** (exit code 0, 0 erreur console, 0 erreur de page), avec inspection visuelle des captures `09-mkv-seek-second-audio.png`, `10-mkv-embedded-subtitle.png` (saut effectif à `0:10`, audio `fra`, sous-titre `.fr.srt` puis piste embarquée `0`), `11-mosaic-two-streams.png` et `12-podcast-playing.png`.
+  - **Lancement direct de `CedPlay.exe`** (`SHA-256 FFB91BCD3A71C8EBCD798088219D193EF5137B5A7A3C22731F8CE54502D1405A`) sur ports isolés : `/api/desktop/health` répond `{"ok":true,"desktop":true,"platform":"win32","arch":"x64","ffmpeg":true,"ffprobe":true,...}`, injection `__CEDPLAY_DESKTOP__=true` confirmée, démarrage de Chrome `--app` confirmé.
+- **Limites et vérifications manuelles restantes (non prouvées automatiquement)** :
+  - Dans un sous-shell sans bureau interactif, Chrome lancé en arrière-plan créait une fenêtre sans titre et la fermeture automatique via `CloseMainWindow()`/`taskkill` n'a pas permis de prouver automatiquement la sortie GUI complète de `CedPlay.exe` dans les 10 s (l'arrêt logique du serveur via `/api/desktop/lifecycle/release` sans DVR actif reste couvert par la suite Node 16/16 ; la fermeture manuelle de la fenêtre `CedPlay.exe` par l'utilisateur reste à confirmer visuellement).
+  - Non couverts par l'E2E automatisé et restant à valider sur usages réels : clic DVR depuis l'UI, grille EPG complète en E2E, notifications OS / persistance DVR après redémarrage, abonnement IPTV fournisseur réel, flux externes géolocalisés/TLS réels et appairage QR/LAN téléphone ↔ PC sur Wi-Fi réel.
+
+## Application Desktop Windows complète (« Salle obscure » TVBox + pont système FFmpeg/LAN/DVR) — 13 novembre 2026 (sources + CedPlay.exe Desktop, APK 1.12.63 inchangé)
+
+- **Demande de Céd** : créer une application Desktop utilisable sous Windows visuellement aussi soignée que la version TVBox (« Salle obscure ») avec toutes ses fonctionnalités vérifiées.
+- **Architecture livrée (`CedPlay.exe`, `Lancer CedPlay Desktop.cmd`, `desktop/`)** :
+  - **Lanceur Windows natif** (`desktop/CedPlayLauncher.cs` → `CedPlay.exe` à la racine + `Lancer CedPlay Desktop.cmd` + script `pnpm desktop`) : démarre silencieusement le serveur local `desktop/server.mjs` (port `4178` par défaut ou port libre), injecte `<script>window.__CEDPLAY_DESKTOP__=true;</script>`, ignore `msedge.exe` lorsqu'il est bloqué par IFEO (`msedge_IFEO.exe`) et ouvre une fenêtre `--app` autonome sous Edge, Chrome ou Brave avec profil isolé (`%LOCALAPPDATA%\CedPlay\DesktopProfile`).
+    - **Pont système Windows (`desktop/`)** :
+      - `httpBridge.mjs` : requêtes HTTP/HTTPS sans CORS avec `User-Agent` personnalisé et décompression gzip (`/api/desktop/http`), proxy média avec `Range` et réécriture HLS `.m3u8` (`/api/desktop/proxy`), sonde de santé des flux (`/api/desktop/probe-streams`), résolution de portail Stalker/Ministra (`/api/desktop/stalker-resolve`), ouverture navigateur (`/api/desktop/open-external`).
+      - `ffmpeg.mjs` : transmuxing/transcodage live vers fMP4 H.264/AAC via `C:\Users\C2k\tools\ffmpeg\ffmpeg.exe` (`/api/desktop/transmux`, copie directe ou repli `libx264`, seek `-ss`, sélection `audioTrack`), sonde `ffprobe` (`/api/desktop/probe-media`, pistes audio et sous-titres texte embarqués), conversion sous-titres `.srt`/`.vtt`/`.ass`/`.ssa` et pistes texte embarquées (`/api/desktop/subtitle?track=`) vers WebVTT UTF-8.
+      - `localAndDvr.mjs` : sélecteur de dossier Windows natif (`FolderBrowserDialog`), scan récursif (jusqu'à 2 000 vidéos + sous-titres adjacents), streaming local `Range` (`/api/desktop/local/file`), capture DVR directe et programmations persistantes (`desktop-state.json` sous `%LOCALAPPDATA%\CedPlay\desktop`), maintien du serveur tant qu'un enregistrement DVR actif ou programmé subsiste (`/api/desktop/lifecycle/retain` & `/release`).
+      - `lanServers.mjs` + `server.mjs` : serveurs HTTP locaux pour appairage QR et synchronisation LAN avec pont SSE `/api/desktop/events` + garde stricte `Host` et `Origin` localhost (`403` sinon).
+    - **Interface Desktop « Salle obscure » (`application/src/`)** :
+      - Activation automatique du mode TV + ergonomie Desktop (`html.tv-mode.desktop-mode` dans `useTvMode.ts`, `index.css`) : rail gauche ouvrable au survol souris (et auto-replié après clic souris dans `MainNavigation.tsx`), curseurs pointeur, barres de défilement `.tv-scroll`, raccourci plein écran `F11` (`IPTVPlayer.tsx`).
+      - Surcouches et lecteurs HTML5 dédiés : `DesktopPlayerSurface.tsx` (portail Radix au-dessus des modales), `DesktopLivePreview.tsx`, `DesktopCinemaPlayer.tsx` (Direct + guide/zapping/DVR REC, VOD/local + seek avec conservation de la position + sous-titres `.srt`/`.ass`/embarqués + épisode suivant + sélection réelle des pistes audio, sans superposition du spinner `Ouverture du lecteur…`), `DesktopMosaicPlayer.tsx` (2 à 8 flux simultanés), lecture podcast MP3 complète (`Écouter`) et capture DVR directe dans `Recordings.tsx`.
+      - Parité des ponts (`desktopBridge.ts`, `desktopMediaAttach.ts`, `XtreamLoginDialog.tsx`, `corsProxy.ts`, `userAgent.ts`, `epg.ts`, `xtreamLive.ts`, `xtreamCatalog.ts`, `stalker.ts`, `bodlav.ts`, `officialDocumentaries.ts`, `subtitles.ts`, `subtitleTranslator.ts`, `podcastFetcher.ts`, `podcastSearch.ts`, `streamCheck.ts`, `tvPairing.ts`, `lanSync.ts`, `nativePlayer.ts`, `useVideoPlayer.ts`).
+- **Preuves et vérifications** :
+  - `corepack pnpm verify` (`application/`) : TypeScript `tsc` app & node **0 erreur**, `eslint ./src` **0 erreur / 15 avertissements préexistants**, Vitest **164/164** fichiers et **1 240/1 240** tests passés (dont `desktopBridge.test.tsx`, `desktopAuditNavigation.test.tsx`, `desktopAuditParity.test.tsx`, `desktopAuditPlayers.test.tsx`), `vite build` propre en 8,79 s.
+  - Tests d'intégration serveur Node (`node --test desktop/desktop.test.mjs desktop/audit-regression.test.mjs`) : **16/16 passés** (injection desktop + gardes `Host`/`Origin` + JSON invalide `400`, `Range`, `.ass`/`.ssa`→WebVTT, sélection piste audio et sous-titres texte embarqués FFmpeg, HTTP gzip + réécriture M3U8, DVR erreur + conservation après `release` jusqu'à fin d'enregistrement programmé, QR/LAN + SSE).
+  - Recette E2E réelle complète dans Chrome `--app` (`node desktop/e2e-verify.mjs`) + inspection visuelle des 12 captures (`preuves/desktop-verification/01..12-*.png`) : connexion Xtream locale, `Découvrir` (Bodlav/TV5MONDEplus), rail gauche souris, `Direct` 3 colonnes avec aperçu vidéo H.264, lecteur Cinema plein écran Live, **Mosaïque à 2 flux simultanés au premier plan** (`11-mosaic-two-streams.png`), catalogue `Films` VOD, bibliothèque locale `USB / SD` lisant un `.mkv` AC3 transcodé par FFmpeg avec `.fr.srt`, **seek `+10s` + changement réel vers la 2e piste audio sans remise à zéro** (`09-mkv-seek-second-audio.png`) + **sous-titre embarqué activé et affiché** (`10-mkv-embedded-subtitle.png`), **Écouter / Podcast RSS + décodage MP3 réel + pause/reprise** (`12-podcast-playing.png`), `Plus` et `Réglages` en `1920×1080` (**0 erreur console, 0 exception page**).
+  - Test direct du binaire compilé `CedPlay.exe` : `/api/desktop/health` répond `200 OK` (`ffmpeg: true, ffprobe: true`), lancement réel de `chrome.exe --app=http://127.0.0.1:<port>/?desktop=1` avec injection `__CEDPLAY_DESKTOP__=true`, et arrêt propre du processus `CedPlay.exe` + serveur Node après fermeture de la fenêtre sans DVR actif.
+  - **Restent à tester manuellement par Céd** : lancement avec son abonnement IPTV fournisseur réel, flux externes géolocalisés/TLS réels, télécommande/appairage QR téléphone ↔ PC sur le Wi-Fi local.
+
+## Durée Android par épisode, stop différé Trakt, personnalisation d’accueil et APK 1.12.59 — 12 novembre 2026
+
+- **Corrections Android & Trakt (finalisées)** :
+  1. *Ordre `attachStats` / `playedMs` (`NativePlayerActivity.java`)* : `attachStats(result)` est appelé avant la copie de `totalPlayedMs` et des durées par épisode dans `saveProgress()`, afin que les lectures courtes autour du seuil de 5 s ne perdent pas le dernier segment.
+  2. *Durée mesurée par épisode (`NativePlayerActivity.java`, `nativePlayer.ts`)* : `playedMsByMedia` cumule `recordPlayTime` par `mediaId` (avec sauvegarde/restauration dans `visitedProgress`) et `openVod` lit `entry.playedMs` pour chaque épisode enchaîné.
+  3. *Stop différé si fermeture pendant un `start` Trakt (`trakt.ts`)* : `maybeScrobbleTrakt` conserve la demande `stop` dans `session.pendingStop` lorsque `session.starting` est vrai et la chaîne sur `session.startPromise` dès la fin du `start`.
+- **Personnalisation directement depuis l’accueil** :
+  1. *Signature persistée (`discover.ts`, `discoverRecommendations.ts`)* : `saveForYouSignature` / `readForYouSignature` persistent la signature d’historique local + externe pour déclencher le recalcul dès l’accueil après lecture ou synchro Trakt, même après remontage.
+  2. *Rattachement Trakt (`idb.ts`, `externalWatch.ts`, `recommendations.ts`)* : `originChannelId` préserve l’identifiant d’origine (`trakt:...`) pour alimenter « Parce que tu as regardé… ».
+  3. *Enrichissement TMDB & distinction Bibliothèque / À découvrir (`tasteEnrichment.ts`, `discoverRecommendations.ts`, `useDiscoverRecommendations.ts`, `ContinuePanel.tsx`, `IPTVPlayer.tsx`, `VodLibrary.tsx`)* : utilisation de `tmdbApiKey` dès l’accueil, ajout des suggestions similaires TMDB hors bibliothèque, badges **Bibliothèque** et **À découvrir** sur chaque carte, légendes dynamiques et ouverture de la recherche globale sur les titres à découvrir.
+- **Livraison & Preuves** :
+  - Version synchronisée en **1.12.59** (`versionCode 107`) dans `package.json`, `build.gradle` et `SettingsPanel.tsx`.
+  - `corepack pnpm verify` : `tsc` app/node **0 erreur**, `eslint ./src` **0 erreur / 15 avertissements**, Vitest **149/149** fichiers et **1 148/1 148** tests passés, `vite build` réussi.
+  - `cap sync android` + `.\gradlew.bat testDebugUnitTest assembleRelease` : **BUILD SUCCESSFUL in 1m 22s**.
+  - APK à la racine : `CedPlay-1.12.59.apk` + copie `CedPlay.apk` (**4 483 051 octets**, SHA-256 `e4aba8f38b0b1dcde7db46a5f7498195416fa02155f3f8e222672ff432d64741`), `CedPlay-1.12.58.apk` supprimé.
+  - **Reste à valider sur appareils réels (téléphone et Android TV)** : parcours complet (reprise, changement d’épisode, chaînes privées, logos, guide TV, télécommande), scrobbling Trakt en conditions réelles et mise à jour de l’accueil après lecture/synchro.
+
+## TV : marge de sécurité aux bords et sortie confirmée — 12 novembre 2026 (sources seulement, aucune version, aucune APK)
+
+- **Demande de Céd** : traiter les deux améliorations TV restantes, la marge aux bords de l'écran et le comportement de Retour à la racine. Fait dans ce dossier, par-dessus le WIP 1.12.58, sans changer de numéro de version.
+- **Marge** : `.tv-app-shell` garde 32 px à droite et 24 px en bas (16 et 8 à 12 px avant) ; l'horloge passe à 32 px du bord droit et 14 px du haut. Les écrans à hauteur calculée (`TvLiveScreen`, `TvVodScreen`) réservent le bas par `TV_SAFE_BOTTOM = 24` (`src/utils/tvSafeArea.ts`). Le rail de gauche n'est pas touché (icônes à 26 px du bord). Rendu mobile inchangé : seules des règles et des composants TV sont concernés.
+- **Retour à la racine** : sur TV, un Retour depuis l'Accueil ne ferme plus l'application d'un coup. Le premier appui affiche « Appuie encore sur Retour pour quitter CedPlay », un second dans les 2,5 s quitte (`src/utils/tvExitGuard.ts`, branché dans `App.tsx`). Sur téléphone, comportement inchangé.
+- **Prouvé par les tests et le navigateur** : `tsc -p tsconfig.app.json` 0 erreur ; ESLint 0 erreur sur les fichiers touchés ; `vitest run` complet 1147/1148, le seul échec (`continuePanel.test.tsx`, région « Pour toi » encore en chargement) passe quand le fichier est rejoué seul (82/82 avec les écrans TV et `tvExitGuard`) et ne touche pas ces fichiers. Aperçu `?tv=1` en 960×540 : enveloppe `42px 32px 24px 88px`, écran Direct à 42/32/24/88 px des bords, aucun défilement de page.
+- **Vérification complète rejouée ensuite (même jour)** : `pnpm verify` exit 0 (typage, ESLint 0 erreur / 15 avertissements, **1148/1148** tests Web, build réussi) ; suite Android rejouée sans cache **57/57**.
+- **Non fait** : APK, essai sur box. Le message de confirmation et la sortie au second appui ne sont prouvés que par le test de la garde, pas sur appareil.
+
+## Tests des corrections de l'appairage par QR code — 12 novembre 2026 (tests seulement, aucune version)
+
+- **Contexte** : une revue du commit `33ac7d8` relevait quatre défauts (mot de passe visible, pas d'expiration, connexions non bornées, confirmation trompeuse). Ils étaient déjà corrigés dans ce dossier depuis la 1.12.54, mais sans test dédié. Céd a demandé d'ajouter ces tests. **Aucun code produit modifié**, trois fichiers de test seulement.
+- **Android, `PairingServerTest.java` (10 → 16 tests)** : mot de passe jamais renvoyé au téléphone ; réponse 409 « Envoi non accepté » quand le téléviseur refuse ; second envoi refusé tant que le premier attend ; fermeture seule à l'expiration (durée de vie injectée de 150 ms) ; l'arrêt coupe les connexions ouvertes ; la septième connexion muette est coupée (2 en traitement, 4 en attente).
+- **Web** : `tvPairing.test.ts` (+1) vérifie l'accusé de réception `acknowledgePairing` accepté / refusé / saisie inexploitable ; `xtreamLoginDialog.test.tsx` (+2) vérifie le refus d'un second envoi pendant la connexion et l'expiration du QR code à 5 minutes avec « Afficher un nouveau code ».
+- **Prouvé par les tests** : `vitest run` sur les deux fichiers Web **24/24** ; `gradlew testDebugUnitTest --tests PairingServerTest` **16/16**, rejoué trois fois (0,92 à 0,96 s) ; `tsc -p tsconfig.app.json` 0 erreur ; ESLint sans remarque sur les deux fichiers. **Non rejoué** : `pnpm verify` complet et la suite Android entière (WIP d'autres chantiers en cours dans l'arbre).
+- **Toujours pas fait** : aucun essai réel (QR code scanné par un téléphone, envoi vers la box). Le trafic reste en HTTP simple sur le réseau local.
+- **Branche `claude/tv-box-user-experience-5ec02f`** : dépassée, ses trois commits utiles sont repris ici ; ne plus rien en intégrer ni en tirer d'APK.
+
+## Élimination des 4 brèches de concurrence Trakt & Mesure matérielle ExoPlayer — 12 novembre 2026
+
+- **Contexte & Traitement exhaustif de l'audit critique de Céd** :
+  1. *Exclusion mutuelle absolue entre `stop` et `start` (`trakt.ts`)* :
+     - `shouldStop` vérifie strictement `!session.stop && !session.stopping && !session.starting`.
+     - `shouldStart` vérifie strictement `!session.start && !session.starting && !session.stop && !session.stopping`.
+     - Si un `stop` a eu lieu ou est en vol, aucun `start` ne peut plus jamais être émis (et vice-versa).
+     - Le test unitaire dédié valide l'impossibilité d'émettre un `start` après ou pendant un `stop` à 85% de progression sur des ticks concurrents.
+  2. *Suppression atomique et mutex de vidage de la file hors-ligne (`trakt.ts`)* :
+     - Remplacement de l'écrasement global par `removePendingTraktScrobble(item.sessionKey, item.action)` qui ne retire que les scrobbles acquittés par le réseau. Tout scrobble ajouté pendant l'attente réseau reste intact dans `localStorage`.
+     - Mutex `activeFlushPromise` : les vidages simultanés partagent la même promesse active, éliminant tout doublon réseau.
+  3. *Garde stricte sur `traktScrobble === false` (`trakt.ts`)* :
+     - `doFlushPendingTraktScrobbles` vérifie explicitement `effectiveSettings?.traktScrobble === false` et sort immédiatement avec 0 émission si le scrobble est désactivé, même lors des événements `online` du navigateur.
+  4. *Exclusion stricte des chargements et attentes dans le compteur Web (`VodLibrary.tsx`)* :
+     - Suppression de l'affectation `lastPlayingAt = performance.now()` dans `save()`.
+     - Seul l'événement DOM `playing` démarre le chronomètre `lastPlayingAt`.
+     - Les événements `pause`, `waiting`, `seeking`, `stalled`, `emptied`, `error` coupent immédiatement `lastPlayingAt` via `onStopOrBuffering()`.
+     - `flushPlaying()` ne prolonge la mesure que si `!video.paused && !video.ended && video.readyState >= 3`.
+  5. *Mesure matérielle ExoPlayer sur Android TV & Mobile (`NativePlayerActivity.java`, `nativePlayer.ts`)* :
+     - Intégration de `totalPlayedMs` alimenté par le `PlayTimeMeter` matériel branché sur `onIsPlayingChanged` d'ExoPlayer.
+     - Transmis dans l'Intent de résultat (`result.putExtra("playedMs", totalPlayedMs)`) et relayé par le plugin Capacitor (`NativePlayerPlugin.java`).
+     - Dans `nativePlayer.ts`, `watchDurationMs` privilégie directement `result.playedMs` : les pauses, chargements, sauts et reprises immédiates ne peuvent plus jamais fausser le temps de visionnage ni déclencher de faux scrobble.
+- **Résultats de vérification automatisée (`pnpm verify`)** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src` sans `--quiet`) : **0 erreur / 15 avertissements** (benchmark historique respecté).
+  - Vitest : **1 139 / 1 139 tests passés sur 148 fichiers** (100% vert, +3 tests dédiés).
+  - Build Vite : réussi en 8,35 s.
+
+## Durcissement de la concurrence, distinction temps regardé et file hors-ligne Trakt.tv — 12 novembre 2026
+
+- **Contexte & Traitement exhaustif des observations critiques de Céd** :
+  1. *Verrous posés avant le premier await (`trakt.ts`)* :
+     - Dans `maybeScrobbleTrakt`, `session.stopping = true` ou `session.starting = true` est désormais appliqué de façon **strictement synchrone avant le tout premier `await`** (avant la vérification / le rafraîchissement du jeton `getValidTraktAccessToken`).
+     - L'ensemble de la procédure (renouvellement du jeton, construction du payload et requête réseau) s'exécute sous ce verrou, avec libération garantie dans un bloc `finally`.
+     - Deux appels survenant simultanément dans le même cycle d'événements voient le second immédiatement neutralisé (`shouldStop` / `shouldStart` évalue `!session.stopping` / `!session.starting` à `false`), éliminant tout doublon en vol.
+  2. *Pas de nouvelle tentative après fermeture Android -> Retries et file d'attente hors-ligne (`trakt.ts`, `nativePlayer.ts`)* :
+     - `scrobbleTrakt` intègre un mécanisme de retries avec temporisation progressive (jusqu'à 2 réessais) pour absorber les coupures réseau temporaires au moment de la fermeture du lecteur.
+     - Si la requête de fermeture (`isClosed: true`, action `stop`) échoue malgré les réessais (ex: appareil hors-ligne), elle est automatiquement persistée dans une file d'attente locale `pendingTraktScrobbles` (`localStorage`).
+     - La fonction `flushPendingTraktScrobbles` est automatiquement invoquée au rétablissement de la connexion (`window.addEventListener('online')`), au démarrage de tout nouveau scrobble, et lors de la synchronisation manuelle dans les réglages, garantissant qu'aucun visionnage réel n'est perdu lors d'une fermeture hors-ligne sur Android ou Web.
+  3. *Position ≠ temps réellement regardé (`trakt.ts`, `nativePlayer.ts`, `VodLibrary.tsx`)* :
+     - Reprendre un film à 40 minutes (`positionMs = 2 400 000 ms`) et fermer immédiatement ne doit pas déclencher de scrobble.
+     - `maybeScrobbleTrakt` accepte le paramètre explicite `watchDurationMs`. La condition minimale de 5 secondes (`hasWatchedMin`) s'appuie désormais prioritairement sur ce temps réel de visionnage au cours de la session.
+     - Dans le lecteur natif Android (`nativePlayer.ts`), pour un média repris, la progression par rapport à `startPositionMs` est bornée par le temps écoulé réel depuis l'ouverture (`Math.min(sessionElapsedMs, positionAdvance)`).
+     - Dans le lecteur Web (`VodLibrary.tsx`), `watchedMs` cumule le temps de lecture effective (événements `playing`, `pause`, `waiting`, `seeking`), garantissant qu'une simple ouverture/fermeture immédiate ne comptabilise aucun temps de visionnage indu.
+- **Résultats de vérification automatisée (`pnpm verify`)** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src` sans `--quiet`) : **0 erreur / 15 avertissements** (benchmark historique respecté).
+  - Vitest : **1 136 / 1 136 tests passés sur 148 fichiers** (100% vert, +3 nouveaux tests unitaires pour la concurrence, le temps regardé sur reprise, et la file hors-ligne avec retries).
+  - Build Vite : réussi en 8,41 s.
+
+## Correction des 4 défauts résiduels de scrobble & jeton Trakt.tv — 12 novembre 2026
+
+- **Contexte & Analyse rigoureuse des observations de Céd** :
+  1. *Suppression de l'annonce fictive pré-lancement Android* (`nativePlayer.ts`) :
+     - Élimination intégrale de l'appel anticipé `maybeScrobbleTrakt` à 5 000 / 100 000 ms avant `NativePlayer.openVod`. Aucun faux `start` n'est envoyé pour une vidéo qui échoue ou est annulée immédiatement.
+     - À la fermeture du lecteur natif : si `positionMs < 5000` et non terminée, aucun scrobble n'est émis. Si la lecture a été effective (`positionMs >= 5000` ou `completed`), un scrobble `stop` est envoyé avec la progression réelle constatée (`isClosed: true`).
+  2. *Renouvellement automatique du jeton pour le scrobble* (`trakt.ts`) :
+     - `maybeScrobbleTrakt` appelle désormais `getValidTraktAccessToken` avant toute tentative de scrobble. Si le jeton est expiré ou à moins de 10 min de son expiration, il est renouvelé via `refreshTraktToken` et sauvegardé dans les réglages.
+     - En cas d'erreur HTTP 401 survenue pendant le scrobble, `scrobbleTrakt` sollicite le callback `onUnauthorized` qui force un rafraîchissement immédiat via `refresh_token` et réessaie l'envoi une fois avec le nouveau jeton.
+  3. *Suppression du repli arbitraire vers la saison 1* (`trakt.ts`) :
+     - Dans `scrobbleTrakt`, la ligne `payload.season ?? (payload.episode !== undefined ? 1 : undefined)` a été remplacée par `payload.season`. Si la saison est indéterminée, le scrobble de série est strictement refusé (`return false`) au lieu d'inventer un faux S01E05.
+  4. *Résilience aux pannes réseau temporaires* (`trakt.ts`) :
+     - `session.start` et `session.stop` ne sont marqués à `true` que si la requête réseau a réussi (`ok === true`).
+     - Des verrous temporaires en vol (`starting`, `stopping`) protègent contre les duplications concurrentes et sont réinitialisés en bloc `finally`. Une interruption réseau temporaire ne bloque plus la session : les ticks suivants retentent automatiquement l'action dès que la connexion est rétablie.
+- **Résultats de vérification automatisée** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src` sans `--quiet`) : **0 erreur / 15 avertissements**.
+  - Vitest : **1 133 / 1 133 tests passés sur 148 fichiers** (100% vert, 4 nouveaux tests unitaires dédiés à ces 4 cas).
+  - Build Vite : réussi en 8,18 s.
+
+## Audit, durcissement et correction intégrale des 7 défauts Trakt.tv & Recommandations d'accueil — 12 novembre 2026
+
+- **Contexte & Traitement exhaustif de la contre-expertise utilisateur** :
+  L'audit critique a relevé 7 failles concrètes dans l'implémentation initiale, qui ont toutes été corrigées et prouvées :
+  1. *Stabilité de session du lecteur Web (`VodLibrary.tsx`)* :
+     - Remplacement de `ts: Date.now()` par un identifiant de session pérenne mémorisé dans un `useRef` (`web:${mediaId}:${startedAt}`), garantissant que le scrobble Trakt `maybeScrobbleTrakt` n'envoie pas de `start`/`stop` en boucle et que la déduplication fonctionne.
+  2. *Scrobble en direct et films natifs Android (`nativePlayer.ts`)* :
+     - Émission immédiate du scrobble `start` dès l'appel à `openVod` (avant le lancement de l'Activity), et non plus uniquement au retour.
+     - Pour les films natifs : extraction correcte du titre (`title`) et attribution du type `'movie'` au lieu de dépendre du contexte d'enchaînement d'épisodes (qui était vide pour les films).
+     - Rétablissement de la compatibilité des signatures d'appel `openVod` sans 7e argument superflu (`vodMeta` optionnel), tout en préservant l'extraction des métadonnées enrichies depuis `zap.history`.
+  3. *Suppression du fallback aveugle S01E01 et métadonnées structurées (`trakt.ts`, `idb.ts`, `VodLibrary.tsx`)* :
+     - `parseSeasonAndEpisode` ne force plus jamais `S01E01` par défaut (retourne `{ season?: number; episode?: number }` strict).
+     - `scrobbleTrakt` refuse de scrobbler un épisode si les numéros ne sont pas formellement identifiés.
+     - Propagation des numéros réels et typés (`season`, `episode`) et identifiants TMDB à travers l'interface `PlayHistoryEntry` et les contextes de lecture.
+  4. *Dissociation TMDB ID de la série vs de l'épisode (`trakt.ts`)* :
+     - `traktHistoryToWatchEntries` associe rigoureusement `item.show?.ids?.tmdb` à `tmdbId` (et `item.episode?.ids?.tmdb` à `episodeTmdbId`), éliminant toute pollution du profil de goût ou des recommandations par l'identifiant individuel d'un épisode.
+  5. *Gestion explicite des erreurs HTTP Trakt (`trakt.ts`, `SettingsPanel.tsx`)* :
+     - Création de la classe d'erreur `TraktError`.
+     - `fetchTraktHistory` lève des exceptions typées sur les codes HTTP 401, 403, 5xx ou rupture réseau au lieu de renvoyer une liste vide masquant l'incident.
+     - `SettingsPanel` notifie l'utilisateur via toast avec le motif exact de l'échec.
+  6. *Activité de `traktSync`, Refresh Token & Expiration (`trakt.ts`, `SettingsPanel.tsx`)* :
+     - Implémentation du flux de renouvellement OAuth 2.0 `refreshTraktToken` (`grant_type: refresh_token`).
+     - Ajout de `getValidTraktAccessToken` qui déclenche automatiquement le renouvellement si le jeton expire dans moins de 10 minutes.
+     - Prise en compte active de la case `traktSync` qui déclenche immédiatement une synchronisation dès son activation.
+  7. *Alimentation réelle de l'accueil par les visionnages externes Trakt (`discoverRecommendations.ts`, `ContinuePanel.tsx`)* :
+     - `ContinuePanel` charge `externalWatches` depuis IndexedDB et écoute l'événement `'external-watches-updated'`.
+     - `discoverRecommendations.ts` utilise les visionnages Trakt comme graines de recommandation (`externalSeeds`) dès que l'historique local Xtream est vide.
+     - La rangée « Parce que tu as regardé… » affiche et rattache désormais la source externe Trakt même en l'absence totale de visionnage local.
+- **Contrôles et preuves de conformité** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src` sans `--quiet`) : **0 erreur / 15 avertissements** (benchmark historique respecté).
+  - Vitest : **1 129 / 1 129 tests passés sur 148 fichiers de tests** (100% vert, régression `openVod` et `idb` résolue).
+  - Build Web Vite : réussi en 11,40 s (`dist/` minifié, aucun média lourd).
+  - Vérification complète `pnpm verify` respectée.
+
+## Intégration de la connexion personnelle Trakt.tv (OAuth code appareil, scrobble en direct et synchro d'historique) — 12 novembre 2026
+
+- **Contexte & Fonctionnalités implémentées** :
+  1. *Autorisation OAuth code appareil (`TraktAuthDialog.tsx` & `trakt.ts`)* :
+     - Conforme RFC 8628 pour téléviseur et mobile depuis le canapé : demande d'un `device_code` et d'un `user_code` lisible.
+     - Affichage du code en gros caractères espacés, lien cliquable `trakt.tv/activate`, et QR code vectoriel SVG pur généré localement via `qrcode-generator`.
+     - Sondage automatique régulé (intervalle 5s) avec annulation propre `AbortController`.
+     - Récupération du profil `@username` et persistance sécurisée des jetons (`traktToken`, `traktRefreshToken`, `traktExpiresAt`).
+  2. *Synchronisation de l'historique Trakt vers l'accueil & recommandations* :
+     - `fetchTraktHistory` récupère les 50 derniers films et épisodes vus sur Trakt.
+     - `traktHistoryToWatchEntries` convertit l'historique en `PlayHistoryEntry` avec `platform: 'trakt'`, `mediaKind: 'movie' | 'series'`, identifiants TMDB, date de visionnage et statut terminé.
+     - Intégration transparente dans « Vu ailleurs » (`externalWatches`) et déclenchement de l'événement `'external-watches-updated'` pour nourrir instantanément le profil de goût TMDB et les rangées « Pour toi » et « Parce que tu as regardé… » de l'accueil.
+  3. *Scrobble en temps réel pendant la lecture* :
+     - `scrobbleTrakt` / `maybeScrobbleTrakt` : actions `start` (dès 5s de lecture stabilisée) et `stop` (lorsque la lecture se termine ou dépasse 80% de progression, marquant le film/épisode comme vu sur Trakt).
+     - Raccordé à la fois sur le lecteur Web (`VodLibrary.tsx`) et sur le lecteur natif Android (`nativePlayer.ts`).
+     - Gestion des erreurs non bloquante : aucune panne réseau ou expiration de jeton ne peut interrompre la lecture.
+  4. *Interface dans `SettingsPanel.tsx` & Sécurité* :
+     - Section dédiée « Trakt.tv » avec statut connecté `@username`, bouton de synchronisation manuelle et déconnexion en un clic.
+     - Cases à cocher pour activer/désactiver le scrobble en direct et la synchronisation avec les recommandations.
+     - Masquage systématique des secrets dans les journaux de modifications et les diagnostics (`redact.ts` : `traktToken`, `traktRefreshToken`, `traktClientSecret`).
+     - Migration transparente des réglages `v10 -> v11` (`storage.ts`).
+- **Contrôles et preuves de conformité** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src`) : **0 erreur / 15 avertissements** (benchmark historique respecté).
+  - Vitest : **1 124 / 1 124 tests passés sur 148 fichiers de tests** (+17 tests ajoutés : 11 dans `trakt.test.ts`, 3 dans `traktAuthDialog.test.tsx`, 2 dans `settingsPanelTrakt.test.tsx`, 1 dans `storageSettings.test.ts`).
+  - Build Web Vite : réussi (`dist/` minifié, aucun média lourd, bundles propres).
+  - Tests unitaires Android Gradle : **75 / 75 tâches passées** (`./gradlew testReleaseUnitTest` BUILD SUCCESSFUL en 13s).
+  - Chaîne complète `pnpm verify` validée avec succès (code de retour 0).
+- **Prochaine étape possible** :
+  - Enchaîner sur BetaSeries ou YouTube, ou consolider et packager une nouvelle livraison APK (v1.12.59 / code 107).
+
+## Alimentation automatique des recommandations d’accueil sans visite préalable du catalogue — 12 novembre 2026
+
+- **Contexte & Problématique résolue** :
+  - Sur TV comme sur mobile, les recommandations (« Pour toi » et « Parce que tu as regardé… ») n'étaient calculées que depuis `VodLibrary.tsx` lors de la navigation dans les catégories VOD (et sur TV, uniquement si l'entrée « Pour toi » était explicitement ouverte dans la colonne latérale).
+  - Au lancement de l'application, l'accueil ne disposait donc d'aucune recommandation tant que l'utilisateur n'avait pas ouvert le catalogue de films ou de séries.
+- **Architecture & Implémentation réalisée** :
+  1. *Module utilitaire `application/src/utils/discoverRecommendations.ts`* :
+     - `historySignature` : signature de récence et d'avancement des visionnages qualifiés (par type `movie` ou `series`).
+     - `shouldRefreshRecommendations` : déclenche le recalcul si le cache de recommandations est vide, s'il manque de `sourceId` (pour la rangée « Parce que tu as regardé »), ou si un nouveau titre a été regardé.
+     - `watchedCategoryIds` / `resolveTargetCategoryIds` : sélectionne en priorité les catégories des œuvres vues par l'utilisateur (en excluant les catégories adultes), ou à défaut la dernière catégorie visitée / populaire du compte Xtream.
+     - `fetchCategoryCandidates` : charge les titres des catégories ciblées par petits lots sans **jamais** émettre de requête globale `get_vod_streams` sans `category_id` (anti-saturation serveur Xtream), et alimente `categoryCatalogCache`.
+     - `feedHomeRecommendations` : calcule les recommandations déterministes via `recommendForHistory` (avec scores, justifications lisibles et `sourceId`), puis persiste dans `saveForYouSnapshot` (déclencheur de l'événement `'for-you-updated'`).
+  2. *Hook React `application/src/hooks/useDiscoverRecommendations.ts`* :
+     - Exécute en arrière-plan le rafraîchissement des recommandations pour les films et les séries dès le montage de l'accueil, avec gestion d'annulation `AbortController`.
+  3. *Intégration dans `ContinuePanel.tsx`* :
+     - Branché directement dans l'accueil, rendant les rangées « Pour toi » et « Parce que tu as regardé » immédiatement disponibles dès l'ouverture de l'application.
+     - L'action « Actualiser » de l'accueil synchronise également les suggestions en complément des flux podcasts.
+- **Contrôles et preuves de conformité** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src`) : **0 erreur / 17 avertissements**.
+  - Vitest : **1 107 / 1 107 tests passés** sur 145 fichiers de tests (+8 tests ajoutés : 7 dans `discoverRecommendations.test.ts` et 1 test d'intégration dans `continuePanel.test.tsx`).
+  - Build Web Vite : réussi (`dist/` minifié, aucun média lourd).
+  - Chaîne complète `pnpm verify` validée avec succès (code de retour 0).
+- **Prochaine étape possible** :
+  - Développer les connexions personnelles Trakt, BetaSeries et YouTube selon les priorités de Céd.
+
+## Consolidation & validation des 3 nouvelles rangées de l'accueil (Épisodes suivants, Parce que tu as regardé, Mes plateformes) — 12 novembre 2026 (version 1.12.58 / code 106)
+
+- **Contexte & Fonctionnalités ajoutées** :
+  1. *Épisodes suivants* (`next-series`) : propose automatiquement la suite disponible chez le fournisseur après un épisode terminé. Gestion via `followedSeries` et `nextSeriesEpisode` (`discoverSeries.ts`), tri strict des saisons/épisodes, exclusion des spéciaux et des épisodes déjà commencés ou vus.
+  2. *Parce que tu as regardé…* (`because-watched`) : recommandations rattachées à un visionnage réel via `recommendForHistory` avec traçabilité `sourceId` et justifications contextuelles (« Proche de… », « Même catégorie que… »), sans doublons avec « Pour toi ».
+  3. *Mes plateformes* (`platforms`) : raccourcis d'accès direct aux plateformes de streaming favorites (`readMyPlatforms`, `streamingPlatforms`), incluant YouTube si sélectionné. Ouverture native via `NativePlayerBridge.openWeb` (avec packages Android prioritaires) ou onglet navigateur web, et masquage sous verrouillage parental.
+- **Levée du blocage des tests (`spawn EPERM`)** :
+  - L'erreur `spawn EPERM` constatée lors de l'appel direct à esbuild / Vitest sous Windows est contournée et résolue par l'invocation via `corepack pnpm exec vitest run`.
+  - Intégration et validation des 6 tests unitaires supplémentaires (+3 dans `discoverSeries.test.ts`, +2 dans `continuePanel.test.tsx`, +1 dans `discover.test.ts`).
+- **Contrôles et preuves de conformité** :
+  - TypeScript (`tsc -p tsconfig.app.json` et `tsconfig.node.json`) : **0 erreur**.
+  - ESLint (`eslint ./src`) : **0 erreur / 17 avertissements**.
+  - Vitest : **1 099 / 1 099 tests passés** sur 144 fichiers de test (durée 54,31 s).
+  - Build Web Vite : réussi en 8,03 s (`dist/` minifié, sans sourcemaps).
+  - Tests unitaires Android : **75 / 75 tâches Gradle passées** (`./gradlew testReleaseUnitTest` en 13 s).
+  - Capacitor : `cap sync android` réussi en 0,458 s.
+  - Compilation Release Gradle : `./gradlew assembleRelease` **BUILD SUCCESSFUL** en 26 s.
+  - Contrôle matériel physique : aucun appareil connecté sur `adb`.
+- **Livraison** : **1.12.58 / code 106**, APK `CedPlay-1.12.58.apk` et copie `CedPlay.apk` à la racine du dépôt (4 471 381 octets, SHA-256 `9fd3d906ad8a1840483202bc64788e924528335fe7f6ac78e368de803630c5ae`).
+
+## Consolidation complète & validation des correctifs d'accueil (TV, thème clair, mobile) — 12 novembre 2026 (version 1.12.58 / code 106)
+
+- **Contexte & Audit** :
+  1. *TV, titres longs — risque de chevauchement* : à 960 × 540, le bandeau était fixé à 200 px avec les filtres superposés en haut. Un titre sur deux lignes avec métadonnées risquait de remonter sous les filtres.
+     - *Correction vérifiée* : `tv-discover-hero` assoupli avec `min-height: 200px` au lieu de `height: 200px`, et `padding-top: 64px` généralisé sur `tv-discover-hero-copy` pour garantir l'espace réservé aux filtres dans tous les cas (avec ou sans image).
+  2. *Thème clair — contraste* : le bandeau combinait des fonds sombres fixes avec des textes dépendants du thème, provoquant un contraste insuffisant en mode clair.
+     - *Correction vérifiée* : fond clair adaptatif (`linear-gradient(105deg, hsl(var(--background)) 8%, hsl(var(--secondary)) 100%)`), fond du texte opacifié (`hsl(var(--background) / .94)`), eyebrow en `hsl(var(--primary))` au lieu du saumon `#ffac96`, et hints en `hsl(var(--muted-foreground))`.
+  3. *Mobile — sélection des affiches dans le carrousel* : dans `ContinuePanel.tsx`, les deux premières reprises étaient sélectionnées avant le filtrage par présence d'affiche.
+     - *Correction vérifiée* : `.filter(item => item.image)` est exécuté *avant* le `.slice(0, 2)`. Si les deux premières reprises n'ont pas d'affiche, les suivantes illustrées prennent place dans le bandeau. Test de régression dédié validé dans `continuePanel.test.tsx`.
+- **Résolution du blocage des tests (`spawn EPERM`)** :
+  - L'incident `spawn EPERM` rencontré lors des sessions précédentes provenait de l'invocation directe de `pnpm` vs le runtime Node / esbuild sous Windows. Résolu par l'utilisation de `corepack pnpm`.
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : `eslint ./src` (sans `--quiet`) : **0 erreur / 17 avertissements**.
+  - Tests unitaires Web : **1093/1093 passés sur 143 fichiers** (durée 51,43 s).
+  - Build Vite : minifié, sans maps sources dans `dist/` (7,94 s).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest` en 12 s).
+  - Capacitor : `cap sync android` exécuté avec succès (0,458 s).
+  - Compilation Release Gradle : `./gradlew assembleRelease` **BUILD SUCCESSFUL** en 24 s.
+  - Matériel physique : aucun appareil connecté sous `adb` au moment du contrôle.
+- **Livraison** : **1.12.58 / code 106**, APK `CedPlay-1.12.58.apk` et copie `CedPlay.apk` à la racine du dépôt (4 469 761 octets, SHA-256 `d49ab3c2715de8dc3b563c554582ea83fb78f0d6363c5bfea1be366315bbdea5`).
+
+## Consolidation complète & livraison : Affichage robuste des icônes de chaînes sur la page d'accueil — 12 novembre 2026 (version 1.12.58 / code 106)
+
+- **Contexte & Retours de Céd** : « les icones des chaines ne s'affichent pas sur la page d'accueil »
+- **Diagnostic des causes racines** :
+  1. *Blocage Chromium / WebView dans les conteneurs horizontaux* : les rangées de l'accueil (`data-discover-rail`) sont en défilement horizontal (`overflow-x-auto`). L'attribut `loading="lazy"` dans `ChannelLogo.tsx` liait l'IntersectionObserver au viewport vertical du document, bloquant ou retardant indéfiniment le chargement des logos des chaînes dans les rails horizontaux.
+  2. *Masquage persistant (`opacity-0`)* : l'image démarrait à `loaded = false` avec une classe `opacity-0`. Lorsque l'image était déjà en cache mémoire, l'événement natif `onLoad` ne se re-déclenchait pas systématiquement au montage React, maintenant l'icône totalement invisible et le conteneur en pulsation grise perpétuelle (`animate-pulse`).
+  3. *Absence de `referrerPolicy="no-referrer"` et `crossOrigin="anonymous"` dans `ChannelLogo.tsx`* : contrairement aux affiches de films/séries de l'accueil, `ChannelLogo` envoyait le Referer de l'application (`https://localhost/` ou `http://localhost:5178/`), provoquant le rejet 403 Forbidden des serveurs IPTV anti-hotlinking.
+  4. *Absence de logo vectoriel de secours dans le Hero TV (`TvDiscoverHero.tsx`)* : lors de la sélection d'une chaîne dans les rangées de l'accueil, si la chaîne n'avait pas d'URL de logo valide ou si le serveur échouait, le Hero n'affichait rien (`data-has-image="false"`), alors que l'application intègre les logos vectoriels officiels de chaînes (`PlatformLogo` : TF1, France TV, M6, Canal+, beIN, etc.).
+  5. *Indexation partielle dans `ContinuePanel.tsx`* : `channelById` ne scannait que `playlist.groups`. Si `playlist.groups` était vide ou incomplet alors que `playlist.channels` contenait les chaînes, la recherche de chaîne pour les favoris ou l'historique échouait. De plus, `altVariant` dans `xtreamLive.ts` omettait l'attribut `logo` de la chaîne principale.
+- **Périmètre complet implémenté dans 1.12.58** :
+  1. **Déblocage immédiat du rendu dans `ChannelLogo.tsx`** :
+     - Retrait du `loading="lazy"` bloquant pour les conteneurs horizontaux de l'accueil et chargement direct.
+     - Détection synchrone de l'état `complete` (`imgRef.current?.complete && imgRef.current?.naturalWidth > 0`) pour afficher immédiatement les logos déjà en cache mémoire sans attendre d'événement différé.
+     - Ajout de `referrerPolicy="no-referrer"` et `crossOrigin="anonymous"` pour immuniser le chargement contre les rejets 403 Forbidden des serveurs IPTV distants.
+     - Réinitialisation propre de `imageError` au changement de `src`.
+  2. **Intégration du logo vectoriel dans le Hero TV (`TvDiscoverHero.tsx`)** :
+     - Prise en charge de `channelName` et repli automatique vers `PlatformLogo` (TF1, M6, France 2/3/4/5, Canal+, beIN SPORTS, Eurosport, etc.) lorsqu'une chaîne est sélectionnée mais ne possède pas de logo distant ou que son URL échoue.
+     - Conservation de l'état sans illustration (`data-has-image="false"`) pour les titres et chaînes non catalogués.
+  3. **Indexation exhaustive et propagation des logos (`ContinuePanel.tsx`, `xtreamLive.ts`)** :
+     - `channelById` indexe désormais prioritairement `playlist.channels` avant de compléter avec `playlist.groups`, garantissant la résolution de chaque chaîne et de ses métadonnées/logos sur l'accueil.
+     - `peekProps` transmet `channelName` pour garantir l'identification de la chaîne même lorsque le titre affiché est celui de l'émission EPG en cours.
+     - `buildLiveChannel` dans `xtreamLive.ts` propage le `logo` sur la variante alternative `altVariant`.
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : `eslint ./src` (sans `--quiet`) : **0 erreur / 18 avertissements** (benchmark historique respecté).
+  - Tests unitaires Web : **1087/1087 passés sur 143 fichiers** (+2 nouveaux tests de régression dans `channelLogo.test.tsx` et `tvDiscoverHero.test.tsx`).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest` BUILD SUCCESSFUL en 26 s).
+  - Build Vite : minifié, sans maps sources dans `dist/` (10,41 s).
+  - Capacitor : `pnpm exec cap sync android` exécuté avec succès (0,695 s).
+  - Compilation Release Gradle : `./gradlew assembleRelease` **BUILD SUCCESSFUL** en 1m 53s.
+- **Livraison** : **1.12.58 / code 106**, APK `CedPlay-1.12.58.apk` et copie `CedPlay.apk` à la racine du dépôt (4 468 003 octets, SHA-256 `5b732904585a873bf042c1322dfcd7e46b4a0d78dfe83f97817d45f0da134b77`). Ancien APK 1.12.57 nettoyé.
+
+## Consolidation complète & livraison : Validation sélection catégories & Déblocage navigation réglages / volume — 11 novembre 2026 (version 1.12.55 / code 103)
+
+- **Contexte & Retours de Céd** :
+  1. *Scanner de chaînes* : impossibilité de valider la sélection des catégories pour lancer le contrôle des flux non fonctionnels (bouton absent dans le sélecteur, traversée fastidieuse de dizaines de catégories au D-pad).
+  2. *Réglages TV* : la navigation démarrait tout en bas de la boîte de dialogue, et une fois sur le réglage du volume, l'utilisateur était pris au piège (ArrowUp/ArrowDown capturés par le curseur natif au lieu de sortir du réglage).
+- **Périmètre complet implémenté dans 1.12.55** :
+  1. **Validation directe dans le sélecteur de catégories (`ChannelHealthDialog.tsx`)** :
+     - Bouton d'action direct et bien en vue `Vérifier cette sélection (N)` placé directement dans le pied du panneau de catégories, avec rappel en temps réel du nombre de catégories et chaînes sélectionnées.
+     - Touche `Entrée` supportée dans le champ de filtre des catégories pour sélectionner immédiatement ou lancer la vérification de la sélection courante.
+     - Prise en charge explicite de `tvMode` avec focus automatique dès l'ouverture sur le sélecteur sans défilement parasite (`scrollTop = 0`).
+     - Bouton inférieur unifié pour toujours offrir une action principale évidente quel que soit l'historique de scan.
+  2. **Déblocage du curseur de volume et navigation naturelle de haut en bas (`useRemoteNavigation.ts`, `SettingsPanel.tsx`)** :
+     - Dans `useRemoteNavigation.ts`, les curseurs horizontaux (`input[type="range"]`, `[role="slider"]`) conservent `ArrowLeft`/`ArrowRight` pour ajuster la valeur, mais libèrent impérativement `ArrowUp` et `ArrowDown` pour naviguer vers le réglage précédent ou suivant (`remoteNeighbor`). L'utilisateur n'est plus jamais piégé sur le volume.
+     - Dans `SettingsPanel.tsx`, ouverture auto-focusée en haut du dialogue (`scrollTop = 0`), point d'entrée `data-remote-start` sur la première option de lecture (`autoplay`), et mise en valeur visuelle immédiate des rangées (`focus-visible:ring-2 focus-visible:ring-primary`). La navigation se fait naturellement et immédiatement de haut en bas.
+     - Sécurisation de `remoteTargets` dans `remoteNavigation.ts` pour tolérer les rects nuls ou partiels sans lever d'exception.
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 18 avertissements** (benchmark historique respecté).
+  - Tests unitaires ciblés : **52/52 passés sur 5 fichiers** (`channelHealthDialog`, `settingsPanelDiagnostics`, `remoteNavigation`, `streamCheck`, `tvPairing`).
+  - Build Vite : minifié, sans maps sources dans `dist/` (8,42 s).
+  - Capacitor : `pnpm exec cap sync android` exécuté avec succès.
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** en 2m 14s.
+- **Livraison** : **1.12.55 / code 103**, APK `CedPlay-1.12.55.apk` et copie `CedPlay.apk` à la racine du dépôt (4 466 575 octets, SHA-256 `a2ad6102f134bc4b26d3b8b6817ee4677cc7007dc2cbfb2d7c7f691f3cc8f53b`). Ancien APK 1.12.54 nettoyé.
+
+## Consolidation complète & livraison : Accueil TV guidé, Appairage QR code, Horloge TV et accès USB/SD — 11 novembre 2026 (version 1.12.54 / code 102)
+
+- **Contexte** : Reprise et finalisation suite à la session ChatGPT ayant intégré les corrections TV de Claude (bloquée sur `spawn EPERM` d'esbuild sans exécution des tests ni production d'APK).
+- **Périmètre complet consolidé dans 1.12.54** :
+  1. **Accueil TV guidé (`TvStarter.tsx`) et horloge commune (`TvClock.tsx`)** :
+     - Écran d'accueil TV vide guidé avec tuiles « Direct », « Connexion » et « Podcasts » (`Par où commencer ?`).
+     - Horloge commune intégrée dans l'en-tête en mode TV.
+  2. **Connexion & accès USB/SD depuis Films et Séries (`MoviesPanel.tsx`, `VodLibrary.tsx`)** :
+     - Message factuel sur l'absence de catalogue si aucun compte Xtream n'est associé à la liste.
+     - Actions directes « Connecter un abonnement » et « Lire une clé USB ou une carte SD » accessibles directement depuis Films et depuis Séries.
+     - La demande USB depuis Séries est consommée pour ne pas forcer les ouvertures suivantes dans Films.
+  3. **Détection Xtream robuste (`xtreamCatalog.ts`)** :
+     - Règle de majorité stricte (`matched * 2 > playlist.channels.length`) pour les comptes Xtream inférés depuis les flux, évitant les faux positifs sur listes publiques mixtes.
+     - Comptes enregistrés explicitement prioritaires.
+  4. **Appairage TV par QR code (`TvPairingCard.tsx`, `tvPairing.ts`, `PairingServer.java`)** :
+     - Serveur HTTP local embarqué sur Android (`PairingServer`) avec QR code généré localement pour saisir facilement les identifiants Xtream depuis un smartphone.
+     - Résilience sur `acknowledgePairing` (appel optionnel protégé et mock complet de test).
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 18 avertissements** (benchmark historique respecté).
+  - Tests unitaires Web : **1067/1067 passés sur 142 fichiers** (`corepack pnpm verify` : 100% verts).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest` : BUILD SUCCESSFUL en 5 s).
+  - Build Vite : minifié, sans maps sources dans `dist/` (10,34 s).
+  - Capacitor : `pnpm exec cap sync android` exécuté avec succès.
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** (APK `CedPlay-1.12.54.apk` de 4 465 277 octets, SHA-256 `8b43ba16dcc24682bbf17b57c701659c6dae56fe741f81027f260f35d025262c`).
+- **Livraison** : **1.12.54 / code 102**, APK `CedPlay-1.12.54.apk` et copie `CedPlay.apk` à la racine du dépôt. Ancien APK 1.12.53 nettoyé.
+
+## Consolidation complète & livraison : Refonte & optimisation du tri des chaînes (santé des flux) — 11 novembre 2026 (version 1.12.53 / code 101)
+
+- **Contexte & Objectifs** : Refonte complète de la vérification de santé des flux (`ChannelHealthDialog.tsx` et `streamCheck.ts`) pour répondre aux contraintes des très grandes playlists (~22 000 chaînes) sans bloquer ni saturer les connexions du fournisseur IPTV.
+- **Périmètre complet implémenté dans 1.12.53** :
+  1. **Sélection par catégories avec recherche et compteurs** : choix fin des groupes à vérifier, recherche textuelle instantanée, boutons rapides « Tout cocher » et « Tout décocher », compteurs de chaînes par groupe et total ciblées. Support également de « Mes favoris » et « Toute la liste ».
+  2. **Persistance IndexedDB incrémentale par lot** : sauvegarde immédiate après chaque lot (`saveChannelHealth` sous `channelHealth:${playlistId}`). Les résultats partiels sont conservés en cas d'arrêt, de fermeture ou d'extinction de l'appareil.
+  3. **Reprise de scan intelligente** : bouton principal « Vérifier les non testées (N) » ne testant que les flux sans résultat valide. Invalidation automatique si l'URL d'une chaîne change dans la liste.
+  4. **Retest ciblé des échecs** : bouton « Retester les échecs (N) » pour vérifier si une panne était temporaire, plus bouton « Retester » individuel par chaîne dans la liste des échecs.
+  5. **Régulation de concurrence par serveur (hôte)** : limitation à 2 requêtes simultanées maximum par nom de domaine (`maxPerHost = 2`) pour éviter les bannissements / blocages IP / 429 imposés par les fournisseurs IPTV sur les comptes limités à 1 ou 2 connexions.
+  6. **Choix de la playlist dans le dialogue** : sélecteur déroulant si plusieurs listes sont configurées, avec scan et masquage strictement rattachés à la liste choisie.
+  7. **Vocabulaire honnête & actions réversibles** : mention claire que le test vérifie la disponibilité réseau/serveur sans garantir le décodage vidéo/son ; états « Répond », « Échec de vérification », « Non vérifiée » ; masquage réversible et bouton « Effacer l'historique ».
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 18 avertissements** (benchmark historique respecté).
+  - Tests unitaires Web : **1060/1060 passés sur 141 fichiers** (`corepack pnpm verify` : +19 tests unitaires et de régression).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest`).
+  - Build Vite : minifié, sans maps sources dans `dist/` (9,45 s).
+  - Capacitor : `pnpm exec cap sync android` exécuté avec succès.
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** (APK `CedPlay-1.12.53.apk` de 4 451 536 octets, SHA-256 `a117733e03b3d0c3aec0736ad89810d6aead4c8b7fe27692a784f545d63ee0c9`).
+- **Livraison** : **1.12.53 / code 101**, APK `CedPlay-1.12.53.apk` et copie `CedPlay.apk` à la racine du dépôt. Ancien APK 1.12.52 nettoyé.
+
+## 12 novembre 2026 — Intégration ciblée des corrections TV de Claude (sources non livrées)
+
+- Reprise des changements fonctionnels de 04d687f et 7479b2f dans le dossier principal, sans fusionner leurs instantanés de base ni écraser le WIP 1.12.52 (scanner, recherche, hiérarchie vidéo/podcasts).
+- Détection Xtream : majorité stricte pour les comptes inférés ; comptes enregistrés prioritaires. Tests ajoutés pour minorité, moitié/moitié, majorité et compte explicite.
+- Accueil TV vide : tuiles Direct, connexion et podcasts ; favoris attendus avec l’historique. Horloge commune dans l’en-tête.
+- Films et Séries sans compte : message factuel sur l’absence de catalogue associé. Connexion et USB/SD accessibles depuis les deux rubriques ; la demande USB depuis Séries est consommée pour ne pas forcer les visites suivantes dans Films.
+- Tests de régression ajoutés/adaptés pour l’accueil et le parcours Séries → USB/SD → Catalogue.
+- Vérification : tsc app/node réussis, ESLint 0 erreur / 18 avertissements. pnpm verify bloqué au démarrage de Vitest par esbuild spawn EPERM : aucun test exécuté, build non atteint. Pas de validation navigateur ou appareil, pas de nouvel APK. L’APK 1.12.52 existant ne contient pas ces changements.
+- Fiche Second Cerveau et entretien non modifiés : emplacement hors des racines autorisées en écriture de cette session.
+
 # CedPlay — lecteur personnel, reprise du 3 novembre 2026
+
+## Consolidation complète & livraison : Séparation stricte vidéo / podcasts & accueil Découvrir — 11 novembre 2026 (version 1.12.52 / code 100)
+
+- **Contexte** : Reprise et finalisation suite à la session ChatGPT ayant apporté la séparation stricte vidéo / podcasts dans l'accueil Découvrir, restée bloquée sur `spawn EPERM` à l'exécution de Vitest sans build ni APK.
+- **Périmètre complet consolidé dans 1.12.52** :
+  1. **Séparation vidéo / audio dans « Tout »** : « Reprendre » contient exclusivement les films et séries commencés. Les épisodes de podcast n'y sont plus mêlés.
+  2. **Rangée dédiée aux podcasts** : une rangée distincte « Reprendre les podcasts » apparaît après « Pour toi » et « Ma liste », avant les autres rangées audio.
+  3. **Filtrage par abonnements actifs** : sur « Tout », la reprise audio est strictement réservée aux podcasts actuellement suivis (`subscribed`). Sans abonnement actif, aucun média audio ne s'affiche sur la page d'accueil.
+  4. **Conservation de l'historique d'écoute** : les épisodes commencés restent intégralement mémorisés et accessibles dans le filtre « Podcasts », même en cas de désabonnement.
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 18 avertissements** (benchmark historique respecté).
+  - Tests unitaires Web : **1041/1041 passés sur 141 fichiers** (`corepack pnpm verify`).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest`).
+  - Build Vite : minifié, sans maps sources dans `dist/` (12,30 s).
+  - Capacitor : `pnpm exec cap sync android` exécuté avec succès.
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** (APK `CedPlay-1.12.52.apk` de 4 447 034 octets, SHA-256 `496d0662fb86e1f0db4e7e83595f90c94848bf902ad8cb8923b1c6aa2695488e`).
+- **Livraison** : **1.12.52 / code 100**, APK `CedPlay-1.12.52.apk` et alias `CedPlay.apk` à la racine du dépôt. Ancien APK 1.12.51 nettoyé.
+
+
+## Consolidation complète & livraison : Recherche TV, retour direct, veille TV et hiérarchie Découvrir — 11 novembre 2026 (version 1.12.51 / code 99)
+
+- **Contexte** : Reprise et finalisation suite à la session ChatGPT ayant apporté les ajustements fins de recherche et navigation TV (`data-remote-self`, conservation de `searchResumeQuery` après sélection chaîne, gestionnaires D-pad locaux priorisés), qui était restée bloquée sur `spawn EPERM` sans exécution des tests ni production d'APK.
+- **Périmètre complet consolidé dans 1.12.51** :
+  1. **Recherche unifiée & retour** : sélection d'une chaîne ou d'un élément VOD depuis la recherche préserve la requête active ; au retour (fermeture fiche VOD, lecteur natif ou web), la boîte de dialogue se réouvre avec les résultats intacts. Une nouvelle recherche explicite repart à vide.
+  2. **Navigation TV dans le dialogue de recherche** : `data-remote-self` assure que les gestionnaires locaux Haut/Bas agissent avant la navigation géométrique globale. Flèche bas depuis le champ cible directement la recherche récente la plus fraîche (`recent[0]`) ou le premier résultat ; en mode TV, la croix de suppression individuelle est exclue du focus télécommande (`tabIndex={-1}`, `pointer-events-none`).
+  3. **Reprise après veille TV** : `NativePlayerActivity` gère les coupures réseau lors de la mise en veille/réveil TV (détection des erreurs transitoires d'E/S et de connectivité, surveillance `ConnectivityManager` active en direct comme en VOD, reprise différée propre dès rétablissement Wi-Fi/Ethernet).
+  4. **Hiérarchie de l'accueil Découvrir** : ordre strict sur « Tout » : Direct (`recent-channels`, `live-now`) -> Vidéo (`resume`, `for-you`, `my-list`) -> Podcasts (`new-episodes`, `to-listen`). Sans abonnement podcast, aucune rangée podcast parasite n'apparaît.
+- **Vérifications et preuves** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 18 avertissements** (inchangé sur le code historique, avertissement `useCallback` résolu).
+  - Tests unitaires Web : **1039/1039 passés sur 141 fichiers** (dont les 3 tests de régression de recherche et navigation D-pad).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest`).
+  - Build Vite : minifié, sans maps sources dans `dist/` (7,88 s).
+  - Capacitor : `pnpm exec cap sync android` exécuté avec succès.
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** (APK `CedPlay-1.12.51.apk` de 4 446 887 octets, SHA-256 `d022af00d78accfd87a145dacdefa7ce3bd3e832c80e996fe7e9d109add43f2c`).
+- **Livraison** : **1.12.51 / code 99**, APK `CedPlay-1.12.51.apk` et copie `CedPlay.apk` à la racine du dépôt. Ancien APK 1.12.50 nettoyé.
+
+
+## Hiérarchie de l'accueil Découvrir : Chaînes récentes d'abord, films & séries ensuite, podcasts en fin — 11 novembre 2026 (version 1.12.50 / code 98)
+
+- **Demande de Céd** : « ce n est pas ce que j ai dit, j ai dit que les podcasts sont le premier qu on voit sur l accueil mais ce srait mieux de voir les chaines recentes, puis les films et series, avant les podcasts je pense »
+- **Causes racines** :
+  1. `orderRows()` imposait la rangée `resume` (« Reprendre ») tout en haut de l'écran avant toute famille de contenu, et `resumeItems()` y mélangeait les épisodes de podcast par date de mise à jour. Dès lors, le premier élément affiché sous l'en-tête était un épisode de podcast commencé.
+  2. `orderRows()` effectuait un entrelacement (round-robin) par rangée entre chaque famille (`present[0]`), ce qui reléguait la rangée `recent-channels` (« Chaînes récentes ») après la rangée de podcast `to-listen` / `new-episodes`, et `my-list` après les podcasts.
+  3. `ContinuePanel.tsx` activait `showSelection = feeds.length === 0` sans vérifier le filtre actif : la « Sélection CedPlay » (10 podcasts par défaut) s'imposait donc sur l'accueil `Tout` même pour un utilisateur n'ayant jamais écouté ou suivi de podcast.
+- **Correctifs apportés** :
+  - **Ordre strict des rangées dans `Tout`** (`src/utils/discover.ts`) :
+    1. **Direct** : `recent-channels` (« Chaînes récentes ») puis `live-now` (« Mes chaînes en ce moment »).
+    2. **Vidéo** : `resume` (« Reprendre » films & séries), `for-you` (« Pour toi »), `my-list` (« Ma liste »).
+    3. **Podcasts** : `new-episodes` (« Nouveaux épisodes »), `to-listen` (« À écouter »).
+    Les familles restent groupées sans entrelacement et les podcasts sont toujours relégués en fin de page.
+  - **Priorité vidéo dans `Reprendre`** (`resumeItems`) :
+    Dans l'accueil `Tout`, les films et séries commencés apparaissent systématiquement avant les épisodes de podcast (les podcasts en cours ne peuvent plus supplanter un film ou une série).
+  - **Suggestions par défaut isolées** (`ContinuePanel.tsx`) :
+    `showSelection = feeds.length === 0 && filter === 'podcasts'`. La sélection par défaut de 10 podcasts ne s'affiche plus sur l'accueil `Tout` mais uniquement si l'utilisateur filtre explicitement sur « Podcasts ». Si l'utilisateur n'a pas d'abonnements podcast, l'accueil ne contient aucune rangée podcast parasite.
+  - **Navigation D-pad et état vide** (`ContinuePanel.tsx`) :
+    Suppression du contournement `onlyEmptySelection` ; affichage propre de l'état d'accueil quand aucune reprise ni chaîne n'est enregistrée.
+- **Vérifié en local** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 18 avertissements** (inchangé sur le code historique).
+  - Tests unitaires Web : **1039/1039 passés sur 141 fichiers** (`corepack pnpm test`).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest`).
+  - Build Vite : minifié, sans maps sources dans `dist/` (7,78 s).
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** (APK `CedPlay-1.12.50.apk` de 4 446 916 octets, SHA-256 `0a39cf4e070e8f8db5d2e81172d04ecb8e4ad7bcd5ad4d267968c9da82a22834`).
+- **Livraison** : **1.12.50 / code 98**, APK `CedPlay-1.12.50.apk` et copie `CedPlay.apk` à la racine du dépôt. Ancien APK `CedPlay-1.12.49.apk` nettoyé.
+- **Limites** : vérifié par l'ensemble des suites de tests automatisés (Web + Android) et le build release ; à valider visuellement sur l'écran d'accueil TV de Céd.
+
+## 11 novembre 2026 — Contre-revue et corrections de la recherche 1.12.49 (sources seulement)
+
+- Demande : corriger les deux défauts identifiés dans le travail d'AG.
+- `IPTVPlayer.tsx` : la fermeture du dialogue après sélection d'une chaîne conserve désormais `searchResumeQuery` et ne rétablit pas l'ancien onglet pendant l'ouverture du lecteur. La requête est consommée au retour du lecteur ; une nouvelle recherche explicite repart à vide.
+- `GlobalSearchDialog.tsx` : `data-remote-self` laisse les gestionnaires locaux Haut/Bas agir avant la navigation géométrique globale. Les autres flèches restent traitées par celle-ci en phase de remontée.
+- `openSavedVod` stabilisé avec `useCallback` : suppression de l'avertissement ESLint introduit dans le lot AG (19 -> 18).
+- Trois tests de régression ajoutés : recherche -> chaîne -> retour aux résultats -> fermeture/réouverture ; historique avec navigation globale active (Bas, Droite, Haut) ; résultats avec navigation globale active (Bas, Haut). La géométrie simulée place volontairement l'ancienne recherche sous le champ pour détecter le défaut de priorité.
+- Validation exécutée : `corepack pnpm verify` passe les deux contrôles TypeScript et ESLint intégral (0 erreur / 18 avertissements). Vitest ne démarre pas : `spawn EPERM` dans le lancement d'esbuild. Les nouveaux tests ne sont donc pas annoncés verts ; l'étape build n'a pas été atteinte. `git diff --check` vérifié séparément.
+- Aucun nouvel APK, aucune installation ni recette physique ; les APK 1.12.49/code 97 présents restent ceux d'AG et ne contiennent pas ces corrections. Ne pas annoncer de livraison avant la vérification complète puis reconstruction Android.
+- Suivi Second Cerveau non modifié : sa fiche et l'entretien global sont hors des emplacements autorisés en écriture dans cette session. À reporter dans `Où j'en suis` et `Pour reprendre` : corrections source présentes, tests/build et recette TV à terminer ; puis lancer actualiser/verifier/sonder dans un environnement autorisé.
+
+
+## Navigation retour recherche, focus/croix historique et reprise robuste après veille TV — 11 novembre 2026 (version 1.12.49 / code 97)
+
+- **Demande de Céd** :
+  1. « Le premier, c'est quand je fais une recherche, j'ai une liste de résultats. Je clique sur le premier résultat, tout va bien, mais quand je fais retour, je ne reviens pas sur la liste de résultats et ça c'est problématique. »
+  2. « Deuxième problème, c'est que ensuite, quand je reviens dans la partie recherche, c'est très bien parce qu'on a l'historique des recherches précédentes. Le problème, c'est qu'on arrive, si on fait la flèche pour descendre, on arrive d'abord sur l'onglet le plus vieux de recherche et en plus on arrive sur la croix pour fermer. Donc souvent quand on va vite, on se retrouve sur la mauvaise recherche alors qu'on voudrait la recherche la plus récente et en plus on élimine cette recherche parce qu'on arrive directement sur la croix. »
+  3. « Autre problème aussi, quand j'arrête d'utiliser l'application, en général j'éteins ma télé et quand je la rallume, impossible de reprendre. Je dois sortir et rerentrer plusieurs fois sur l'application et je me demande même si je ne dois pas vider le cache et la mémoire. »
+- **Causes racines** :
+  1. `IPTVPlayer.tsx` fermait `searchOpen` et réinitialisait la recherche dès la sélection d'un item ; lors du retour (clôture fiche VOD, fermeture lecteur natif ou clic retour web), aucun état de reprise n'était mémorisé.
+  2. `GlobalSearchDialog.tsx` n'avait aucun gestionnaire D-pad `onKeyDown` sur l'input (la navigation spatiale choisissait le chip le plus proche du centre) et la croix de fermeture était un `<button>` focusable prenant le focus en premier avant le libellé, validable par OK.
+  3. En veille TV (HDMI-CEC / extinction), la box coupe le Wi-Fi/Ethernet. Au réveil (`onResume`), `NativePlayerActivity` tentait une initialisation immédiate alors que le réseau met 3 à 8 s à remonter. L'erreur `PlaybackException` (DNS `UnknownHostException`, timeout socket, etc.) n'était pas reconnue par `isTransientError()`, classant l'erreur en "permanente", annulant `liveReconnect` et affichant l'écran d'erreur. De plus, `canRecoverLive()` refusait la reprise si `player == null`, la VOD était exclue du `ConnectivityManager.NetworkCallback`, et `LivePreview` détruisait `requestUrl` sur erreur.
+- **Correctifs apportés** :
+  - **Recherche & Retour** : `IPTVPlayer.tsx` mémorise la requête active dans `searchResumeQuery.current`. Dès la fermeture d'une fiche VOD (`onCloseDetails`), la fermeture du lecteur natif ou le retour du lecteur web, la boîte de dialogue se réouvre automatiquement avec la requête et les résultats préservés via `initialQuery`.
+  - **Historique & D-pad** : Dans `GlobalSearchDialog.tsx`, la touche `ArrowDown` depuis le champ de recherche descend directement sur le premier résultat ou sur la recherche récente la plus fraîche (`data-recent-search-first` sur `recent[0]`), et `ArrowUp` remonte au champ. En mode TV (`tvMode`), le bouton de suppression individuelle de l'historique est exclu de la navigation télécommande (`tabIndex={-1}` et `pointer-events-none`) pour écarter tout risque de suppression accidentelle.
+  - **Reprise après veille TV** :
+    - `NativePlayerActivity.java` : extension de `isTransientError()` à `ERROR_CODE_IO_UNSPECIFIED`, `ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED` et à la chaîne d'exceptions réseau (`UnknownHostException`, `ConnectException`, `SocketException`, `SocketTimeoutException`, `NoRouteToHostException`, `SSLException`, `HttpDataSourceException`).
+    - `canRecoverLive()` : autorise la récupération si `player == null || player.getPlayWhenReady()`.
+    - `startConnectivityMonitoring()` : surveillance réseau activée également en VOD.
+    - `postConnectivityChanged()` : déclenche immédiatement la reprise (`initPlayer` / `prepareMedia`) dès la reconnexion réseau (`connected == true`) si le lecteur était en attente ou en erreur.
+    - `onResume()` : si le réseau n'est pas encore prêt, affiche la jauge de chargement et temporise la tentative en laissant le rappel de connectivité relancer le flux à chaud dès que le Wi-Fi est opérationnel.
+    - `LivePreview.java` : préserve `requestUrl` en cas d'erreur de lecture pour permettre à `resume()` de relancer l'aperçu à la reprise.
+    - `TvLiveScreen.tsx` : écoute `online` et `visibilitychange` et tente une relance différée automatique en cas d'erreur transitoire.
+- **Vérifié en local** :
+  - `tsc -p tsconfig.app.json` et `tsc -p tsconfig.node.json` : **0 erreur**.
+  - ESLint : **0 erreur / 19 avertissements** (inchangé sur le code historique).
+  - Tests unitaires Web : **1036/1036 passés sur 141 fichiers** (`corepack pnpm test`).
+  - Tests unitaires Android : **75/75 tâches Gradle passées** (`./gradlew testReleaseUnitTest`).
+  - Build Vite : minifié, sans maps sources dans `dist/` (8,21 s).
+  - Compilation Release : `./gradlew assembleRelease` **BUILD SUCCESSFUL** (APK `CedPlay-1.12.49.apk` de 4 446 875 octets, SHA-256 `ac83d09eac6b03c3856f74f92cf0a406b13204cc0ed0fbfaab7592dd741adacf`).
+- **Livraison** : **1.12.49 / code 97**, APK `CedPlay-1.12.49.apk` et copie `CedPlay.apk` déployées à la racine du dépôt. Ancien APK `CedPlay-1.12.48.apk` nettoyé.
+- **Limites** : vérification complète prouvée sur l'ensemble des suites de tests automatisés (Web + Android) et compilation release locale ; à valider sur flux réel par Céd avec sa télécommande et sa box TV.
+
+
 
 
 ## Télécommande TV figée : l'écran Direct rendait 18 900 chaînes d'un coup — 9 novembre 2026 (branche `claude/decouvrir-v1`)
@@ -1373,3 +1887,142 @@ Copie identique du candidat corrige (SHA-256 38177df9...) dans le dossier princi
 - **Recette box (TF1 HD)** : REC → dialogue système « Allow CedPlay to access photos, media, and files… » (`preuves/livraison-1.12.48-box-permission.png`), Autoriser → toast « Enregistrement démarré : FR_TF1_HD_1794281569214.ts » (`-box-enregistrement.png`), fichier créé dans `/sdcard/Movies/CedPlay/`, **9 345 480 octets**, `ffprobe` : **28,8 s** de MPEG-TS valide ; arrêt par le carré rouge → icône redevenue ronde, toast de fin (`-box-rec-stop.png`).
 - **Recette téléphone** : 1.12.48 installée, aucune régression du chemin SAF (le Motorola garde son dossier `/sdcard/Enregistrements` choisi).
 - **Limites** : le chemin **MediaStore** (Android 10+, sans dossier choisi) est compilé mais pas exercé sur appareil — le Motorola a déjà un dossier choisi, qui reste prioritaire. Sur la box, le dialogue d'autorisation système s'affiche en anglais une seule fois, au premier enregistrement. Recette aux `input keyevent` adb.
+
+
+## 11 novembre 2026 — Reprise appairage TV/téléphone et correction du contenu APK 1.12.54
+
+- Sujet confirmé par Céd : connexion TV depuis le téléphone. Chat exact non retrouvé ; reprise depuis les fichiers existants, sans modification du code produit ni du WIP des autres chantiers.
+- Vérifications réexécutées : pnpm verify complet, 1067/1067 tests Web (142 fichiers), typage app/node 0 erreur, ESLint 0 erreur/18 avertissements, build OK ; Gradle testReleaseUnitTest OK, 51 tests Java dont 10 PairingServer, aucun échec (75 tâches Gradle).
+- Défaut de livraison constaté : la première APK 1.12.54/code 102 (SHA-256 8b43ba16…) embarquait le libellé Réglages 1.12.53. Sources déjà corrigées. Synchronisation Capacitor et assembleRelease rejoués ; 73 fichiers Web embarqués identiques octet par octet au dist vérifié, libellé embarqué 1.12.54 contrôlé.
+- APK finale : CedPlay-1.12.54.apk et CedPlay.apk, 4 465 337 octets, SHA-256 4bfcf709d6390d5a8d52a16bce326e3f0364ffe43dbb0099f1457e818b3924c1 ; certificat habituel f3f2371b… vérifié. Cette empreinte remplace celle de la première construction documentée plus haut.
+- Aucun appareil ADB connecté : ni installation, ni QR scanné, ni connexion fournisseur réelle. Relecture indépendante sans défaut bloquant démontré ; scénario de confirmation téléphone face à un fournisseur très rapide à éprouver sur appareil.
+- Preuves et mode d'emploi : preuves/reprise-appairage-2026-11-11/COMPTE_RENDU.md, journaux et apk-final.json. Aucun commit ni push.
+
+
+## 11 novembre 2026 — Menu latéral TV translucide, version 1.12.56 / code 104
+
+- Demande de Céd depuis sa photo : remplacer la barre du haut par des icônes latérales permanentes, noms visibles en entrant par Gauche. Rail 76 px, déployé 248 px par-dessus le contenu ; Haut/Bas déplace, OK sélectionne, Droite retrouve le dernier contrôle du panneau actif. Recherche dans le rail, horloge en haut à droite. Mode téléphone conservé.
+- Frontières Gauche explicites dans Direct, VOD et Découvrir ; correction issue de revue indépendante pour Gestion des listes (désormais dans le panneau Plus) et conservation du défilement à l’ouverture du menu.
+- Validation : 84 tests ciblés, puis **1076/1076 tests Web sur 142 fichiers**, typage app/node sans erreur, ESLint 0 erreur/18 avertissements, build OK. Deux tests de l’ancien en-tête adaptés ; premier journal d’échec conservé. Recette navigateur 960×540 (ouverture/repli, sélection manuelle, Direct, Gestion des listes, recherche) et 390×844 hors mode TV (barre du bas, aucun débordement). Revue indépendante finale : aucun bloqueur concret dans ce périmètre.
+- La session parallèle avait livré une 1.12.55 contenant le rail mais pas le dernier correctif de défilement. **1.12.56/code104** synchronisée puis compilée : **4 466 596 octets**, SHA-256 `679b4908be69e5cc1c2fa8d1cc95bd6b42170954a37c197d24826050e55a2209`, copie CedPlay.apk identique ; 73 fichiers dist identiques octet pour octet au contenu embarqué ; libellé et manifeste 1.12.56, certificat habituel vérifiés. Ancienne 1.12.55 préservée dans sauvegardes/apk-1.12.55.
+- Aucun appareil ADB connecté, aucune installation ni recette physique de télécommande ; aucune nouvelle preuve de quatre lignes EPG (source absente dans la recette navigateur). Audit statique global UI non vert : 51 signaux sur les sources, consigné sans refonte hors périmètre. DESIGN.md validé : zéro erreur, trois avertissements.
+- Preuves : preuves/menu-lateral-tv-2026-11-11/COMPTE_RENDU.md, captures menu-ouvert/menu-replie/telephone, journaux et apk-final.json. Aucun commit ni push. Prochaine version libre : 1.12.57/code105.
+
+
+## 11 novembre 2026 — Découvrir TV plus compact et visuel, version 1.12.57 / code 105
+
+- Retour de Céd sur la capture : cadres médias trop grands, souhait d’une présentation attirante dans l’esprit HBO Max. Affiches TV 168 → 132 px, pochettes 200 → 136 px, reprise 300 → 224 px et hauteur environ 120 px ; actions conservées, filtres 36 px et espacements 12 px. Nouveau bandeau informatif avec vrai poster/logo/pochette du contenu ciblé : 180 px avec image à 960 × 540, plus compact sans image. Gabarits mobiles et ordre des rangées conservés.
+- Revue indépendante : ancien snapshot Pour toi réutilisé lors du passage liste A → B, reproduit puis corrigé par dépendance playlist.id ; nouveau test rouge avant/vert après sur carte, titre et image. Sélection du bandeau résolue uniquement parmi les cartes visibles et autorisées. Aucun autre bloqueur concret dans la revue finale.
+- Validation : **1085/1085 Web (143 fichiers)**, 26 tests ciblés, TypeScript app/node 0 erreur, lint 0 erreur/18 avertissements, build et compilation Android réussis. Recette de l’application complète en navigateur 960 × 540 avec données de démonstration isolées : focus, image, filtre et menu ; sans image, bandeau mesuré à 149 px ; mobile 390 × 844 sans bandeau TV ni débordement. Les médias QA ne figurent ni dans dist ni dans APK.
+- **APK 1.12.57/code 105**, **4 467 843 octets**, SHA-256 `06336c9dc67e6f8293eb3656961c61fffdb716465a708ed4d2b2172cc2360f40`, copie CedPlay.apk identique. 73 fichiers Web strictement identiques au build vérifié ; libellé, manifeste et certificat habituel contrôlés. 1.12.56 conservée dans sauvegardes/apk-1.12.56.
+- Aucun appareil ADB, aucune installation ou recette physique, aucun essai de flux réel. Audit UI statique global non vert : 54 signaux, aucun dans les deux composants du bandeau ; les trois écarts depuis le précédent audit concernent des fixtures de test. Rapport et captures : preuves/decouvrir-visuel-tv-2026-11-11/COMPTE_RENDU.md. DESIGN.md validé : 0 erreur/3 avertissements. Aucun commit ni push. Prochaine version libre : 1.12.58/code 106.
+
+## 12 novembre 2026 — Refonte de l'accueil Découvrir (TV et téléphone), non livrée en APK
+
+- Demande de Céd : accueil « à la manière des plateformes de streaming », d'abord dans le code. Travail fait hors de la machine, sur une copie de `application/` (310 fichiers `src/`), puis réécrit dans le dépôt ; base de départ vérifiée verte avant modification : **1087/1087 Web (143 fichiers)**, lint 0 erreur/18 avertissements.
+- TV : Reprendre passe en première rangée dans Tout (`orderRows`). Le bandeau monte jusqu'en haut de l'écran, les filtres se posent dessus ; 200 px à 960 × 540 (270 px au-delà de 600 px de haut), avec le visuel du titre recadré et assombri en arrière-plan, sans flou ni image supplémentaire. Droite depuis le rail arrive sur la première carte et non plus sur les filtres. Fiche, Vu, Retirer ne s'affichent que sous la carte ciblée, place réservée. Focus des cartes en contour clair intérieur : la règle globale `.remote-navigation :focus` le rendait orange.
+- Téléphone : `HeroCarousel`, jusque-là inutilisé, devient le bandeau de Découvrir (titres en cours puis Pour toi, quatre au plus, seulement avec affiche, action Fiche). Son avance automatique est retirée.
+- Fichiers : `src/utils/discover.ts`, `src/components/ContinuePanel.tsx`, `TvDiscoverHero.tsx`, `HeroCarousel.tsx`, `src/index.css`, tests `discover`, `discoverNavigation`, `continuePanel` ; `DESIGN.md` et `UX-CONTRACT.md` mis à jour.
+- Validation sur la copie : TypeScript app/node 0 erreur, lint 0 erreur/17 avertissements, **1092/1092 Web (143 fichiers)** dont 5 nouveaux tests et 4 adaptés au nouvel ordre des rangées, `vite build` réussi. Recette navigateur 960 × 540 avec le banc `tmp/discover-qa` (vues filled, posters, live, noart) et 390 × 780 : aucune vue ne défile à l'arrivée du focus, rangée d'affiches entière sous le bandeau.
+- Non fait : `pnpm verify` relancé sur la machine de Céd, compilation Android, APK, version (1.12.58/code 106 inchangés), installation ou recette sur box, thème clair, commit. Restent hors de ce lot : rangées Nouveaux épisodes de séries, « Parce que tu as regardé », YouTube et plateformes, qui demandent les comptes reliés (Trakt, BetaSeries, YouTube).
+
+## 12 novembre 2026 — Corrections après contre-revue de l'accueil Claude
+
+- TV : hauteur minimale de 200/270 px au lieu d'une hauteur fixe ; 64 px réservés aux filtres avec ou sans image. Les titres longs peuvent agrandir le bandeau plutôt que passer sous les filtres.
+- Thème clair TV : fond adapté aux variables du thème, surface claire sous les textes, libellé et indications contrastés.
+- Mobile : filtrage des reprises sans affiche avant la limite de deux. Test de régression ajouté avec deux reprises sans affiche suivies de trois illustrées ; les deux premières illustrées sont attendues.
+- DESIGN.md et UX-CONTRACT.md alignés sur le comportement final.
+- Validation : script verify exécuté via npm (pnpm absent du PATH), TypeScript app/node réussi, ESLint complet 0 erreur / 17 avertissements. Vitest bloqué avant exécution par spawn EPERM dans esbuild ; build non atteint. Test ajouté non exécuté. Aucun contrôle visuel navigateur ou physique effectué, aucun APK compilé ni version montée.
+- Suivi Second Cerveau et scripts D:\AIOS\outils\entretien.py non exécutés : destinations hors des racines autorisées en écriture dans cette session. Reprendre ce suivi lors d'une session disposant de cet accès.
+
+## 12 novembre 2026 — Suite du plan Claude : compléter l'accueil
+
+- Choix explicite de Céd : compléter l'accueil en priorité, plutôt que finaliser l'APK. Artifact Claude accessible en navigateur mais données derrière connexion ; reprise fondée sur les notes locales et le compte rendu fourni.
+- Épisodes suivants : nouvelle rangée Tout/Séries, après un épisode terminé. Au maximum quatre séries connues, get_series_info séquentiels, annulation au changement de contexte. Pas de téléchargement global, pas de date de sortie inventée. Les épisodes commencés, retirés, spéciaux ou sans format ne sont pas proposés ; OK réutilise le parcours de lecture série avec identifiants épisode/série.
+- Parce que tu as regardé : le moteur de recommandations conserve l'identifiant du visionnage source. Découvrir regroupe les suggestions de la source locale récente valide, sans doublons avec Pour toi, et réagit aux mises à jour des snapshots. Les anciens snapshots restent affichés dans Pour toi jusqu'au prochain calcul dans Films/Séries.
+- Mes plateformes : favoris existants de Replay/Plateformes affichés dans Tout, accès natif officiel ou nouvel onglet Web. YouTube apparaît s'il a été choisi. Rangée masquée sous verrouillage parental ; aucun compte externe connecté et aucun flux personnel YouTube synchronisé.
+- Six tests ajoutés (trois fonctions épisodes, trois interactions accueil), assertion de provenance ajoutée au test recommandations existant. Contrats DESIGN.md et UX-CONTRACT.md actualisés.
+- Contrôles : TypeScript app/node 0 erreur ; ESLint intégral 0 erreur / 17 avertissements. Verify tenté via npm : Vitest ne démarre pas, spawn EPERM d'esbuild ; les nouveaux tests ne sont pas exécutés, build non atteint. Aucun APK, changement de version, installation, essai fournisseur réel ou recette navigateur/box dans ce lot.
+- Restent : validation tests/build et recette TV/mobile ; intégrations authentifiées Trakt/BetaSeries/YouTube et détection de nouveautés par date (non implémentées). Second Cerveau et entretien AIOS non actualisés : hors racines autorisées en écriture.
+
+
+## 13 novembre 2026 — Rangée Documentaires Bodlav dans Découvrir
+
+- Demande de Céd : une rangée documentaire Bodlav dans Découvrir. Ajout ciblé sur le WIP existant, sans changer la version 1.12.60/code 108 déjà présente.
+- Tout et Films : douze documentaires au maximum, avec leurs vraies affiches, titres, années et VOSTFR lorsque fourni. La rangée se place après Ma liste et avant Mes plateformes. OK ouvre la fiche externe Bodlav ; aucune extraction ni lecture vidéo interne.
+- Source : découverte dynamique de l'entrée HTTPS depuis bodlav.com, puis lien de la rubrique documentaire, trois requêtes maximum. HTML traité hors DOM applicatif, liens de fiches et affiches validés, corps borné et délais de douze secondes par requête. Cache local validé de six heures, conservé sur panne. Annulation au changement de contexte ; aucun résultat ni écriture tardive après annulation.
+- Contrôle parental : rangée, ancien bandeau et requêtes masqués/suspendus tant que le verrou est actif. Aucun chargement dans Séries ou Podcasts. Gabarits et navigation TV existants réutilisés.
+- Validation locale : corepack pnpm verify réussi, TypeScript app/node 0 erreur, ESLint intégral 0 erreur / 15 avertissements, 1183/1183 tests Web sur 154 fichiers et build Vite réussi. Les 63 tests ciblés étaient verts ; une erreur de lint dans le type d'un nouveau test a été corrigée avant le passage complet. Aucun média de test lourd dans dist.
+- Preuves réelles en navigateur : chargement public de douze titres et douze affiches, seconde lecture depuis cache ; rendu TV, navigation Droite et bandeau, filtres Tout/Films et masquage Séries/verrou ; rendu téléphone dans une fenêtre de contenu 390 × 780. Captures : preuves/bodlav-decouvrir-tv-2026-11-13.png et preuves/bodlav-decouvrir-mobile-2026-11-13.png. Banc isolé avec playlist vide, sans données fournisseur, sur le port local 5183.
+- Guardian indépendant : aucun défaut produit actionnable relevé sur les seuls deltas de ce lot ; parseur exécuté sur le HTML réel enregistré, annulation d'une réponse tardive vérifiée sans écriture cache. Aucun APK produit, aucune installation, aucun test sur appareil physique ni validation d'ouverture du navigateur Android. Aucun commit/push.
+- Suivi actualisé : fiche CedPlay du Second Cerveau mise à jour, tableaux régénérés ; entretien.py verifier sans erreur documentaire et sonder sans écart de projet. Avertissements transversaux existants conservés.
+
+
+## 13 novembre 2026 — Recompilation APK 1.12.61, code 109, avec Bodlav
+
+- Demande de Céd : recompiler. L'APK antérieur réellement présent à la racine était 1.12.60/code 108, malgré la fiche et AGENTS.md encore à 1.12.59. Passage cohérent à 1.12.61/code 109 dans package.json, build.gradle et SettingsPanel.tsx ; aucun autre changement fonctionnel dans cette recompilation.
+- Vérifications de cette compilation : corepack pnpm verify réussi, TypeScript app/node 0 erreur, ESLint intégral 0 erreur / 15 avertissements, 1183/1183 tests Web sur 154 fichiers, build Vite réussi. cap sync android puis gradlew testDebugUnitTest assembleRelease réussis ; 62/62 tests Android, aucune erreur/échec.
+- APK produit : CedPlay-1.12.61.apk et copie CedPlay.apk, 4494655 octets, SHA-256 b5307cb05e7e2c95ca854e7ec91f1f9d392a3136063836185b129d31f576afdc. Application com.lecteur.iptv, minSdk 22, targetSdk 35, versionName 1.12.61/versionCode 109 relus dans l'APK. Signature et alignement vérifiés ; certificat SHA-256 f3f2371b5e734cdbbfd65530b64c542194df6dc71d8bac0273fcc44facdfa628, identique à l'APK 1.12.60.
+- Contrôle d'embarquement : les fichiers Web de l'APK sont identiques octet par octet au dist vérifié, et la rangée Documentaires Bodlav est présente dans le bundle. 469 fichiers sources contrôlés inchangés pendant la compilation. Aucun média lourd de test dans dist.
+- Références racine mises à jour et ancien APK 1.12.60 supprimé seulement après validation du nouveau. Preuve structurée : preuves/cedplay-1.12.61-build.json ; journaux de compilation dans tmp/bodlav/recompile-*.log. WIP concurrent préservé, aucun commit/push.
+- Aucune installation, aucune recette sur téléphone/box, aucun flux IPTV réel ni ouverture du navigateur Android vérifiés dans cette session. Les essais navigateur Bodlav de la session précédente restent distincts de cette compilation.
+
+
+## 13 novembre 2026 — TV5MONDEplus et ImagoTV, APK 1.12.62 / code 110
+
+- Accord de Céd après proposition des deux plateformes : ajout de rangées Documentaires TV5MONDEplus et Documentaires ImagoTV dans Tout et Films, après Bodlav et avant Mes plateformes. Bodlav garde sa place ; l'avis précédent sur une place en tête n'a pas constitué une demande de déplacement. Aucun flux extrait : OK ouvre la fiche exacte sur le site officiel.
+- Accès permanent à la rubrique documentaire de chaque plateforme, même en cas de panne. Sur Android : jusqu'à douze titres/affiches réels par source, catalogue TV5 public et titres Imago complétés depuis les fiches (trois requêtes simultanées, douze candidats maximum). Deux caches validés indépendants de six heures, délais et volumes bornés. Sur Web sans cache : accès aux rubriques uniquement, car absence de CORS ; aucun relais public ajouté. Verrou parental, filtres et changement de contexte retirent immédiatement les cartes et le héros ; annulation sans écriture cache tardive. Actions de premier lancement conservées.
+- Conception : module indépendant pour les deux nouvelles sources ; migration de Bodlav écartée pour préserver sa version livrée. Un propriétaire pour utilitaire/hook/UI/tests, revue indépendante en lecture seule : aucun défaut bloquant relevé. Probe indépendant des vrais HTML : douze titres et douze affiches par source, chargeur Imago natif simulé/cache relu, abort TV5 tardif sans écriture. Tests couvrant également annulation durant les trois travailleurs Imago.
+- Vérification complète : corepack pnpm verify réussi, TypeScript app/node 0 erreur, ESLint intégral 0 erreur / 15 avertissements existants, **1200/1200 tests Web, 157 fichiers**, Vite réussi. cap sync android et gradlew testDebugUnitTest assembleRelease réussis ; **62/62 tests Android** (tâche Gradle UP-TO-DATE). Sources figées : 389 fichiers inchangés pendant les vérifications et la compilation.
+- Recette navigateur isolée avec playlist vide, aucun fournisseur ni secret : vrais catalogues publics enregistrés puis injectés uniquement dans le cache du banc QA. Douze affiches par source visibles, déplacement Droite Fracture américaine → L'École des XV et héros, verrou et filtre Séries retirant les documentaires ; format téléphone 390 × 780. Web sans cache : accès permanents présents. Capture TV preuves/documentaires-officiels-tv-2026-11-13.png et mobile preuves/documentaires-officiels-mobile-2026-11-13.png. Ces captures ne prouvent pas le chargement HTTP depuis Android ni la lecture des films.
+- APK racine **CedPlay-1.12.62.apk** et **CedPlay.apk** identiques : 4496504 octets, SHA-256 `49996a6d3e84cee392673792bf9b6799382a6c91f1006449121ee09277e4948a`. Manifeste 1.12.62/code 110, certificat habituel `f3f2371b5e734cdbbfd65530b64c542194df6dc71d8bac0273fcc44facdfa628`, alignement et contenu Web identique au dist vérifiés ; libellés des trois sources présents et aucun banc QA embarqué. Ancienne APK 1.12.61 supprimée après contrôle. Preuve structurée : preuves/cedplay-1.12.62-build.json ; journaux et snapshots tmp/documentaries/.
+- Aucune installation, aucun essai sur téléphone/box, aucune lecture réelle ni disponibilité géographique par titre validée. Aucun commit ni push. Prochaine version libre 1.12.63/code 111.
+- Suivi terminé : fiche CedPlay actualisée, entretien.py actualiser sans changement de tableau, verifier sans erreur (20 avertissements transversaux existants), sonder sans écart de projet.
+
+
+## 13 novembre 2026 — Navigation Réglages TV/mobile, APK 1.12.63 / code 111
+
+- Retour de Céd initialement formulé « version mobile », puis précision TV et photo du rail TV/Plus : priorité réelle à la télécommande. Reproduction isolée 960 × 540 sur le composant d'origine : cinq Bas depuis autoplay arrivent sur Annuler avant la suite des options. Les champs bruts de Réglages/LAN contournaient le composant Input avec activation explicite déjà utilisé dans les connexions/recherche. Aucun téléphone ni box ADB connecté.
+- Correction : dix rubriques repliables TV et téléphone, une ouverte à la fois, entrée sur Lecture sans saisie. Le contenu caché reste monté : brouillons des réglages, PIN et champs internes LAN conservés. Bureau large hors TV : toutes rubriques ouvertes. Sur TV, champs de texte/URL/PIN en attente readonly/inputMode none ; OK active la saisie, premier Retour la quitte, deuxième Retour ferme. Déplacement vertical local dans le corps avant d'atteindre les actions ; le pied ne détourne plus Bas. Logique de sauvegarde et contrôles du PIN conservés.
+- Téléphone : corps seul défilant, en-tête/actions hors défilement, adaptation à visualViewport et décalage du clavier, champs 16 px et cibles 44 px. Texte courant/aides 14/12 px conservé. Plus TV compacté : titre 20 px, accès 48 px minimum, icônes 30 px et aides 12 px ; huit accès dont la liste en cours visibles à 960 × 540 (dernier bas mesuré 499 px), aucune baisse globale de police Android.
+- Tests rouges avant correction conservés : tmp/settings-mobile/tests-before.log (rubriques et champs initiaux), remote-before.log (champs TV éditables au simple focus), footer-before.log (pied interposé). Après correction : 20 tests ciblés verts ; Guardian indépendant 41/41 avec régressions navigation/PIN, aucun défaut bloquant constaté. Vérification complète corepack pnpm verify : **1211/1211 Web sur 160 fichiers**, TypeScript app/node 0 erreur, ESLint complet 0 erreur / 15 avertissements existants, Vite réussi. cap sync android et gradlew testDebugUnitTest assembleRelease réussis ; **62/62 Android** (tâche tests UP-TO-DATE).
+- Recette navigateur avec données synthétiques isolées : Plus/entrée Réglages en 960 × 540 et 800 × 450 ; ouverture Lecture + six Bas atteint Listes, arrivée TMDB readonly sans saisie, OK rend éditable, Escape revient en attente et Bas poursuit ; dernières rubriques puis Annuler et Haut vers Avancé accessibles. Téléphone 390 × 780 : aucun champ initial, rubriques et actions ; fenêtre réduite synthétique 390 × 360 : champ accessible après défilement et actions visibles. Cette fenêtre réduite et les tests visualViewport ne prouvent pas un clavier Android physique. Captures preuves/plus-tv-compact-2026-11-13.png, reglages-tv-rubriques-2026-11-13.png, reglages-mobile-rubriques-2026-11-13.png et reglages-mobile-fenetre-reduite-2026-11-13.png.
+- **CedPlay-1.12.63.apk** et **CedPlay.apk** identiques : 4497859 octets, SHA-256 `6842e1270fe05f9c3af333fa4e45f976a84177a9af97095558df43f8efbc3c69`. Manifeste 1.12.63/code111, certificat habituel `f3f2371b5e734cdbbfd65530b64c542194df6dc71d8bac0273fcc44facdfa628`, alignement et contenu Web APK identique au dist vérifiés ; 395 fichiers sources inchangés pendant les vérifications/build, aucun banc QA embarqué. Ancien APK 1.12.62 supprimé après validation. Preuve structurée preuves/cedplay-1.12.63-build.json, journaux tmp/settings-mobile/.
+- Aucun essai ni installation physique, aucun clavier natif ou flux réel validés. Aucun commit/push. Prochaine version libre **1.12.64 / code 112**.
+- Suivi terminé : fiche CedPlay actualisée, entretien.py actualiser sans modification de tableau ; verifier sans erreur (20 avertissements transversaux existants), sonder sans écart de projet.
+
+## Contre-vérification du bilan Desktop — 13 novembre 2026
+
+- Audit des affirmations du bilan joint, sans modification du code applicatif ni du lanceur. Rapport : VERIFICATION_BILAN_DESKTOP_2026-11-13.md.
+- Rejeu : corepack pnpm verify code 0, 1240/1240 tests Web sur 164 fichiers, TypeScript app/node 0 erreur, lint 0 erreur/15 avertissements, build 8,56 s ; tests serveur Desktop 16/16.
+- Réserve actuelle : deux rejeux E2E identiques échouent sur « vod player closed » après la sélection du sous-titre embarqué. Un diagnostic isolé bloque aussi sur « tv-vod films ». Cause exacte application/scénario non encore isolée. Ne pas considérer la recette complète comme fiable sur cette seule base.
+- Mosaïque deux vidéos, seek MKV et sélection audio/sous-titre embarqué franchis avant l'échec ; podcast historique visible en capture mais non atteint par les deux rejeux actuels. Les anciens journaux finaux étaient restés sur des résultats antérieurs. Preuves : preuves/veracite-desktop*.log et preuves/veracite-desktop/.
+- Aucun CedPlay.exe de test résiduel constaté. Verifier AIOS code 0 sans erreur (avertissements présents), sonder code 0 sans écart. Ni abonnement fournisseur, ni appareil TV, ni téléphone Wi-Fi testés ; parité totale non démontrée.
+
+## Contre-vérification du correctif Desktop — 14 novembre 2026
+
+- Nouveau bilan vérifié : journal des cinq passages E2E historiques retrouvé ; deux nouveaux parcours complets consécutifs réussis, codes 0, jusqu'au podcast et sans erreur console/page. Serveur Desktop 16/16.
+- Premier `pnpm verify` : échec reproductible du test EPG après minuit (émission précédente hors du jour affiché). Seul le scénario de test `epgGridInteraction.test.tsx` a été corrigé avec une horloge fixe à midi ; 11/11 isolés puis `pnpm verify` complet code 0 : 1 241/1 241 tests, 164 fichiers, typage sans erreur, lint 0 erreur/15 avertissements, build 8,62 s. Aucun code produit modifié pendant cette contre-vérification.
+- Probe indépendant contre-rejoué 4/4 : `data-remote-self` corrige bien les flèches ; `keyActionsRef` stabilise l'écouteur, mais son rôle causal dans l'ancien échec d'Échap n'est pas démontré. Aucun processus de test résiduel retrouvé.
+- Fermeture GUI de CedPlay.exe, EPG complet/DVR depuis l'interface, notifications/redémarrage Windows et fournisseur/Wi-Fi réels restent non validés. La parité TV box complète reste à démontrer. Aucun APK, version, commit ni push.
+- Rapport et preuves : [CONTRE_VERIFICATION_DESKTOP_2026-11-14.md](CONTRE_VERIFICATION_DESKTOP_2026-11-14.md), `preuves/controle-bilan-2026-11-14/`.
+
+
+## Vérification des nouveaux correctifs Desktop — 14 novembre 2026
+
+- Bilan contrôlé : fermeture réelle WM_CLOSE de CedPlay.exe et arrêt serveur confirmés ; binaire inchangé SHA-256 659C1699A2E9CCE4B436D3EF663C055EBE4922F50FA722A99C0AD14586163CE7. Suite initiale 20/20 serveur.
+- Trois oublis reproduits puis corrigés dans config/localAndDvr/server et leurs tests : maintien du serveur pour un rappel seul et attente des notifications ; reçu persistant contre les notifications répétées après resynchronisation, y compris dans un nouveau processus Node ; retrait de reconnect_streamed pour les captures HLS à adresse sans extension. Tests rouges avant correction conservés, puis suite complète 23/23 sans échec ni ignoré.
+- Vérification Web finale : corepack pnpm verify code 0, 1242/1242 tests dans 164 fichiers, typage app/node sans erreur, ESLint complet 0 erreur/15 avertissements, build 8,74 s. Aucun code Web modifié ici.
+- Recette E2E : un premier parcours complet vert, puis deux échecs initiaux sur Plus. Probe du harnais : aucun événement de clic reçu avant focus explicite ; correction du seul harnais avec Emulation.setFocusEmulationEnabled, puis deux parcours officiels complets consécutifs code 0 (EPG/rappel, DVR UI réel, MKV/audio/sous-titres, mosaïque/podcast). Aucun second clic automatique, échecs conservés.
+- Nuances : le test historique de reprise recréait deux objets dans le même processus ; le nouveau test de dédoublonnage lance un vrai nouveau processus Node. WinRT accepte l'appel mais aucune bannière système n'a été observée. Pas de reboot Windows, fournisseur réel, Wi-Fi réel ni mesure de reprise après coupure réseau ; la lecture du fichier DVR et la parité TV box complète restent à valider. Aucun APK, commit ni push.
+- Rapport : VERIFICATION_NOUVEAUX_CORRECTIFS_DESKTOP_2026-11-14.md ; preuves/controle-nouveau-bilan-2026-11-14/. Suivi CedPlay et entretien AIOS actualisés à la clôture.
+
+
+## Livraison APK 1.12.64 / code 112 et publication Git — 14 novembre 2026
+
+- Demande explicite de Céd : APK, commit, push. Consolidation des sources validées depuis HEAD 1.12.48 : évolutions TV/mobile, intégration Desktop et correctifs de la dernière contre-vérification. Version alignée dans package.json, build.gradle et SettingsPanel.tsx.
+- Contrôles sur le candidat : corepack pnpm verify code 0, 1242/1242 tests Web (164 fichiers), TypeScript app/node sans erreur, ESLint complet 0 erreur/15 avertissements, build 8,96 s ; suite Desktop 23/23. cap sync android puis gradlew testDebugUnitTest assembleRelease --rerun-tasks réussis, 269 tâches exécutées, 62/62 tests Android sur 11 fichiers XML. Revue indépendante du manifeste : aucun secret, média de test, import manquant ou incohérence de contrat natif démontré.
+- CedPlay-1.12.64.apk et CedPlay.apk identiques : 4511839 octets, SHA-256 a5006f7dbd1cb379048cd63250ef61f6e8dbb36987d66ae7d94567fafb5d6708. Manifeste com.lecteur.iptv, minSdk22, targetSdk35, version1.12.64/code112 ; signature et alignement vérifiés, certificat historique f3f2371b5e734cdbbfd65530b64c542194df6dc71d8bac0273fcc44facdfa628 conservé. Les 73 fichiers Web correspondent octet par octet au dist ; deux adaptateurs Cordova vides sont ajoutés normalement par Capacitor. Aucun média lourd de test. Les 533 fichiers sources sont restés inchangés pendant les vérifications et la compilation.
+- Les références APK racine et AGENTS sont alignées ; ancien APK 1.12.63 retiré seulement après validation du nouveau. Preuve structurée : preuves/cedplay-1.12.64-build.json ; journaux et manifeste précis : preuves/livraison-1.12.64/.
+- Publication demandée sur origin/consolidate/v1.11.4, sans force-push. Le commit effectif et la confirmation distante sont consignés après leur création dans preuves/livraison-1.12.64/publication.json et la fiche CedPlay. Les six fichiers de travail AUDIT_MULTISUPPORT_2026-11-09.md, Claude outputs (trois captures), DESIGN.md et UX-CONTRACT.md restent hors commit et sont préservés.
+- Aucune installation ni recette physique de cet APK ; pas de flux fournisseur réel, Wi-Fi QR/LAN ou reboot Windows testés. Les limites du dernier rapport Desktop restent applicables. Prochaine version libre 1.12.65 / code 113.
