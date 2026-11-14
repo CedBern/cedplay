@@ -56,3 +56,11 @@ application/android/app/src/main/assets/capacitor.plugins.json
 keystore.properties
 *.keystore
 *.jks
+
+# Windows packages and their isolated build inputs
+dist-desktop/
+desktop/windows/stage/
+desktop/windows/out/
+desktop/windows/.cache/
+CedPlay-Desktop-*-Setup.exe
+CedPlay-Desktop-*-win-x64.zip

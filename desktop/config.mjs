@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -93,8 +93,22 @@ export function createStateStore(dataDir = getDataDir()) {
   const save = () => {
     mkdirSync(dataDir, { recursive: true });
     const tmp = `${statePath}.${process.pid}.tmp`;
-    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-    renameSync(tmp, statePath);
+    const payload = JSON.stringify(state, null, 2);
+    writeFileSync(tmp, payload, 'utf8');
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        renameSync(tmp, statePath);
+        return;
+      } catch (err) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) throw err;
+        if (attempt === 4) {
+          writeFileSync(statePath, payload, 'utf8');
+          rmSync(tmp, { force: true });
+          return;
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
   };
 
   return {

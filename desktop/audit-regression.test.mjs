@@ -529,7 +529,9 @@ test(`DVR captures live HLS ${inputPath} without HTTP reconnect stall`, async ()
 
   let hlsBase = '';
   let seq = 1;
+  let segmentsServed = 0;
   const hlsServer = http.createServer((req, res) => {
+    if (req.url === '/seg.ts') segmentsServed += 1;
     if (req.url !== '/seg.ts') {
       res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
       res.end(`#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:${seq++}\n#EXTINF:1.0,\n${hlsBase}/seg.ts\n`);
@@ -558,7 +560,15 @@ test(`DVR captures live HLS ${inputPath} without HTTP reconnect stall`, async ()
     }).then((r) => r.json());
     assert.ok(started.recording?.id);
 
-    await new Promise((r) => setTimeout(r, 900));
+    // Attendre que FFmpeg ait consommé plusieurs segments plutôt qu'un délai fixe : son
+    // analyse initiale du flux HLS (plusieurs secondes selon la version) ne produit
+    // encore aucune donnée. La taille listée ne peut pas servir de signal : FFmpeg met
+    // la sortie en tampon et Windows rapporte 0 octet tant que le fichier est ouvert.
+    const segmentDeadline = Date.now() + 20_000;
+    while (segmentsServed < 4 && Date.now() < segmentDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(segmentsServed >= 4, `FFmpeg n'a consommé que ${segmentsServed} segment(s) HLS en 20 s`);
     const stopRes = await fetch(`${url}/api/desktop/recordings/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -576,3 +586,73 @@ test(`DVR captures live HLS ${inputPath} without HTTP reconnect stall`, async ()
   }
 });
 }
+
+test('stopping an active DVR capture after release returns HTTP 200 before idle shutdown', async () => {
+  const recDir = mkdtempSync(path.join(proofRoot, 'hls-stop-release-'));
+  const tsSegment = path.join(recDir, 'seg.ts');
+  await exec(getFfmpegPath(), [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc=duration=1:size=320x180:rate=10',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
+    '-f', 'mpegts', tsSegment,
+  ], { windowsHide: true });
+  const segBytes = readFileSync(tsSegment);
+
+  let hlsBase = '';
+  let seq = 1;
+  const hlsServer = http.createServer((_req, res) => {
+    if (_req.url !== '/seg.ts') {
+      res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
+      res.end(`#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:${seq++}\n#EXTINF:1.0,\n${hlsBase}/seg.ts\n`);
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'video/mp2t', 'Content-Length': segBytes.length });
+    res.end(segBytes);
+  });
+  await new Promise((resolve) => hlsServer.listen(0, '127.0.0.1', resolve));
+  hlsBase = `http://127.0.0.1:${hlsServer.address().port}`;
+
+  const dvrSubDir = path.join(recDir, 'captures');
+  mkdirSync(dvrSubDir, { recursive: true });
+  const prevDisable = process.env.CEDPLAY_DISABLE_OS_NOTIFICATIONS;
+  process.env.CEDPLAY_DISABLE_OS_NOTIFICATIONS = '1';
+  const srv = createDesktopServer({ port: 0, dataDir: path.join(recDir, 'data') });
+  try {
+    const { url } = await srv.start();
+    await fetch(`${url}/api/desktop/recordings/pick-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: dvrSubDir }),
+    }).then((r) => r.arrayBuffer());
+    const started = await fetch(`${url}/api/desktop/recordings/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: `${hlsBase}/live.m3u8`, title: 'Stop After Release' }),
+    }).then((r) => r.json());
+    assert.ok(started.recording?.id);
+
+    await new Promise((r) => setTimeout(r, 900));
+    const released = await fetch(`${url}/api/desktop/lifecycle/release`, { method: 'POST' }).then((r) => r.json());
+    assert.equal(released.backgroundWork, true);
+
+    const stopRes = await fetch(`${url}/api/desktop/recordings/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: started.recording.id }),
+    });
+    assert.equal(stopRes.status, 200);
+    assert.equal((await stopRes.json()).ok, true);
+
+    const deadline = Date.now() + 5000;
+    while (srv.server.listening && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(srv.server.listening, false);
+  } finally {
+    if (prevDisable === undefined) delete process.env.CEDPLAY_DISABLE_OS_NOTIFICATIONS;
+    else process.env.CEDPLAY_DISABLE_OS_NOTIFICATIONS = prevDisable;
+    await srv.stop();
+    hlsServer.closeAllConnections?.();
+    await new Promise((resolve) => hlsServer.close(resolve));
+    rmSync(recDir, { recursive: true, force: true });
+  }
+});

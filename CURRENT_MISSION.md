@@ -1,3 +1,43 @@
+## Contre-vérification & clôture distribution Windows — 14 novembre 2026
+
+- **Vérification des livrables et correctifs ci-dessous** :
+  - Métadonnées PE de `dist-desktop/win-unpacked/CedPlay.exe` confirmées (`ProductName=CedPlay`, `FileDescription=CedPlay`, `CompanyName=CedPlay`, `FileVersion=1.12.64`, `ProductVersion=1.12.64.0`).
+  - Tailles et empreintes SHA-256 confirmées identiques sur disque : `CedPlay-1.12.64-Windows-x64-Setup.exe` (`247 575 811` octets, `3E21FED8B377546997B60D38C3C0E1ED77555DAB142FEEA81BD5AE4331165AC6`) et `CedPlay-1.12.64-Windows-x64.zip` (`324 711 816` octets, `AF9280DC3250C38A15E03A4F1E8D437CD652287E1C70CC6ED42A19A33C12E9F9`).
+  - Suite Desktop + Runtime + Packaging rejouée (`node --test desktop\desktop.test.mjs desktop\audit-regression.test.mjs desktop\electron-runtime.test.mjs desktop\windows\packaging.test.mjs`) : **36/36 passés** (`0 fail`, `0 skipped`).
+  - **Recette autonome hors dépôt rejouée sur le nouveau ZIP (`AF9280...`)** (extraction `%TEMP%`, `PATH` limité à Windows système sans Node/Chrome/Edge/FFmpeg, profil/données vides) : serveur intégré actif, `ffmpeg`/`ffprobe` embarqués opérationnels, capture HLS DVR `.ts` maintenue après `window.close()`, arrêt propre code `0` puis relance/fermeture propre code `0`.
+- **Défaut trouvé et réparé sur `Construire CedPlay Windows.cmd`** :
+  - Le script à la racine était corrompu (8 923 lignes / 333 699 octets contenant la boucle `for %%F` insérée entre chaque caractère) et la boucle `certutil ... | findstr /v ":"` échouait avec `RC=1` sur le chemin avec espace (`Lecteur IPTV`).
+  - Réécrit proprement en CRLF (62 lignes) avec arrêt sur échec E2E (`RC_E2E!=0`), propagation du code de retour et boucle `[4/4]` vérifiée en `cmd /c` (code `0`, tailles + SHA-256 exacts affichés pour `Setup.exe` et `.zip`).
+- **Suivi Second Cerveau** : fiche `CedPlay.md` mise à jour et `entretien.py actualiser / verifier / sonder` exécutés. Aucun commit ni push effectué.
+
+## Vérification et finition de la distribution Windows — 14 novembre 2026
+
+- Bilan « Distribution Windows autonome » confirmé : chronologie code → tests 35/35 → construction → recettes cohérente, SHA-256 de l'installateur identique, paquet propre (73 fichiers Web, aucun secret ni média de recette).
+- Corrigé : `CedPlay.exe` affichait l'icône et le nom « Electron » (`signAndEditExecutable: false` remplacé par `signExecutable: false`) ; identifiant d'application aligné sur l'appId de l'installateur (`fr.cedplay.desktop`) pour éviter le dédoublement dans la barre des tâches ; `.tmp` orphelin supprimé dans `config.mjs` ; tests HLS DVR rendus indépendants de la vitesse de la machine (attente de 4 segments au lieu de 900 ms). Nouveau test de cohérence d'identité Windows.
+- Ajout de `Construire CedPlay Windows.cmd` (tests, construction, E2E, empreintes ; journal `preuves/desktop-windows-1.12.64/reconstruction.log`).
+- Sur la machine de Céd : 36/36 tests, construction code 0, E2E sur l'exécutable construit code 0. Nouveaux livrables : `Setup.exe` 247 575 811 octets, SHA-256 `3e21fed8b377546997b60d38c3c0e1ed77555dab142feea81bd5ae4331165ac6` ; ZIP 324 711 816 octets, SHA-256 `af9280dc3250c38a15e03a4f1e8d437cd652287e1c70cc6ed42a19a33c12e9f9`. Ces empreintes remplacent celles de la section suivante.
+- Non rejoué : recette autonome hors dépôt (script absent du dépôt). Restent manuels : installation/SmartScreen, icônes et zone de notification, notification visible (émise sous le nom « Windows PowerShell »), redémarrage Windows, fournisseur réel, QR/LAN Wi-Fi. Données de l'ancienne version Desktop non reprises (profil distinct) : passer par une sauvegarde.
+- Rapport : [VERIFICATION_DISTRIBUTION_WINDOWS_2026-11-14.md](VERIFICATION_DISTRIBUTION_WINDOWS_2026-11-14.md). Aucun commit, push, APK ni changement de version. Fiche Second Cerveau et entretien AIOS non actualisés (hors dossiers accessibles).
+
+## Distribution Windows autonome (Electron + FFmpeg embarqués) — 14 novembre 2026
+
+- **Livrables générés dans `dist-desktop/`** (build `cmd /c "cd /d desktop\windows && npm run dist"`, sortie `0`) :
+  - Installateur NSIS : `dist-desktop/CedPlay-1.12.64-Windows-x64-Setup.exe` (`247 556 624` octets, SHA-256 `F8CB2F32E447B3D1B2B0268522A7334EB24E97C4BDA0FBD299B66625ACEC78B9`)
+  - Archive portable : `dist-desktop/CedPlay-1.12.64-Windows-x64.zip` (`324 693 552` octets, SHA-256 `1AEED5013E0D78B8056FA15A9B55A8A624F2108F3E29BBEDC280852972D8AC85`)
+  - Blockmap NSIS : `dist-desktop/CedPlay-1.12.64-Windows-x64-Setup.exe.blockmap` (`258 379` octets, SHA-256 `BC6A8D2C8CA82ACB3D692A2AA3E6D1E407BBC1845DF562B83F4FF07D35C64164`)
+- **Correctifs de packaging et de fiabilité runtime** :
+  - `desktop/cedplay.ico` : icône multi-tailles PNG (`256, 128, 64, 48, 32, 16`, `41 059` octets) générée depuis `application/public/cedplay-512.png` pour satisfaire la contrainte NSIS `>= 256x256`.
+  - `desktop/windows/electron-builder.cjs` et `desktop/windows/package.json` : ajout de `publish: null` et `--publish never` pour éviter l'échec `updateInfoBuilder` lorsque `GH_TOKEN`/`GITHUB_TOKEN` est défini sans champ `repository`.
+  - `desktop/localAndDvr.mjs` : ajout de `stoppingRecordings` dans `hasBackgroundWork()` jusqu'à `done()` afin qu'un arrêt DVR juste après fermeture de fenêtre retourne HTTP `200` avant l'extinction sur inactivité (`250 ms`).
+  - `desktop/config.mjs` : boucle de réessai synchrone (`5 × 10 ms` via `Atomics.wait`) et repli `writeFileSync` sur `EPERM`/`EBUSY`/`EACCES` dans `stateStore.save()` sous Windows.
+  - `desktop/e2e-verify.mjs` : nettoyage WebSocket sur fermeture, timeout borné sur `Browser.close` et fermeture des connexions HTTP du serveur fixture.
+- **Validations locales observées** (`preuves/desktop-windows-1.12.64/`) :
+  - Tests Desktop + Runtime + Packaging (`preuves/desktop-windows-1.12.64/tests.log`) : **35/35** réussis après les derniers correctifs (`0` échec, `0` ignoré).
+  - Extraction isolée de `CedPlay-1.12.64-Windows-x64.zip` dans `%TEMP%` sans dépôt, avec `PATH` limité à Windows système (sans Node, Chrome, Edge ni FFmpeg) et profil/données vides (`preuves/desktop-windows-1.12.64/standalone.log`) : `/api/desktop/health` (`ffmpeg: true`, `ffprobe: true` depuis `resources/bin/`), modes `tv-mode` et `desktop-mode`, capture HLS DVR maintenue après `window.close()` puis arrêt et extinction propres (code `0`), relance et sortie propre.
+  - Parcours E2E Electron en 14 étapes contre `dist-desktop/win-unpacked/CedPlay.exe` (`preuves/desktop-windows-1.12.64/e2e.log`) : code de sortie `0`, `0` erreur console/page.
+  - Suite Web `application/` (`corepack pnpm verify`, exécutée avant les derniers ajustements limités à `desktop/`) : `tsc` app/node `0` erreur, ESLint `0` erreur / `15` avertissements, Vitest **1 242/1 242** (`164` fichiers), build Vite réussi.
+- **Vérifications manuelles hors périmètre local restantes** : avertissement SmartScreen (binaire non signé), installation manuelle via `Setup.exe`, icône/menu Tray et toast Windows visibles, redémarrage Windows, identifiants fournisseur IPTV réels, appairage Wi-Fi QR/LAN réel.
+
 ## Résolution des réserves de contre-vérification Desktop — 14 novembre 2026 (correctifs GUI/DVR/notifications/EPG + preuves complètes, APK 1.12.63 inchangé)
 
 - **Causes racines isolées et corrigées** (suite au rapport [CONTRE_VERIFICATION_DESKTOP_2026-11-14.md](CONTRE_VERIFICATION_DESKTOP_2026-11-14.md)) :

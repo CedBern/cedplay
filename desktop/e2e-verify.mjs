@@ -5,10 +5,13 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { getFfmpegPath, REPO_ROOT } from './config.mjs';
 import { createDesktopServer } from './server.mjs';
 
-const SCREENSHOT_DIR = path.join(REPO_ROOT, 'preuves', 'desktop-verification');
+const SCREENSHOT_DIR = process.env.CEDPLAY_E2E_SCREENSHOT_DIR
+  ? path.resolve(process.env.CEDPLAY_E2E_SCREENSHOT_DIR)
+  : path.join(REPO_ROOT, 'preuves', 'desktop-verification');
 
 function runFfmpeg(args) {
   return new Promise((resolve, reject) => {
@@ -42,7 +45,7 @@ function findBrowserExe() {
   throw new Error('Aucun navigateur Chromium (Edge non bloqué / Chrome / Brave) trouvé.');
 }
 
-async function connectCdp(cdpPort, urlIncludes) {
+export async function connectCdp(cdpPort, urlIncludes) {
   let targetWsUrl = '';
   for (let i = 0; i < 50; i++) {
     try {
@@ -84,6 +87,13 @@ async function connectCdp(cdpPort, urlIncludes) {
     } else if (msg.method === 'Runtime.exceptionThrown') {
       pageErrors.push(JSON.stringify(msg.params.exceptionDetails));
     }
+  });
+
+  ws.addEventListener('close', () => {
+    for (const [, { reject }] of pending) {
+      reject(new Error('Connexion CDP fermée.'));
+    }
+    pending.clear();
   });
 
   const send = (method, params = {}) => new Promise((resolve, reject) => {
@@ -407,8 +417,10 @@ async function main() {
     });
     probe.on('error', reject);
   });
-  const browserExe = findBrowserExe();
-  const edgeProc = spawn(browserExe, [
+  const packagedApp = process.env.CEDPLAY_E2E_APP_EXE;
+  if (packagedApp && !existsSync(packagedApp)) throw new Error('Application Windows de recette introuvable.');
+  const browserExe = packagedApp || findBrowserExe();
+  const browserArgs = packagedApp ? [] : [
     `--app=${desktopUrl}/?desktop=1`,
     `--remote-debugging-port=${cdpPort}`,
     '--remote-allow-origins=*',
@@ -416,7 +428,16 @@ async function main() {
     '--window-size=1280,720',
     '--no-first-run',
     '--no-default-browser-check',
-  ], { stdio: 'ignore' });
+  ];
+  const browserEnv = { ...process.env };
+  if (packagedApp) {
+    delete browserEnv.ELECTRON_RUN_AS_NODE;
+    browserEnv.CEDPLAY_TEST_MODE = '1';
+    browserEnv.CEDPLAY_TEST_SERVER_URL = desktopUrl;
+    browserEnv.CEDPLAY_CDP_PORT = String(cdpPort);
+    browserEnv.CEDPLAY_PROFILE_DIR = profileDir;
+  }
+  const edgeProc = spawn(browserExe, browserArgs, { stdio: 'ignore', env: browserEnv });
 
   let cdp;
   try {
@@ -718,7 +739,11 @@ async function main() {
     }
     throw err;
   } finally {
-    try { await cdp?.send('Browser.close'); } catch { /* ignore */ }
+    try {
+      if (cdp) {
+        await Promise.race([cdp.send('Browser.close'), new Promise((r) => setTimeout(r, 1500))]);
+      }
+    } catch { /* ignore */ }
     try { cdp?.ws?.close(); } catch { /* ignore */ }
     try {
       if (process.platform === 'win32' && edgeProc?.pid) {
@@ -728,12 +753,24 @@ async function main() {
       }
     } catch { /* ignore */ }
     await desktop.stop();
-    await new Promise((resolve) => fixtureServer.close(resolve));
+    fixtureServer.closeIdleConnections?.();
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        fixtureServer.closeAllConnections?.();
+        resolve();
+      }, 500);
+      fixtureServer.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
     try { rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 }); } catch { /* ignore locked profile */ }
   }
 }
 
-main().catch((err) => {
-  console.error('❌ E2E CedPlay Desktop échec :', err);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  main().catch((err) => {
+    console.error('❌ E2E CedPlay Desktop échec :', err);
+    process.exit(1);
+  });
+}

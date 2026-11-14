@@ -198,6 +198,7 @@ export function scanMediaFolder(folderPath, { recursive = true, limit = MAX_SCAN
 
 export function createLocalAndDvrService(stateStore, emitEvent) {
   const activeRecordings = new Map();
+  const stoppingRecordings = new Set();
   const pendingNotifications = new Set();
   let schedulerTimer = null;
 
@@ -208,6 +209,7 @@ export function createLocalAndDvrService(stateStore, emitEvent) {
   };
 
   const hasBackgroundWork = () => activeRecordings.size > 0
+    || stoppingRecordings.size > 0
     || stateStore.get().schedules.length > 0
     || stateStore.get().reminders.length > 0
     || pendingNotifications.size > 0;
@@ -254,12 +256,14 @@ export function createLocalAndDvrService(stateStore, emitEvent) {
       return;
     }
     if (rec.durationTimer) clearTimeout(rec.durationTimer);
+    stoppingRecordings.add(id);
     activeRecordings.delete(id);
 
     let finished = false;
     const done = () => {
       if (finished) return;
       finished = true;
+      stoppingRecordings.delete(id);
       emitEvent?.('recordingStopped', { id, title: rec.title, uri: rec.uri });
       notify({
         kind: 'recordingStopped',

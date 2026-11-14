@@ -1,0 +1,16 @@
+{
+  "name": "cedplay-windows-build",
+  "version": "1.12.64",
+  "private": true,
+  "description": "Reproducible standalone Windows distribution for CedPlay",
+  "scripts": {
+    "prepare:app": "node prepare.mjs",
+    "test": "node --test packaging.test.mjs",
+    "pack": "node prepare.mjs && electron-builder --config electron-builder.cjs --win --x64 --dir",
+    "dist": "node prepare.mjs && electron-builder --config electron-builder.cjs --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.3.2",
+    "electron-builder": "26.18.0"
+  }
+}
